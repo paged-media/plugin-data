@@ -248,6 +248,185 @@ pub fn lower_table(
     }
 }
 
+// ── Record flow / pagination (spec §9.4 — the catalog engine) ──────────────
+//
+// The defining print-automation feature: records flow through a frame chain,
+// one atomic template instance per record, paginating across pages. The host
+// frame-chain topology read + content-box reflow notification are an SDK gap
+// (BREAKAGE D-12), so — exactly as plugin-sheet built its paginator ahead of
+// S-05 — this packs over a **caller-supplied** chain. Pure + deterministic;
+// records are atomic (never split), so the settle loop is a single bounded
+// pass that converges even for a record taller than a frame.
+
+/// A frame in the caller-supplied chain (until the SDK frame-chain read lands,
+/// D-12). `height_pt` is the frame's content-box capacity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameCapacity {
+    pub frame: String,
+    pub page: String,
+    pub height_pt: f64,
+}
+
+/// One section to paginate: an optional header + its atomic record instances.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlowGroup {
+    #[serde(default)]
+    pub header: Option<String>,
+    pub records: Vec<FlowRecord>,
+}
+
+/// One rendered record instance (the "catalog cell").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowRecord {
+    pub cells: Vec<String>,
+    pub height_pt: f64,
+}
+
+/// Pagination knobs (pt).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowLayoutOpts {
+    /// Re-emit a group's header when it continues on a new frame.
+    pub repeat_header: bool,
+    /// Mark a re-emitted header as "continued".
+    pub continued_marker: bool,
+    /// Height a header block consumes.
+    pub header_height_pt: f64,
+}
+
+impl Default for FlowLayoutOpts {
+    fn default() -> Self {
+        FlowLayoutOpts {
+            repeat_header: true,
+            continued_marker: true,
+            header_height_pt: 16.0,
+        }
+    }
+}
+
+/// A placed block within a paginated frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "block", rename_all = "camelCase")]
+pub enum FlowBlock {
+    /// A section header (`continued` when re-emitted on a later frame).
+    GroupHeader { text: String, continued: bool },
+    /// A record instance.
+    Record { cells: Vec<String>, height_pt: f64 },
+}
+
+/// One frame after pagination.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedFrame {
+    pub frame: String,
+    pub page: String,
+    pub blocks: Vec<FlowBlock>,
+    pub used_pt: f64,
+}
+
+/// The paginated record flow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedFlow {
+    pub frames: Vec<PaginatedFrame>,
+    /// True when records ran out of chain (more frames are needed).
+    pub overflow: bool,
+    /// Records placed and total (placed < total ⇒ overflow).
+    pub placed: usize,
+    pub total: usize,
+}
+
+/// Paginate grouped record instances over a frame chain (spec §9.4). Greedy,
+/// atomic-record packing with repeated/continued group headers; a record taller
+/// than a frame gets its own (over-full) frame so the pass always converges.
+pub fn paginate_flow(
+    groups: &[FlowGroup],
+    chain: &[FrameCapacity],
+    opts: &FlowLayoutOpts,
+) -> PaginatedFlow {
+    let total: usize = groups.iter().map(|g| g.records.len()).sum();
+    let mut frames: Vec<PaginatedFrame> = chain
+        .iter()
+        .map(|c| PaginatedFrame {
+            frame: c.frame.clone(),
+            page: c.page.clone(),
+            blocks: Vec::new(),
+            used_pt: 0.0,
+        })
+        .collect();
+    let cap = |i: usize| chain[i].height_pt;
+
+    let mut fi = 0usize;
+    let mut overflow = false;
+    let mut placed = 0usize;
+
+    'groups: for group in groups {
+        let mut group_started = false;
+
+        // The group's opening header (advance first if it won't fit here).
+        if let Some(text) = &group.header {
+            if fi < frames.len() && frames[fi].used_pt + opts.header_height_pt > cap(fi) {
+                fi += 1;
+            }
+            if fi >= frames.len() {
+                overflow = true;
+                break 'groups;
+            }
+            frames[fi].blocks.push(FlowBlock::GroupHeader {
+                text: text.clone(),
+                continued: false,
+            });
+            frames[fi].used_pt += opts.header_height_pt;
+        }
+
+        for rec in &group.records {
+            let h = rec.height_pt;
+            let fits_here = fi < frames.len() && frames[fi].used_pt + h <= cap(fi);
+            if !fits_here {
+                // Advance to the next frame.
+                fi += 1;
+                if fi >= frames.len() {
+                    overflow = true;
+                    break 'groups;
+                }
+                // Re-emit the header on the continuation frame — but only when
+                // it still leaves room for the record (so a non-tall record
+                // always fits its frame; the property gate relies on this).
+                if let (true, Some(text)) = (opts.repeat_header, &group.header) {
+                    if opts.header_height_pt + h <= cap(fi) {
+                        frames[fi].blocks.push(FlowBlock::GroupHeader {
+                            text: text.clone(),
+                            continued: opts.continued_marker && group_started,
+                        });
+                        frames[fi].used_pt += opts.header_height_pt;
+                    }
+                }
+                // A record taller than the whole frame lands here over-full
+                // (its own frame); the next record won't fit it and advances.
+            }
+            frames[fi].blocks.push(FlowBlock::Record {
+                cells: rec.cells.clone(),
+                height_pt: h,
+            });
+            frames[fi].used_pt += h;
+            placed += 1;
+            group_started = true;
+        }
+    }
+
+    // Drop frames the flow never reached (trailing empties).
+    frames.retain(|f| !f.blocks.is_empty());
+
+    PaginatedFlow {
+        frames,
+        overflow,
+        placed,
+        total,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

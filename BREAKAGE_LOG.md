@@ -162,13 +162,21 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   expert-leaf escape hatch). Clean path: a `host.shell.pickFile()` door or the
   D-06 importer registration.
 
-- **D-12 · 2026-06-08 · frames / threading · OPEN (M1)** — no frame-chain
+- **D-12 · 2026-06-08 · frames / threading · OPEN** — no frame-chain
   topology read for owned frames and no reflow/overflow subscription. Record flow
   / pagination (the spec §9.4 killer feature) binds a query to a frame chain +
   template and paginates across pages; it needs chain reads, overflow
   notification, and the content-box-resize-vs-transform distinction (§9.6 — a
   pure transform must NOT re-paginate). `DocumentChangeEvent` carries only
-  `{kind, pageIds}` today. **Joint with plugin-sheet S-05.** M1 record-flow gate.
+  `{kind, pageIds}` today. **Joint with plugin-sheet S-05.** *Updated
+  2026-06-09:* the Rust **record-flow + pagination engine landed**
+  (`data-bind::resolve_record_flow` → grouped atomic template instances;
+  `data-lower::paginate_flow` → greedy packing with repeated/continued headers,
+  tall-record convergence, order-preserving — property tested). It paginates
+  against a **caller-supplied** chain (`FrameCapacity[]`) handed to
+  `DataSession::lower_record_flow`, exactly as plugin-sheet's paginator runs
+  ahead of S-05. The SDK gate — reading the host's actual frame-chain topology
+  and receiving content-box reflow notifications — is unchanged.
 
 - **D-13 · 2026-06-08 · styles · OPEN (M1)** — data-driven formatting rules
   (§9.5: `when: Expr → apply: StyleAction`) style through DOCUMENT styles, never

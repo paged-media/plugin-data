@@ -20,6 +20,7 @@ use data_bind::diff;
 use data_conformance::{n, record_set, t};
 use data_core::{FieldType, Value};
 use data_expr::{eval_str, EvalCtx, SimpleCtx};
+use data_lower::{paginate_flow, FlowBlock, FlowGroup, FlowLayoutOpts, FlowRecord, FrameCapacity};
 use data_query::stabilize;
 use proptest::prelude::*;
 
@@ -70,5 +71,46 @@ proptest! {
         prop_assert!(delta.updated.is_empty());
         prop_assert!(delta.removed.is_empty());
         prop_assert_eq!(delta.unchanged, r.row_count);
+    }
+
+    /// Pagination always converges and preserves record order (§9.4): for ANY
+    /// record heights + frame chain, the pass terminates, placement accounts
+    /// exactly (overflow iff some record didn't fit), and the placed records
+    /// appear in input order.
+    #[test]
+    fn data_prop_recordflow_places_in_order(
+        heights in prop::collection::vec(1u32..40, 0..20),
+        caps in prop::collection::vec(20u32..60, 0..8),
+    ) {
+        let records: Vec<FlowRecord> = heights
+            .iter()
+            .enumerate()
+            .map(|(i, h)| FlowRecord { cells: vec![format!("r{i}")], height_pt: *h as f64 })
+            .collect();
+        let groups = vec![FlowGroup { header: None, records: records.clone() }];
+        let chain: Vec<FrameCapacity> = caps
+            .iter()
+            .enumerate()
+            .map(|(i, c)| FrameCapacity { frame: format!("f{i}"), page: "p".into(), height_pt: *c as f64 })
+            .collect();
+
+        let flow = paginate_flow(&groups, &chain, &FlowLayoutOpts::default());
+
+        prop_assert_eq!(flow.total, records.len());
+        prop_assert!(flow.placed <= flow.total);
+        prop_assert_eq!(flow.overflow, flow.placed < flow.total);
+
+        // The placed records, flattened across frames in order, are exactly the
+        // first `placed` inputs — order preserved, none duplicated or lost.
+        let placed_cells: Vec<String> = flow
+            .frames
+            .iter()
+            .flat_map(|f| f.blocks.iter().filter_map(|b| match b {
+                FlowBlock::Record { cells, .. } => Some(cells[0].clone()),
+                _ => None,
+            }))
+            .collect();
+        let expected: Vec<String> = records.iter().take(flow.placed).map(|r| r.cells[0].clone()).collect();
+        prop_assert_eq!(placed_cells, expected);
     }
 }

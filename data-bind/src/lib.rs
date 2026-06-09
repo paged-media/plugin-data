@@ -34,8 +34,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use data_core::{
-    Binding, BindingId, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp,
-    ResultShape, Status, SyncState, Value,
+    Binding, BindingId, FlowOpts, FrameChainRef, Placeholder, PlaceholderRef, Query, QueryId,
+    RecordSet, ResolveStamp, ResultShape, Status, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -67,6 +67,8 @@ pub enum Resolved {
     Variable(ResolvedVariable),
     /// A resolved dynamic table: headers + a grid of formatted cell displays.
     Table(ResolvedTable),
+    /// A resolved record flow: grouped template instances ready to paginate.
+    RecordFlow(ResolvedRecordFlow),
 }
 
 /// A resolved variable binding (spec §9.1).
@@ -90,8 +92,33 @@ pub struct ResolvedTable {
     pub rows: Vec<Vec<String>>,
 }
 
-/// A resolution failure (a missing binding/query/result, or a kind not lowered
-/// at M0).
+/// A resolved record flow (spec §9.4): groups of rendered template instances,
+/// in stable record order — the input the paginator packs into a frame chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedRecordFlow {
+    pub chain: FrameChainRef,
+    pub groups: Vec<ResolvedFlowGroup>,
+}
+
+/// One section of a [`ResolvedRecordFlow`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedFlowGroup {
+    /// The section header text (the group-by key), or `None` when ungrouped.
+    pub header: Option<String>,
+    pub records: Vec<ResolvedFlowRecord>,
+}
+
+/// One rendered record instance (the "catalog cell" for a record).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedFlowRecord {
+    /// One line per template field (`label` + the field's resolved display).
+    pub cells: Vec<String>,
+    /// The measured instance height (fields × line height) the paginator packs.
+    pub height_pt: f64,
+}
+
+/// A resolution failure (a missing binding/query/result/template, or a kind not
+/// lowered at M0).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ResolveError {
     #[error("unknown binding: {0}")]
@@ -100,6 +127,8 @@ pub enum ResolveError {
     NoQuery(BindingId),
     #[error("no result delivered for query {0}")]
     NoResult(QueryId),
+    #[error("no template registered: {0}")]
+    NoTemplate(TemplateRef),
     #[error("binding kind not lowered at M0: {0}")]
     Unsupported(&'static str),
 }
@@ -109,6 +138,7 @@ pub enum ResolveError {
 pub struct ResolutionEngine {
     queries: HashMap<QueryId, Query>,
     bindings: HashMap<BindingId, Binding>,
+    templates: HashMap<TemplateRef, Template>,
     placeholders: HashMap<PlaceholderRef, Placeholder>,
     /// Per-query results delivered by the query engine (DuckDB → RecordSet).
     results: HashMap<QueryId, RecordSet>,
@@ -138,6 +168,11 @@ impl ResolutionEngine {
             .entry(id.clone())
             .or_insert_with(SyncState::linked);
         self.bindings.insert(id, binding);
+    }
+
+    /// Register a per-record template (the "catalog cell", §9.4).
+    pub fn add_template(&mut self, template: Template) {
+        self.templates.insert(template.id.clone(), template);
     }
 
     /// Register a placeholder (the anchor).
@@ -265,8 +300,26 @@ impl ResolutionEngine {
                 &self.params,
                 self.today,
             )),
+            Binding::RecordFlow {
+                chain,
+                template,
+                options,
+                ..
+            } => {
+                let tmpl = self
+                    .templates
+                    .get(template)
+                    .ok_or_else(|| ResolveError::NoTemplate(template.clone()))?;
+                Resolved::RecordFlow(resolve_record_flow(
+                    chain.clone(),
+                    tmpl,
+                    options,
+                    records,
+                    &self.params,
+                    self.today,
+                ))
+            }
             Binding::Image { .. } => return Err(ResolveError::Unsupported("image")),
-            Binding::RecordFlow { .. } => return Err(ResolveError::Unsupported("recordFlow")),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
 
@@ -395,4 +448,75 @@ fn resolve_table(
         headers,
         rows,
     }
+}
+
+/// Resolve a record flow (spec §9.4): stabilize the records (so groups are
+/// contiguous + stable), split into sections by the group-by key, and render
+/// one template instance per record. Each record instance is atomic (the
+/// paginator never splits it); its height is `fields × line_height`.
+fn resolve_record_flow(
+    chain: FrameChainRef,
+    template: &Template,
+    options: &FlowOpts,
+    records: &RecordSet,
+    params: &HashMap<String, Value>,
+    today: i32,
+) -> ResolvedRecordFlow {
+    let stable = stabilize(records, &options.group_by);
+    let key_cols: Vec<usize> = options
+        .group_by
+        .iter()
+        .filter_map(|n| stable.schema.index_of(n))
+        .collect();
+    let instance_height = template.fields.len() as f64 * template.line_height_pt;
+
+    let mut groups: Vec<ResolvedFlowGroup> = Vec::new();
+    let mut current_key: Option<Vec<Value>> = None;
+    for row in 0..stable.row_count {
+        let key: Vec<Value> = key_cols
+            .iter()
+            .map(|&c| stable.value(row, c).cloned().unwrap_or(Value::Null))
+            .collect();
+        // A new group starts whenever the group-by key changes (ungrouped → one
+        // group, since the key is always the empty tuple).
+        if current_key.as_ref() != Some(&key) {
+            let header = if options.group_by.is_empty() {
+                None
+            } else {
+                Some(
+                    key.iter()
+                        .map(Value::as_display)
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                )
+            };
+            groups.push(ResolvedFlowGroup {
+                header,
+                records: Vec::new(),
+            });
+            current_key = Some(key);
+        }
+
+        let ctx = RowCtx {
+            records: &stable,
+            row,
+            params,
+        };
+        let ec = EvalCtx::new(&ctx, today);
+        let cells: Vec<String> = template
+            .fields
+            .iter()
+            .map(|f| format!("{}{}", f.label, eval_str(&f.expr, &ec).as_display()))
+            .collect();
+        groups
+            .last_mut()
+            .expect("a group was pushed before the first record")
+            .records
+            .push(ResolvedFlowRecord {
+                cells,
+                height_pt: instance_height,
+            });
+    }
+
+    ResolvedRecordFlow { chain, groups }
 }

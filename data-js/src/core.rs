@@ -20,12 +20,15 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use data_bind::{ResolutionEngine, ResolveError, Resolved};
+use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow};
 use data_core::{
     Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Status,
-    SyncState, Value,
+    SyncState, Template, Value,
 };
-use data_lower::{lower_table, lower_variable, LowerOpts, LoweredTable, LoweredVariable};
+use data_lower::{
+    lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
+    FrameCapacity, LowerOpts, LoweredTable, LoweredVariable, PaginatedFlow,
+};
 use data_sources::{authorize, build_manifest, GrantedCapabilities, SourceManifest};
 
 /// A session-level failure (resolution or a malformed boundary value).
@@ -55,6 +58,8 @@ pub struct DocumentPayload {
     pub sources: Vec<DataSource>,
     #[serde(default)]
     pub queries: Vec<Query>,
+    #[serde(default)]
+    pub templates: Vec<Template>,
     #[serde(default)]
     pub bindings: Vec<BindingDef>,
 }
@@ -90,6 +95,7 @@ pub struct DataSession {
     engine: ResolutionEngine,
     sources: Vec<DataSource>,
     queries: Vec<Query>,
+    templates: Vec<Template>,
     bindings: Vec<BindingDef>,
     today: i32,
 }
@@ -101,6 +107,7 @@ impl DataSession {
             engine: ResolutionEngine::new(today),
             sources: Vec::new(),
             queries: Vec::new(),
+            templates: Vec::new(),
             bindings: Vec::new(),
             today,
         }
@@ -121,6 +128,12 @@ impl DataSession {
     pub fn define_binding(&mut self, def: BindingDef) {
         self.engine.add_binding(def.id.clone(), def.binding.clone());
         self.bindings.push(def);
+    }
+
+    /// Register a per-record template (the "catalog cell", §9.4).
+    pub fn define_template(&mut self, template: Template) {
+        self.engine.add_template(template.clone());
+        self.templates.push(template);
     }
 
     /// Register a placeholder anchor.
@@ -150,6 +163,28 @@ impl DataSession {
                     t.region, &t.headers, &t.rows, &opts,
                 )))
             }
+            // A record flow needs a frame chain to paginate against — use
+            // `lower_record_flow`. (The host frame-chain read is SDK-blocked,
+            // D-12; the chain is caller-supplied until it lands.)
+            Resolved::RecordFlow(_) => Err(SessionError::Decode(
+                "record flow: call lower_record_flow(id, chain)".to_string(),
+            )),
+        }
+    }
+
+    /// Resolve a record-flow binding and paginate it over a caller-supplied
+    /// frame chain (spec §9.4; the host chain is SDK-blocked — D-12).
+    pub fn lower_record_flow(
+        &mut self,
+        id: &BindingId,
+        chain: Vec<FrameCapacity>,
+        opts: FlowLayoutOpts,
+    ) -> Result<PaginatedFlow, SessionError> {
+        match self.engine.resolve(id)? {
+            Resolved::RecordFlow(rf) => Ok(paginate_flow(&to_flow_groups(&rf), &chain, &opts)),
+            _ => Err(SessionError::Decode(
+                "binding is not a record flow".to_string(),
+            )),
         }
     }
 
@@ -242,6 +277,7 @@ impl DataSession {
         DocumentPayload {
             sources,
             queries: self.queries.clone(),
+            templates: self.templates.clone(),
             bindings: self.bindings.clone(),
         }
     }
@@ -254,6 +290,9 @@ impl DataSession {
         }
         for q in payload.queries {
             s.define_query(q);
+        }
+        for tmpl in payload.templates {
+            s.define_template(tmpl);
         }
         for b in payload.bindings {
             s.define_binding(b);
@@ -270,4 +309,23 @@ impl DataSession {
             today: self.today,
         }
     }
+}
+
+/// Bridge a resolved record flow (data-bind) into the paginator's plain input
+/// (data-lower) — the data-js join, keeping data-lower decoupled from data-bind.
+fn to_flow_groups(rf: &ResolvedRecordFlow) -> Vec<FlowGroup> {
+    rf.groups
+        .iter()
+        .map(|g| FlowGroup {
+            header: g.header.clone(),
+            records: g
+                .records
+                .iter()
+                .map(|r| FlowRecord {
+                    cells: r.cells.clone(),
+                    height_pt: r.height_pt,
+                })
+                .collect(),
+        })
+        .collect()
 }

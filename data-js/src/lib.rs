@@ -82,6 +82,12 @@ mod wasm {
             Ok(())
         }
 
+        /// Define a per-record template (the "catalog cell", §9.4).
+        pub fn define_template(&mut self, template: JsValue) -> Result<(), JsValue> {
+            self.session.define_template(from_js(template)?);
+            Ok(())
+        }
+
         /// Define a placeholder anchor.
         pub fn define_placeholder(&mut self, placeholder: JsValue) -> Result<(), JsValue> {
             self.session.define_placeholder(from_js(placeholder)?);
@@ -109,6 +115,28 @@ mod wasm {
                 .resolve_lowered(&BindingId::from(binding))
                 .map_err(map_err)?;
             to_js(&out)
+        }
+
+        /// Resolve a record-flow binding and paginate it over a caller-supplied
+        /// frame chain (§9.4). `chain` is `FrameCapacity[]`, `opts` is
+        /// `FlowLayoutOpts` (or undefined for defaults).
+        pub fn lower_record_flow(
+            &mut self,
+            binding: &str,
+            chain: JsValue,
+            opts: JsValue,
+        ) -> Result<JsValue, JsValue> {
+            let chain: Vec<data_lower::FrameCapacity> = from_js(chain)?;
+            let opts: data_lower::FlowLayoutOpts = if opts.is_undefined() || opts.is_null() {
+                data_lower::FlowLayoutOpts::default()
+            } else {
+                from_js(opts)?
+            };
+            let flow = self
+                .session
+                .lower_record_flow(&BindingId::from(binding), chain, opts)
+                .map_err(map_err)?;
+            to_js(&flow)
         }
 
         /// The sync state of a binding.

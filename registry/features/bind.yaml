@@ -40,3 +40,11 @@
   provenance: ["content-hash keyed; same data -> no invalidation"]
   tests:
     rust: ["data-conformance/tests/bind.rs::data_bind_invalidation"]
+
+- id: data.bind.recordflow
+  title: Resolve a record flow — grouped template instances in stable order (§9.4)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.4)
+  status: implemented
+  provenance: ["one template instance per record; group-by sectioning; measured atomic heights"]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow"]

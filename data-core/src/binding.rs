@@ -169,15 +169,43 @@ fn default_true() -> bool {
     true
 }
 
-/// Record-flow options (§9.4). M1 — frozen now.
+/// Record-flow options (§9.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FlowOpts {
+    /// Group records by these field(s); a section header precedes each group.
     #[serde(default)]
     pub group_by: Vec<String>,
+    /// Re-emit the group's section header (with a "continued" marker) when the
+    /// group spills onto a new frame.
     #[serde(default)]
-    pub keep_together: bool,
+    pub repeat_header: bool,
+    /// Add "continued" markers when a group continues across frames.
     #[serde(default)]
     pub continued_marker: bool,
+}
+
+/// A designed per-record template — the "catalog cell" (§9.4). The engine
+/// renders one instance per record (each field is one line); the paginated
+/// height of an instance is `fields.len() × line_height_pt`. (Real host layout
+/// with measured heights lands with the SDK frame-chain door — BREAKAGE D-12;
+/// the M1 engine uses this measurable model over a caller-supplied chain.)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Template {
+    pub id: TemplateRef,
+    pub fields: Vec<TemplateField>,
+    pub line_height_pt: f64,
+}
+
+/// One field line of a [`Template`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemplateField {
+    /// A static label prefix (or empty).
+    #[serde(default)]
+    pub label: String,
+    /// The field expression (source) evaluated per record.
+    pub expr: String,
 }
 
 /// A data-driven styling action (§9.5) — always a document-style reference,

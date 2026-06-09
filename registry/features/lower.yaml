@@ -24,9 +24,20 @@
   status: planned
 
 - id: data.lower.recordflow
-  title: Record flow + template instancing + grouping + pagination (§9.4)
-  spec: plugin-data data-lower (base-idea §9.4 — the catalog engine, D-12)
-  status: planned
+  title: Record flow — template instancing + grouping over a frame chain (§9.4)
+  spec: plugin-data data-bind + data-lower (base-idea §9.4 — the catalog engine)
+  status: implemented
+  provenance: ["grouped template instances; atomic records; stable order; paginator built ahead of the SDK frame-chain door (D-12), like sheet S-05"]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_lower_paginate"]
+
+- id: data.lower.pagination
+  title: Pagination convergence — repeated/continued headers, tall-record handling
+  spec: plugin-data data-lower/src/lib.rs (base-idea §9.4)
+  status: implemented
+  provenance: ["greedy atomic packing; single bounded pass converges even for a record taller than a frame; order-preserving (property tested)"]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_recordflow_pagination"]
 
 - id: data.lower.rule
   title: Data-driven formatting rules (when -> document style, §9.5)
