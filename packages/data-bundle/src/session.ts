@@ -41,6 +41,12 @@ export interface DataSourceSession {
   lowerBinding(id: string): Promise<void>;
   /** Refresh, then resolve + commit every binding. */
   lowerAll(): Promise<void>;
+  /** The §11 consent gate for remote/governed sources (D-03): review the
+   *  data-source manifest (origins + purpose) and obtain per-origin consent
+   *  through the host before any reach. Returns the granted origins. Dormant at
+   *  M0 (the manifest declares `network:false`, so the host refuses) — flips on
+   *  when remote sources + `network:{origins}` land (M1; a wiring change). */
+  requestNetworkConsent(origins: string[], purpose: string): Promise<string[]>;
   dispose(): void;
 }
 
@@ -194,6 +200,32 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       await this.refreshData();
       for (const id of [...bindingIds]) {
         await this.lowerBinding(id);
+      }
+    },
+
+    async requestNetworkConsent(origins, purpose) {
+      // D-03: the consent gate a remote/governed source crosses before DuckDB
+      // httpfs reaches an origin. No silent fetch — the host renders the
+      // data-source manifest + records per-origin consent. At M0 the manifest
+      // declares `network:false`, so the host's capability gate refuses (the
+      // honest dormant wiring); when remote sources ship, the manifest flips to
+      // `network:{origins}` and this grants.
+      if (!host.supports("network.consent@1")) {
+        host.log.info(
+          "network consent: no host consent backend wired yet (editor follow-up: " +
+            "the consent UI + a CSP connect-src derived from the grant)",
+        );
+      }
+      try {
+        const result = await host.network.requestConsent(origins, purpose);
+        if (result.denied.length > 0) {
+          state.message = `Network consent: ${result.granted.length} granted, ${result.denied.length} denied.`;
+        }
+        return [...host.network.consentedOrigins()];
+      } catch (err) {
+        // The capability gate refuses when `network` is undeclared (M0).
+        host.log.warn(`network consent unavailable: ${String(err)}`);
+        return [];
       }
     },
 

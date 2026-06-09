@@ -25,3 +25,11 @@
   provenance: ["round-trip: save -> inspect -> assert absent"]
   tests:
     rust: ["data-conformance/tests/security.rs::data_security_credentials_absent"]
+
+- id: data.security.network-consent
+  title: Network consent gate (host.network door consumed; per-origin, no silent fetch)
+  spec: plugin-data packages/data-bundle/src/session.ts (base-idea §11, D-03)
+  status: implemented
+  provenance: ["consumes the SDK host.network consent door (landed in plugin-sdk 0.2.7-canary); dormant at M0 (network:false); editor UI + CSP is the follow-up"]
+  tests:
+    vitest: ["packages/data-bundle/src/__tests__/consent.test.ts"]

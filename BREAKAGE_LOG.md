@@ -85,7 +85,21 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   (§2.1). The asset surface is present; placement-op sufficiency for
   fit/fill/crop is to verify at M1 (image placeholders are an M1 lower kind).
 
-- **D-03 · 2026-06-08 · network capability · OPEN** — `capabilities.network` is
+- **D-03 · 2026-06-08 · network capability · PARTIALLY RESOLVED (2026-06-09)** —
+  the **contract + host adapter LANDED** in plugin-sdk (branch
+  `d03-network-consent`): `capabilities.network` now accepts a structured
+  `{ origins, purpose }` declaration (the OUTER allow-list bound) alongside the
+  legacy boolean; the `host.network` door (`requestConsent` + `consentedOrigins`)
+  is implemented in `host-impl.ts` (allow-list check + remembered-grant store +
+  default-deny), validated by `plugin-cli`, recorded in DESIGN.md §4.6b, and
+  covered by 6+5 vitest. plugin-sdk/api bumped to 0.2.7-canary. plugin-data
+  **consumes it**: `session.requestNetworkConsent` gates remote/governed sources
+  (dormant at M0 — `network:false` — so the host refuses; tested). **Residual
+  (editor follow-up):** the consent-prompt UI + the CSP `connect-src` derived
+  from the granted origins (a `ConsentBackend` the editor injects), AND
+  plugin-data flips `network:{origins}` + ships a remote/httpfs source adapter
+  at M1. The ORIGINAL gap below is therefore largely closed at the platform
+  layer; what remains is editor UI + the M1 remote adapter. — `capabilities.network` is
   a boolean (the schema supports it), but there is NO per-origin consent model,
   no visible data-source manifest contract, and no allow-list door. The §11
   threat model requires: documents carrying queries do NOT auto-fetch on open;
