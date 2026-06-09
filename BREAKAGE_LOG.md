@@ -66,7 +66,12 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   elements by id (coarse) and stamps the binding envelope via `setPluginMetadata`
   (`x-paged:media.paged.data`); fine-grained in-text placeholders await this
   RFC. **The most consequential row (§2.2 top).** Resolution: a
-  tagged-placeholder content model RFC. T1 gate.
+  tagged-placeholder content model RFC. T1 gate. *RFC FILED 2026-06-09:*
+  `thoughts/docs/paged/plugin-data/rfc-tagged-placeholders.md` — proposes
+  extending the existing `insertField`/`FieldKind` mechanism to plugin-namespaced
+  fields (inline, edit-surviving, IDML-round-tripping) + a
+  `DocumentSurface.placeholders()` read door + a `setFieldValue` update mutation.
+  Status: draft for plugin-platform review.
 
 - **D-02 · 2026-06-08 · engine ops · OPEN (degradation active)** — no native
   table-creation Mutation (`insertTable` is absent from the Mutation union — the
@@ -89,6 +94,12 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   only) so remote/httpfs/DB sources are unreachable by construction. Resolution:
   **network capability with per-origin consent + a visible data-source
   manifest** RFC (§11). T1 gate (flips `network:true` WITH the consent UI).
+  *RFC FILED 2026-06-09:*
+  `thoughts/docs/paged/plugin-data/rfc-network-consent.md` — proposes a
+  structured `network: { origins, purpose }` manifest declaration, a
+  `host.network.requestConsent`/`consentedOrigins` door, and CSP-`connect-src`-
+  enforced per-grant reach (DuckDB `httpfs` works unchanged; 3b host-proxied
+  fetch rejected). Status: draft for plugin-platform + legal review.
 
 - **D-04 · 2026-06-08 · storage / file-import · OPEN** — no OPFS / large-blob /
   file-import capability. `host.storage` is a localStorage-backed JSON KV
