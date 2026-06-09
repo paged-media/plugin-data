@@ -1,0 +1,34 @@
+# paged.data feature registry — placeholder lowering (spec §9, §12.3
+# data.lower.*). M0 implements variable + single-region table; image,
+# record-flow, and rules are M1.
+
+- id: data.lower.variable
+  title: Variable replacement (resolved display at a tagged placeholder)
+  spec: plugin-data data-lower/src/lib.rs (base-idea §9.1)
+  status: implemented
+  provenance: ["pure model->IR; anchor survives, content updates"]
+  tests:
+    rust: ["data-conformance/tests/lower.rs::data_lower_variable"]
+
+- id: data.lower.table
+  title: Single-region dynamic table (degraded to tab-text + drawn rules, D-02)
+  spec: plugin-data data-lower/src/lib.rs (base-idea §9.3, §2.2)
+  status: implemented
+  provenance: ["no insertTable op yet -> §2.2 degradation, like sheet S-03"]
+  tests:
+    rust: ["data-conformance/tests/lower.rs::data_lower_table"]
+
+- id: data.lower.image
+  title: Image placeholder (field -> asset via the core asset mechanism, §9.2)
+  spec: plugin-data data-lower (base-idea §9.2, D-02b)
+  status: planned
+
+- id: data.lower.recordflow
+  title: Record flow + template instancing + grouping + pagination (§9.4)
+  spec: plugin-data data-lower (base-idea §9.4 — the catalog engine, D-12)
+  status: planned
+
+- id: data.lower.rule
+  title: Data-driven formatting rules (when -> document style, §9.5)
+  spec: plugin-data data-lower (base-idea §9.5, D-13)
+  status: planned

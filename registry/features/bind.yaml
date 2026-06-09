@@ -1,0 +1,42 @@
+# paged.data feature registry — binding + synchronization engine (spec §8,
+# §12.3 data.bind.*).
+
+- id: data.bind.resolve-variable
+  title: Resolve a variable binding (expression over a record -> formatted value)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.1)
+  status: implemented
+  provenance: ["own code; eval via data-expr"]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_resolve_variable"]
+
+- id: data.bind.resolve-table
+  title: Resolve a single-region dynamic table (per-record column expressions)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.3)
+  status: implemented
+  provenance: ["own code; stabilised record order"]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_resolve_table"]
+
+- id: data.bind.sync-states
+  title: Sync states (Linked/Pinned/Overridden/Stale/Error) — non-destructive refresh
+  spec: plugin-data data-bind/src/lib.rs (base-idea §8, D-6)
+  status: implemented
+  provenance: ["refresh never clobbers pinned/overridden; sync report"]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_sync_states"]
+
+- id: data.bind.identity-diff
+  title: Record-identity stable diff (minimal insert/update/remove deltas)
+  spec: plugin-data data-bind/src/diff.rs (base-idea §8)
+  status: implemented
+  provenance: ["declared-key diff; minimal deltas keep pagination stable"]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_identity_diff"]
+
+- id: data.bind.invalidation
+  title: ResolveStamp invalidation (only the affected cut goes stale)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §8)
+  status: implemented
+  provenance: ["content-hash keyed; same data -> no invalidation"]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_invalidation"]

@@ -1,0 +1,19 @@
+# paged.data feature registry — plugin integration (spec §2, §12.3
+# data.plugin.*). The bundle/manifest/panels rows are vitest-gated and land
+# with the TS bundle (data.plugin.bundle added alongside the bundle tests).
+
+- id: data.plugin.payload-roundtrip
+  title: Binding recipe (sources + queries + binding defs) round-trips losslessly
+  spec: plugin-data data-js/src/core.rs (base-idea §5.1, §12.4)
+  status: implemented
+  provenance: ["serialize -> deserialize -> rebuild identical; credentials absent"]
+  tests:
+    rust: ["data-conformance/tests/roundtrip.rs::data_plugin_payload_roundtrip"]
+
+- id: data.plugin.bundle
+  title: paged.data bundle (media.paged.data) — manifest + activate + panels
+  spec: plugin-data packages/data-bundle (base-idea §2)
+  status: implemented
+  provenance: ["manifest validates via plugin-cli; activate registers panels + commands; loadBundle honesty tests"]
+  tests:
+    vitest: ["packages/data-bundle/src/__tests__/activate.test.ts"]

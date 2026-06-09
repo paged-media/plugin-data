@@ -1,0 +1,16 @@
+[package]
+name = "data-sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data source adapters + capability/consent gate (spec §6.2, §11). The SourceAdapter trait + per-kind adapters, the §11 data-source manifest, and authorize() — the only crate touching network/file capability declarations (spec §4 rule 2). Depends ONLY on data-core."
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+thiserror.workspace = true
+serde.workspace = true

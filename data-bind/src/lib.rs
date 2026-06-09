@@ -1,0 +1,398 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * This file is part of paged (https://paged.media) and is additionally
+ * available under the Paged Media Enterprise License (PMEL). Full
+ * copyright and license information is available in LICENSE.md which is
+ * distributed with this source code.
+ *
+ *  @copyright  Copyright (c) And The Next GmbH
+ *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
+
+//! # data-bind — the binding + synchronization engine (spec §8)
+//!
+//! The incremental core, same intellectual architecture as layout and the
+//! sibling plugins' recalc/engine. A [`ResolutionEngine`] holds the resolution
+//! graph (sources → queries → bindings → targets), the per-query results
+//! delivered by the query engine, and a [`SyncState`] per binding. It:
+//!
+//! - **resolves** a [`Binding`] against its query's result, evaluating the
+//!   binding expression(s) through `data-expr` ([`resolve`](ResolutionEngine::resolve));
+//! - **invalidates** non-destructively: a result change marks dependent
+//!   `Linked` bindings `Stale`, but never disturbs `Pinned`/`Overridden`
+//!   content (§8, D-6) — divergences are reported, never silently clobbered;
+//! - **diffs** by record identity ([`diff`]) so a refresh yields minimal row
+//!   deltas (insert/update/remove), keeping pagination stable and undo granular.
+
+pub mod diff;
+
+use std::collections::HashMap;
+
+use thiserror::Error;
+
+use data_core::{
+    Binding, BindingId, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp,
+    ResultShape, Status, SyncState, Value,
+};
+use data_expr::{eval_str, EvalCtx, RecordCtx};
+use data_query::{content_hash, stabilize, stamp};
+
+pub use diff::{diff, RowDelta};
+
+/// A row + parameter view for expression evaluation: the field source is one
+/// row of a resolved [`RecordSet`]; params come from the engine's bound set.
+struct RowCtx<'a> {
+    records: &'a RecordSet,
+    row: usize,
+    params: &'a HashMap<String, Value>,
+}
+
+impl RecordCtx for RowCtx<'_> {
+    fn field(&self, name: &str) -> Option<Value> {
+        self.records.field(self.row, name).cloned()
+    }
+    fn param(&self, name: &str) -> Option<Value> {
+        self.params.get(name).cloned()
+    }
+}
+
+/// A resolved binding's content (spec §8) — the input `data-lower` turns into a
+/// `LoweredContent` IR.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Resolved {
+    /// A resolved variable: the value + its display string at a placeholder.
+    Variable(ResolvedVariable),
+    /// A resolved dynamic table: headers + a grid of formatted cell displays.
+    Table(ResolvedTable),
+}
+
+/// A resolved variable binding (spec §9.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedVariable {
+    pub target: PlaceholderRef,
+    pub value: Value,
+    /// The display string after expression evaluation + the missing policy.
+    pub display: String,
+    /// True when the `HideParagraph` missing policy applies (value absent).
+    pub hidden: bool,
+}
+
+/// A resolved dynamic-table binding (spec §9.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTable {
+    pub region: data_core::FrameRef,
+    pub headers: Vec<String>,
+    /// Row-major grid of formatted cell display strings (record order is the
+    /// deterministically stabilized order — stable identity, §8).
+    pub rows: Vec<Vec<String>>,
+}
+
+/// A resolution failure (a missing binding/query/result, or a kind not lowered
+/// at M0).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ResolveError {
+    #[error("unknown binding: {0}")]
+    UnknownBinding(BindingId),
+    #[error("binding {0} has no query")]
+    NoQuery(BindingId),
+    #[error("no result delivered for query {0}")]
+    NoResult(QueryId),
+    #[error("binding kind not lowered at M0: {0}")]
+    Unsupported(&'static str),
+}
+
+/// The resolution + synchronization engine (spec §8).
+#[derive(Default)]
+pub struct ResolutionEngine {
+    queries: HashMap<QueryId, Query>,
+    bindings: HashMap<BindingId, Binding>,
+    placeholders: HashMap<PlaceholderRef, Placeholder>,
+    /// Per-query results delivered by the query engine (DuckDB → RecordSet).
+    results: HashMap<QueryId, RecordSet>,
+    results_hash: HashMap<QueryId, u64>,
+    sync: HashMap<BindingId, SyncState>,
+    params: HashMap<String, Value>,
+    today: i32,
+}
+
+impl ResolutionEngine {
+    /// A fresh engine with an injected `today` serial (days since 1970-01-01).
+    pub fn new(today: i32) -> Self {
+        ResolutionEngine {
+            today,
+            ..Default::default()
+        }
+    }
+
+    /// Register a query (the recipe).
+    pub fn add_query(&mut self, query: Query) {
+        self.queries.insert(query.id.clone(), query);
+    }
+
+    /// Register a binding (the recipe). Starts `Linked`, unresolved.
+    pub fn add_binding(&mut self, id: BindingId, binding: Binding) {
+        self.sync
+            .entry(id.clone())
+            .or_insert_with(SyncState::linked);
+        self.bindings.insert(id, binding);
+    }
+
+    /// Register a placeholder (the anchor).
+    pub fn add_placeholder(&mut self, placeholder: Placeholder) {
+        self.placeholders
+            .insert(placeholder.id.clone(), placeholder);
+    }
+
+    /// Bind a query parameter value.
+    pub fn set_param(&mut self, name: &str, value: Value) {
+        self.params.insert(name.to_string(), value);
+    }
+
+    /// Deliver (or refresh) a query's result from the query engine. A genuine
+    /// data change marks dependent `Linked` bindings `Stale`; `Pinned`/
+    /// `Overridden` bindings are left untouched (non-destructive, §8/D-6).
+    pub fn set_result(&mut self, query: QueryId, records: RecordSet) {
+        let new_hash = content_hash(&records);
+        let changed = self.results_hash.get(&query) != Some(&new_hash);
+        self.results.insert(query.clone(), records);
+        self.results_hash.insert(query.clone(), new_hash);
+        if !changed {
+            return;
+        }
+        let dependents: Vec<BindingId> = self
+            .bindings
+            .iter()
+            .filter(|(_, b)| b.query() == Some(&query))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in dependents {
+            let st = self.sync.entry(id).or_insert_with(SyncState::linked);
+            if st.accepts_refresh() {
+                st.status = Status::Stale;
+            }
+            // Pinned/Overridden stay as-is — reported by `sync_report`.
+        }
+    }
+
+    /// The sync state of a binding.
+    pub fn sync_state(&self, id: &BindingId) -> Option<SyncState> {
+        self.sync.get(id).copied()
+    }
+
+    /// Pin a binding to its current snapshot (ignores refreshes until unpinned).
+    pub fn pin(&mut self, id: &BindingId) {
+        if let Some(st) = self.sync.get_mut(id) {
+            st.status = Status::Pinned;
+        }
+    }
+
+    /// Mark a binding overridden (a manual edit replaced the resolved value).
+    pub fn mark_overridden(&mut self, id: &BindingId) {
+        if let Some(st) = self.sync.get_mut(id) {
+            st.status = Status::Overridden;
+        }
+    }
+
+    /// Re-link a pinned/overridden binding so the next refresh tracks the
+    /// source again (the explicit user action the non-destructive policy
+    /// requires, §8).
+    pub fn relink(&mut self, id: &BindingId) {
+        if let Some(st) = self.sync.get_mut(id) {
+            st.status = Status::Stale;
+        }
+    }
+
+    /// Bindings whose source changed but whose content was preserved
+    /// (`Pinned`/`Overridden`/`Stale`/`Error`) — the sync report the panel
+    /// shows for review (§8 — never silently clobbered).
+    pub fn sync_report(&self) -> Vec<(BindingId, Status)> {
+        let mut out: Vec<(BindingId, Status)> = self
+            .sync
+            .iter()
+            .filter(|(_, st)| st.status != Status::Linked)
+            .map(|(id, st)| (id.clone(), st.status))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Resolve a binding against its query's delivered result. Updates the sync
+    /// state to `Linked` with a fresh [`ResolveStamp`]. Re-resolution is
+    /// idempotent (same inputs → identical content, §12.4).
+    pub fn resolve(&mut self, id: &BindingId) -> Result<Resolved, ResolveError> {
+        let binding = self
+            .bindings
+            .get(id)
+            .ok_or_else(|| ResolveError::UnknownBinding(id.clone()))?
+            .clone();
+        let query_id = binding
+            .query()
+            .ok_or_else(|| ResolveError::NoQuery(id.clone()))?;
+        let records = self
+            .results
+            .get(query_id)
+            .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
+        let query = self.queries.get(query_id);
+
+        let resolved = match &binding {
+            Binding::Variable {
+                target,
+                expr,
+                missing,
+                ..
+            } => Resolved::Variable(resolve_variable(
+                target.clone(),
+                expr,
+                missing,
+                records,
+                &self.params,
+                self.today,
+                query.map(|q| &q.shape),
+            )),
+            Binding::Table {
+                region,
+                columns,
+                options,
+                ..
+            } => Resolved::Table(resolve_table(
+                region.clone(),
+                columns,
+                options,
+                records,
+                &self.params,
+                self.today,
+            )),
+            Binding::Image { .. } => return Err(ResolveError::Unsupported("image")),
+            Binding::RecordFlow { .. } => return Err(ResolveError::Unsupported("recordFlow")),
+            Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
+        };
+
+        // Stamp + relink (non-destructive policy already protected pinned/
+        // overridden by short-circuiting before a manual resolve is requested;
+        // an explicit resolve is the user action that re-links).
+        let stamp = self.stamp_for(query_id);
+        let st = self
+            .sync
+            .entry(id.clone())
+            .or_insert_with(SyncState::linked);
+        st.status = Status::Linked;
+        st.last_resolved = Some(stamp);
+        Ok(resolved)
+    }
+
+    /// The resolve stamp for a query's current result + params (§8).
+    fn stamp_for(&self, query_id: &QueryId) -> ResolveStamp {
+        let content = self.results_hash.get(query_id).copied().unwrap_or(0);
+        let params: Vec<(String, Value)> = self
+            .params
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        match self.queries.get(query_id) {
+            Some(q) => stamp(content, q, &params),
+            None => ResolveStamp {
+                source_query_hash: content,
+                param_hash: data_query::param_hash(&params),
+            },
+        }
+    }
+}
+
+/// Resolve a variable binding: pick the record (single/scalar → row 0; a stream
+/// → its first record), evaluate the expression, and apply the missing policy.
+#[allow(clippy::too_many_arguments)]
+fn resolve_variable(
+    target: PlaceholderRef,
+    expr: &str,
+    missing: &data_core::MissingPolicy,
+    records: &RecordSet,
+    params: &HashMap<String, Value>,
+    today: i32,
+    _shape: Option<&ResultShape>,
+) -> ResolvedVariable {
+    if records.row_count == 0 {
+        // No record at all → treat as missing.
+        return apply_missing(target, Value::Null, missing);
+    }
+    let ctx = RowCtx {
+        records,
+        row: 0,
+        params,
+    };
+    let ec = EvalCtx::new(&ctx, today);
+    let value = eval_str(expr, &ec);
+    if value.is_null() {
+        return apply_missing(target, value, missing);
+    }
+    ResolvedVariable {
+        target,
+        display: value.as_display(),
+        value,
+        hidden: false,
+    }
+}
+
+/// Apply the missing/null policy to a variable whose value is absent (§9.1).
+fn apply_missing(
+    target: PlaceholderRef,
+    value: Value,
+    missing: &data_core::MissingPolicy,
+) -> ResolvedVariable {
+    use data_core::MissingPolicy;
+    match missing {
+        MissingPolicy::Blank => ResolvedVariable {
+            target,
+            value,
+            display: String::new(),
+            hidden: false,
+        },
+        MissingPolicy::PlaceholderText { text } => ResolvedVariable {
+            target,
+            value,
+            display: text.clone(),
+            hidden: false,
+        },
+        MissingPolicy::HideParagraph => ResolvedVariable {
+            target,
+            value,
+            display: String::new(),
+            hidden: true,
+        },
+    }
+}
+
+/// Resolve a dynamic table: stabilize the rows (stable identity), then evaluate
+/// each column's expression per record into a grid of display strings.
+fn resolve_table(
+    region: data_core::FrameRef,
+    columns: &[data_core::ColumnBind],
+    options: &data_core::TableOpts,
+    records: &RecordSet,
+    params: &HashMap<String, Value>,
+    today: i32,
+) -> ResolvedTable {
+    let stable = stabilize(records, &options.group_by);
+    let headers: Vec<String> = columns.iter().map(|c| c.header.clone()).collect();
+    let mut rows = Vec::with_capacity(stable.row_count);
+    for row in 0..stable.row_count {
+        let ctx = RowCtx {
+            records: &stable,
+            row,
+            params,
+        };
+        let ec = EvalCtx::new(&ctx, today);
+        let cells: Vec<String> = columns
+            .iter()
+            .map(|c| eval_str(&c.expr, &ec).as_display())
+            .collect();
+        rows.push(cells);
+    }
+    ResolvedTable {
+        region,
+        headers,
+        rows,
+    }
+}

@@ -1,0 +1,7 @@
+# The TS side of the bundle — thin glue ONLY (the binding/expression/sync
+# engine and lowering geometry are the Rust workspace; spec §4 + CLAUDE.md
+# hard rule). The query engine is the vendored MIT DuckDB-WASM artifact,
+# instantiated in the bundle realm. Layout follows plugin-sheets /
+# plugin-draw / plugin-web.
+packages:
+  - "packages/*"

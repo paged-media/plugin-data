@@ -1,0 +1,17 @@
+[package]
+name = "data-bind"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data binding + synchronization engine (spec §8), salsa-shaped: resolution graph (sources->queries->bindings->targets), ResolveStamp invalidation, sync states (Linked/Pinned/Overridden/Stale/Error), record-identity stable diff, non-destructive conflict policy. Depends on data-core + data-expr + data-query."
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+data-expr = { path = "../data-expr" }
+data-query = { path = "../data-query" }
+thiserror.workspace = true

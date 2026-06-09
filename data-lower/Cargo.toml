@@ -1,0 +1,15 @@
+[package]
+name = "data-lower"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data placeholder lowering (spec §9): pure resolved-content -> LoweredContent IR. Variable replacement (§9.1) + single-region dynamic table (§9.3, degraded to tab-text + rules per D-02). Content-space geometry (§9.6 — frame ops honored for free). Pure model->IR; depends ONLY on data-core."
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+serde.workspace = true

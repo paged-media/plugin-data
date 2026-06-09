@@ -1,0 +1,44 @@
+# paged.data expression functions — temporal family (spec §9.1): civil-date
+# field extraction over Value::Date (days since 1970-01-01). TODAY() reads the
+# injected eval clock (deterministic; set by the host/test, never wall-clock in
+# kernels — sheet rules).
+
+- id: data.expr.temporal.year
+  name: YEAR
+  family: temporal
+  arity: { min: 1, max: 1 }
+  rust: temporal::year
+  status: implemented
+  provenance: ["civil year; own code (data-core::temporal)"]
+  tests:
+    rust: ["data-conformance/tests/expr_temporal.rs::data_expr_temporal_year"]
+
+- id: data.expr.temporal.month
+  name: MONTH
+  family: temporal
+  arity: { min: 1, max: 1 }
+  rust: temporal::month
+  status: implemented
+  provenance: ["civil month; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_temporal.rs::data_expr_temporal_month"]
+
+- id: data.expr.temporal.day
+  name: DAY
+  family: temporal
+  arity: { min: 1, max: 1 }
+  rust: temporal::day
+  status: implemented
+  provenance: ["civil day; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_temporal.rs::data_expr_temporal_day"]
+
+- id: data.expr.temporal.today
+  name: TODAY
+  family: temporal
+  arity: { min: 0, max: 0 }
+  rust: temporal::today
+  status: implemented
+  provenance: ["injected eval clock; deterministic"]
+  tests:
+    rust: ["data-conformance/tests/expr_temporal.rs::data_expr_temporal_today"]

@@ -1,0 +1,46 @@
+# paged.data expression functions — format family (spec §9.1). Number / date /
+# currency formatting via the own format-code engine (shared in SPIRIT with
+# plugin-sheet §9, own code). One row per function; build-consumed:
+# data-core/build.rs emits the name->FnId table, data-expr/build.rs emits the
+# dispatch arm calling data_expr::families::<rust>. No row -> no dispatch ->
+# uncallable by construction (§12.2).
+
+- id: data.expr.format.number
+  name: NUMBER
+  family: format
+  arity: { min: 1, max: 2 }
+  rust: format::number
+  status: implemented
+  provenance: ["publishing format-code engine; own code (sheet §9 in spirit)"]
+  tests:
+    rust: ["data-conformance/tests/expr_format.rs::data_expr_format_number"]
+
+- id: data.expr.format.currency
+  name: CURRENCY
+  family: format
+  arity: { min: 1, max: 3 }
+  rust: format::currency
+  status: implemented
+  provenance: ["publishing format-code engine; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_format.rs::data_expr_format_currency"]
+
+- id: data.expr.format.percent
+  name: PERCENT
+  family: format
+  arity: { min: 1, max: 2 }
+  rust: format::percent
+  status: implemented
+  provenance: ["publishing format-code engine; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_format.rs::data_expr_format_percent"]
+
+- id: data.expr.format.datefmt
+  name: DATEFMT
+  family: format
+  arity: { min: 1, max: 2 }
+  rust: format::datefmt
+  status: implemented
+  provenance: ["YYYY/MM/DD pattern engine; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_format.rs::data_expr_format_datefmt"]

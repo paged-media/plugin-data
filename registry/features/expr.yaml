@@ -1,0 +1,35 @@
+# paged.data feature registry — expression engine (spec §9.1, §12.3
+# data.expr.*). Engine-level rows (the per-function rows live in
+# registry/functions/*.yaml). ids mirror the state `data.expr.*` ledger.
+
+- id: data.expr.parse
+  title: Binding-DSL lexer + Pratt parser (precedence, grouping, unknown-fn error)
+  spec: plugin-data data-expr/src/{lexer,parser}.rs (base-idea §9.1, D-9)
+  status: implemented
+  provenance: ["own publishing DSL; not an Excel-grammar dialect (D-9)"]
+  tests:
+    rust: ["data-conformance/tests/expr_engine.rs::data_expr_parse"]
+
+- id: data.expr.eval
+  title: Tree-walking evaluator (fields/params, error propagation, coercion)
+  spec: plugin-data data-expr/src/eval.rs
+  status: implemented
+  provenance: ["own code; bit-stable f64"]
+  tests:
+    rust: ["data-conformance/tests/expr_engine.rs::data_expr_eval"]
+
+- id: data.expr.dispatch
+  title: Registry-driven dispatch — unregistered functions uncallable by construction
+  spec: plugin-data data-core/build.rs + data-expr/build.rs (§12.2)
+  status: implemented
+  provenance: ["FnId parity codegen; no row -> no dispatch"]
+  tests:
+    rust: ["data-conformance/tests/expr_engine.rs::data_expr_dispatch"]
+
+- id: data.expr.idempotent
+  title: Idempotent re-evaluation (bit-stable; resolve twice -> identical)
+  spec: plugin-data data-expr (§12.4)
+  status: implemented
+  provenance: ["CPU f64, no tolerance"]
+  tests:
+    rust: ["data-conformance/tests/expr_engine.rs::data_expr_idempotent"]

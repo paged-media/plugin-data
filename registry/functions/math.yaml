@@ -1,0 +1,72 @@
+# paged.data expression functions — math family (spec §9.1): numeric derivation
+# for prices, totals, rounding. f64, bit-stable (sheet rules; no tolerance).
+
+- id: data.expr.math.abs
+  name: ABS
+  family: math
+  arity: { min: 1, max: 1 }
+  rust: math::abs
+  status: implemented
+  provenance: ["absolute value; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_abs"]
+
+- id: data.expr.math.round
+  name: ROUND
+  family: math
+  arity: { min: 1, max: 2 }
+  rust: math::round
+  status: implemented
+  provenance: ["round half away from zero; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_round"]
+
+- id: data.expr.math.floor
+  name: FLOOR
+  family: math
+  arity: { min: 1, max: 1 }
+  rust: math::floor
+  status: implemented
+  provenance: ["floor; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_floor"]
+
+- id: data.expr.math.ceiling
+  name: CEILING
+  family: math
+  arity: { min: 1, max: 1 }
+  rust: math::ceiling
+  status: implemented
+  provenance: ["ceiling; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_ceiling"]
+
+- id: data.expr.math.min
+  name: MIN
+  family: math
+  arity: { min: 1, max: null }
+  rust: math::min
+  status: implemented
+  provenance: ["minimum; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_min"]
+
+- id: data.expr.math.max
+  name: MAX
+  family: math
+  arity: { min: 1, max: null }
+  rust: math::max
+  status: implemented
+  provenance: ["maximum; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_max"]
+
+- id: data.expr.math.sum
+  name: SUM
+  family: math
+  arity: { min: 1, max: null }
+  rust: math::sum
+  status: implemented
+  provenance: ["sum; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_sum"]

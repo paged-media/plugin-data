@@ -1,0 +1,28 @@
+[package]
+name = "data-js"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data wasm-bindgen surface (spec §4): the DataEngine the bundle consumes, a thin shim over the plain-Rust DataSession (load source manifest, define queries/bindings, ingest results, resolve, lower, sync, round-trip). crate-type cdylib for the wasm artifact."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+data-sources = { path = "../data-sources" }
+data-bind = { path = "../data-bind" }
+data-lower = { path = "../data-lower" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+serde-wasm-bindgen.workspace = true
+console_error_panic_hook.workspace = true

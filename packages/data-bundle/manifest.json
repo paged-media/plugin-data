@@ -1,0 +1,38 @@
+{
+  "id": "media.paged.data",
+  "name": "paged.data",
+  "version": "0.0.1",
+  "apiVersion": "^0.2",
+  "publisher": "paged.media",
+  "capabilities": {
+    "document": {
+      "read": "broad",
+      "write": "scoped"
+    },
+    "rendering": [
+      "hitTest"
+    ],
+    "network": false,
+    "clipboard": "none",
+    "wasm": [
+      {
+        "name": "data-engine",
+        "path": "bin/data_js_bg.wasm",
+        "purpose": "compute",
+        "maxBytes": 8388608
+      }
+    ]
+  },
+  "contributes": {
+    "panels": [
+      "media.paged.data.panel.sources",
+      "media.paged.data.panel.bindings"
+    ],
+    "commands": [
+      "media.paged.data.command.importData",
+      "media.paged.data.command.defineBinding",
+      "media.paged.data.command.resolveBindings",
+      "media.paged.data.command.lowerBinding"
+    ]
+  }
+}

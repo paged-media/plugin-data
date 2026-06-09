@@ -1,0 +1,72 @@
+# paged.data expression functions — logic family (spec §9.1): conditionals and
+# null/missing handling, the core of data-driven content.
+
+- id: data.expr.logic.if
+  name: IF
+  family: logic
+  arity: { min: 3, max: 3 }
+  rust: logic::if_
+  status: implemented
+  provenance: ["conditional selection; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_if"]
+
+- id: data.expr.logic.and
+  name: AND
+  family: logic
+  arity: { min: 1, max: null }
+  rust: logic::and
+  status: implemented
+  provenance: ["boolean conjunction; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_and"]
+
+- id: data.expr.logic.or
+  name: OR
+  family: logic
+  arity: { min: 1, max: null }
+  rust: logic::or
+  status: implemented
+  provenance: ["boolean disjunction; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_or"]
+
+- id: data.expr.logic.not
+  name: NOT
+  family: logic
+  arity: { min: 1, max: 1 }
+  rust: logic::not
+  status: implemented
+  provenance: ["boolean negation; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_not"]
+
+- id: data.expr.logic.isblank
+  name: ISBLANK
+  family: logic
+  arity: { min: 1, max: 1 }
+  rust: logic::isblank
+  status: implemented
+  provenance: ["null/empty predicate; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_isblank"]
+
+- id: data.expr.logic.iserror
+  name: ISERROR
+  family: logic
+  arity: { min: 1, max: 1 }
+  rust: logic::iserror
+  status: implemented
+  provenance: ["error predicate; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_iserror"]
+
+- id: data.expr.logic.coalesce
+  name: COALESCE
+  family: logic
+  arity: { min: 1, max: null }
+  rust: logic::coalesce
+  status: implemented
+  provenance: ["first non-null; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_coalesce"]

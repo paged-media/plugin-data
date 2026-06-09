@@ -1,0 +1,21 @@
+[package]
+name = "data-expr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data binding-expression DSL (spec §9.1, D-9): lexer + Pratt parser + evaluator + pure fn(&[Value],&EvalCtx)->Value kernels. Registry-driven dispatch (build.rs, FnId parity with data-core). Depends ONLY on data-core (spec §4 rule 1)."
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+smallvec.workspace = true
+compact_str.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+serde.workspace = true
+serde_yaml.workspace = true

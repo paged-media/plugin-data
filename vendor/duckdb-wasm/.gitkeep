@@ -1,0 +1,2 @@
+# Vendored MIT DuckDB-WASM dist lands here (scripts/vendor-duckdb.sh).
+# Dist is gitignored; SOURCE.md (provenance + MIT) is committed by the script.

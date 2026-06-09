@@ -1,0 +1,30 @@
+[package]
+name = "data-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data conformance harness (spec §12): the coverage gate + property/security tests. TEST-ONLY — never a ship dependency (cargo tree proves no test code reaches the wasm release build)."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "coverage-gate"
+path = "src/bin/coverage_gate.rs"
+
+[dependencies]
+data-core = { path = "../data-core" }
+data-expr = { path = "../data-expr" }
+data-sources = { path = "../data-sources" }
+data-query = { path = "../data-query" }
+data-bind = { path = "../data-bind" }
+data-lower = { path = "../data-lower" }
+data-js = { path = "../data-js" }
+serde.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

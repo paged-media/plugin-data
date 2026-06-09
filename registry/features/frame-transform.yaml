@@ -1,0 +1,12 @@
+# paged.data feature registry — frame operations (spec §9.6, §12.3
+# data.frame.transform.*). The content-space principle inherited from
+# plugin-sheet §8.5: bound content is native content, so scale/rotate/skew/
+# crop/reposition apply for free.
+
+- id: data.frame.transform.content-space
+  title: Lowered geometry is content-space (frame ops honored for free, §9.6)
+  spec: plugin-data data-lower/src/lib.rs (base-idea §9.6)
+  status: implemented
+  provenance: ["IR offsets from the region origin; never display geometry"]
+  tests:
+    rust: ["data-conformance/tests/frame_transform.rs::data_frame_transform_content_space"]

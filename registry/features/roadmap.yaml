@@ -1,0 +1,18 @@
+# paged.data feature registry — roadmap namespaces (spec §12.3): automation,
+# governed, provider. All M1+ — `planned` rows (no coverage-gate obligation;
+# the BREAKAGE_LOG carries the SDK dependencies).
+
+- id: data.automation.batch
+  title: Batch/headless generation (per-record / per-group / one catalog, §10)
+  spec: plugin-data data-automation (base-idea §10 — RESERVED, M2)
+  status: planned
+
+- id: data.governed.extract
+  title: Governed-extract path (governed tables + metadata sidecar -> catalog, §7)
+  spec: plugin-data data-sources (base-idea §7, D-1/D-5 — M2)
+  status: planned
+
+- id: data.provider.register
+  title: Register as an SDK data provider (publish RecordSet to other consumers, §7.1)
+  spec: plugin-data (base-idea §7.1 — core data-provider contract RFC, D-09)
+  status: planned

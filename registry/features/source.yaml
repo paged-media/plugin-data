@@ -1,0 +1,41 @@
+# paged.data feature registry — source adapters (spec §6.2, §12.3
+# data.source.*). M0 implements inline + file; remote/db/governed are M1+.
+
+- id: data.source.inline
+  title: Inline-seed source (data embedded in the doc; no capability)
+  spec: plugin-data data-sources/src/lib.rs (base-idea §6.2)
+  status: implemented
+  provenance: ["travels with the document"]
+  tests:
+    rust: ["data-conformance/tests/sources.rs::data_source_inline"]
+
+- id: data.source.file
+  title: File source (CSV/TSV/JSON/Parquet/Excel) — file-import capability
+  spec: plugin-data data-sources/src/lib.rs (base-idea §6.2)
+  status: implemented
+  provenance: ["DuckDB readers over OPFS-imported bytes; capability-gated"]
+  tests:
+    rust: ["data-conformance/tests/sources.rs::data_source_file"]
+
+- id: data.source.manifest
+  title: Visible data-source manifest (every origin/file a doc touches, §11)
+  spec: plugin-data data-sources/src/lib.rs (base-idea §11)
+  status: implemented
+  provenance: ["no silent fetch; credentials redacted"]
+  tests:
+    rust: ["data-conformance/tests/sources.rs::data_source_manifest"]
+
+- id: data.source.remote
+  title: Remote source (HTTP(S)/REST via DuckDB httpfs) — network + per-origin consent
+  spec: plugin-data data-sources (base-idea §6.2, D-03)
+  status: planned
+
+- id: data.source.db-attach
+  title: DB attach (SQLite/Postgres/MySQL) — network + credential handling
+  spec: plugin-data data-sources (base-idea §6.2, D-11)
+  status: planned
+
+- id: data.source.governed-extract
+  title: Governed extract (governed tables + optional metadata sidecar, §7)
+  spec: plugin-data data-sources (base-idea §7)
+  status: planned

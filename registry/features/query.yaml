@@ -1,0 +1,32 @@
+# paged.data feature registry — query engine / result shaping (spec §6,
+# §12.3 data.query.*). The engine is DuckDB-WASM (vendored, TS realm); these
+# rows cover the Rust-side Arrow seam.
+
+- id: data.query.shape
+  title: Result shapes (record-stream / single / scalar / grouped)
+  spec: plugin-data data-query/src/lib.rs (base-idea §6)
+  status: implemented
+  provenance: ["own code over the RecordSet interchange"]
+  tests:
+    rust: ["data-conformance/tests/query.rs::data_query_shape"]
+
+- id: data.query.order
+  title: Injected deterministic ordering (permutation-invariant; stable identity)
+  spec: plugin-data data-query/src/lib.rs (base-idea §6.1, §8)
+  status: implemented
+  provenance: ["stabilises unordered DuckDB iteration before binding"]
+  tests:
+    rust: ["data-conformance/tests/query.rs::data_query_order"]
+
+- id: data.query.content-hash
+  title: Content hashing for the ResolveStamp invalidation key
+  spec: plugin-data data-query/src/lib.rs (base-idea §8)
+  status: implemented
+  provenance: ["FNV-1a over schema + values; bit-stable"]
+  tests:
+    rust: ["data-conformance/tests/query.rs::data_query_content_hash"]
+
+- id: data.query.arrow-ipc
+  title: Raw Arrow-IPC decode in Rust (so the boundary takes IPC, not JSON)
+  spec: plugin-data data-query (base-idea §6.1 — the M1 seam)
+  status: planned

@@ -1,0 +1,21 @@
+[package]
+name = "data-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data frozen core types (spec §5): Value, DataSource, Query, RecordSet, Binding, Placeholder, SyncState, and the Expr AST. Leaf crate — depends on nothing in the workspace. Registry codegen (name->FnId table) via build.rs."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+smallvec.workspace = true
+compact_str.workspace = true
+serde.workspace = true
+
+[build-dependencies]
+serde.workspace = true
+serde_yaml.workspace = true

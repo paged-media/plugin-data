@@ -1,0 +1,27 @@
+# paged.data feature registry — security + threat model (spec §11, §12.3
+# data.security.*). The largest attack surface in the suite; these are HARD
+# gates (a failure blocks release).
+
+- id: data.security.capability-gate
+  title: No file/network access without the granting capability (§11)
+  spec: plugin-data data-sources/src/lib.rs (base-idea §11)
+  status: implemented
+  provenance: ["a source cannot be created without its granted capability"]
+  tests:
+    rust: ["data-conformance/tests/security.rs::data_security_capability_gate"]
+
+- id: data.security.no-network-pre-consent
+  title: No resolution of remote sources pre-consent (no silent fetch, §11)
+  spec: plugin-data data-sources/src/lib.rs (base-idea §11)
+  status: implemented
+  provenance: ["per-origin consent; documents carrying queries treated as code"]
+  tests:
+    rust: ["data-conformance/tests/security.rs::data_security_no_network_pre_consent"]
+
+- id: data.security.credentials-absent
+  title: Credentials never serialized into the document payload (§11, D-11)
+  spec: plugin-data data-js + data-sources (base-idea §11)
+  status: implemented
+  provenance: ["round-trip: save -> inspect -> assert absent"]
+  tests:
+    rust: ["data-conformance/tests/security.rs::data_security_credentials_absent"]
