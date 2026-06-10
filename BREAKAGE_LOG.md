@@ -16,8 +16,11 @@ the live per-row truth; the RFI is the entry point for the orchestrator / SDK +
 core reviewers. Detailed proposals: `rfc-tagged-placeholders.md` (D-01),
 `rfc-network-consent.md` (D-03).
 
-Format: `D-NN · date · area · status`. Verified against the published SDK +
-the manifest schema on 2026-06-08 (M0 spine).
+Format: `D-NN · date · area · status`. Status vocabulary: `OPEN` / `PARTIAL`
+(partially capable today) / `PARTIALLY RESOLVED` (an open gap that recently
+moved) / `MOSTLY RESOLVED` / `SUPERSEDED`. Verified against the published SDK +
+the `d03-network-consent` branch (plugin-api 0.2.7-canary.0) on 2026-06-10 (D-NN
+ids are immutable — entries drain in place, never renumber).
 
 ---
 
@@ -31,8 +34,9 @@ The spec's §2.2 gap-analysis table, resolved row-by-row:
   points in text runs that survive editing) — **GAP** → D-01 (the most
   consequential row; the binding's anchor model, spec §5.2/§9.1).
 - Commit Operations producing text / table / rule / **placed-asset** content in
-  owned regions — text **COVERED** (`host.document.mutate`); **native table
-  content model GAP** → D-02; asset-placement op → D-02b.
+  owned regions — text **COVERED** (`host.document.mutate`); native table content
+  model **LANDED** → D-02 (`insertTable` op); placed-asset **GAP** → D-14
+  (no asset-placement op).
 - Owned-content / lock semantics + edit-interception for bound content —
   **GAP** → D-10.
 - Frame-chain topology + overflow notification (record flow / pagination) —
@@ -40,9 +44,11 @@ The spec's §2.2 gap-analysis table, resolved row-by-row:
 - Reflow notification carrying content-box geometry (resize vs transform,
   §9.6) — **GAP** → D-12.
 - Document style read AND write (data-driven formatting) — read **COVERED**;
-  write/enumerate **GAP** → D-13 (M1 rules gate).
+  style enumerate/read door still **GAP** → D-13 (text metrics half landed via
+  `host.text.measureString`; M1 rules gate).
 - **Network capability** (DuckDB httpfs / remote / API) with consent +
-  allow-list — **GAP** → D-03 (M0 declares `network:false`).
+  allow-list — **PARTIAL** → D-03 (the contract + `host.network` door landed;
+  M0 still declares `network:false`; editor consent UI + CSP open).
 - **Filesystem/import capability** (local CSV/Excel/Parquet via OPFS) —
   **GAP** → D-04.
 - Register importer/exporter (open a data file → start a binding) — **GAP** →
@@ -89,15 +95,16 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   `tableCellInserts`), and `lower.ts` commits frame → story → `insertTable`
   (read its created id) → fill cells. The §2.2 tab-text + drawn-rules path is
   RETAINED as the fallback for an older host. **Residual:** the platform's
-  `ElementId`/table-address shape is in flight (their table rework isn't settled
-  — failing wasm-loader tests on that branch), so `lower.ts` extracts the table
-  id defensively (`tableIdOf` handles `string | { table_id }`) until it stabilizes.
-  The original gap below is otherwise closed.
+  `ElementId`/table-address shape is still settling, so `lower.ts` extracts the
+  table id defensively (`tableIdOf` handles `string | { table_id }`) until it
+  stabilizes. The original gap below is otherwise closed.
 
-- **D-02b · 2026-06-08 · asset placement · COVERED (verify)** — image
-  placeholders place through the core ASSET mechanism (SDK), not `plugin-image`
-  (§2.1). The asset surface is present; placement-op sufficiency for
-  fit/fill/crop is to verify at M1 (image placeholders are an M1 lower kind).
+- **D-02b · 2026-06-08 · asset placement · SUPERSEDED by D-14 (2026-06-09)** —
+  the original "covered (verify)" claim was WRONG. Verified: there is **no
+  asset-placement Mutation** in the wire, and `AssetSurface` is `getFontFace`
+  (font bytes) READ only — the `AssetKind` `"images"` is reserved and **rejected
+  by manifest validation today** (the door has no `getImage`/place). So placing
+  an image into a frame is NOT covered; that gap is **D-14**.
 
 - **D-03 · 2026-06-08 · network capability · PARTIALLY RESOLVED (2026-06-09)** —
   the **contract + host adapter LANDED** in plugin-sdk (branch
@@ -112,22 +119,16 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   (editor follow-up):** the consent-prompt UI + the CSP `connect-src` derived
   from the granted origins (a `ConsentBackend` the editor injects), AND
   plugin-data flips `network:{origins}` + ships a remote/httpfs source adapter
-  at M1. The ORIGINAL gap below is therefore largely closed at the platform
-  layer; what remains is editor UI + the M1 remote adapter. — `capabilities.network` is
-  a boolean (the schema supports it), but there is NO per-origin consent model,
-  no visible data-source manifest contract, and no allow-list door. The §11
-  threat model requires: documents carrying queries do NOT auto-fetch on open;
-  external sources are inert until the user reviews a source manifest and
-  consents (per-origin, rememberable). M0 declares `network:false` (file/inline
-  only) so remote/httpfs/DB sources are unreachable by construction. Resolution:
-  **network capability with per-origin consent + a visible data-source
-  manifest** RFC (§11). T1 gate (flips `network:true` WITH the consent UI).
-  *RFC FILED 2026-06-09:*
-  `thoughts/docs/paged/plugin-data/rfc-network-consent.md` — proposes a
-  structured `network: { origins, purpose }` manifest declaration, a
-  `host.network.requestConsent`/`consentedOrigins` door, and CSP-`connect-src`-
-  enforced per-grant reach (DuckDB `httpfs` works unchanged; 3b host-proxied
-  fetch rejected). Status: draft for plugin-platform + legal review.
+  at M1. This closes the original gap (the bare `capabilities.network` boolean
+  with no consent model, no visible data-source manifest, and no allow-list door)
+  at the platform layer — satisfying the §11 threat model (documents carrying
+  queries do NOT auto-fetch on open; external origins are inert until the user
+  reviews the source manifest and consents, per-origin + rememberable). **What
+  remains:** the editor UI + CSP, and the M1 remote adapter. Full RFC:
+  `thoughts/docs/paged/plugin-data/rfc-network-consent.md` (CSP-`connect-src`-
+  enforced per-grant reach so DuckDB `httpfs` works unchanged; the 3b
+  host-proxied fetch was rejected) — still open for **legal** review (the §11
+  data-protection / GDPR posture).
 
 - **D-04 · 2026-06-08 · storage / file-import · OPEN** — no OPFS / large-blob /
   file-import capability. `host.storage` is a localStorage-backed JSON KV
@@ -154,8 +155,13 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   as "open this file → start a binding". M0 imports via an in-panel
   `<input type=file>`. **Joint RFC with plugin-sheet S-06 / plugin-image I-05.**
 
-- **D-07 · 2026-06-08 · wasm packaging + budget · OPEN (by design in M0)** —
-  TWO sub-gaps. (a) `loadBundleWasm` instantiates a RAW module (host-owned
+- **D-07 · 2026-06-08 · wasm packaging + budget · PARTIALLY RESOLVED
+  (2026-06-09)** — TWO sub-gaps. **(a) RATIFIED:** `docs/wasm-packaging.md` now
+  documents "Two loaders, ratified" — the wasm-bindgen-glue path in the bundle
+  realm is **the v1 contract** (there is no host-side wasm-bindgen glue; the
+  bundle owns it), so loading `data-js` this way is blessed, not a workaround.
+  Below is the original framing.
+  (a) `loadBundleWasm` instantiates a RAW module (host-owned
   memory, caller-passed imports, no glue); a wasm-bindgen artifact (`data-js`)
   needs its `__wbindgen_*` imports + generated JS glue, so M0 declares the
   `data-js` artifact under `capabilities.wasm[]` (governance + the 8 MiB
@@ -164,9 +170,11 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   I-07). (b) **NEW: the DuckDB-WASM artifact is multi-MB** — it EXCEEDS the
   `capabilities.wasm[].maxBytes` ceiling (8 MiB) AND cannot load via
   `loadBundleWasm`; it is therefore NOT manifest-declarable and loads via its own
-  glue in the bundle realm. Resolution: a host loader door for
-  wasm-bindgen-shaped modules + a **budget-ceiling RFC** for large vendored
-  engines (a declared, governed, but higher-ceiling artifact class).
+  glue in the bundle realm. Resolution: sub-gap (a) is **closed** (the loader
+  path is ratified, above); the OPEN residual is sub-gap (b) — a
+  **budget-ceiling RFC** for large vendored engines (8 MiB is the hard
+  per-artifact cap; the multi-MB DuckDB-WASM needs a declared, governed,
+  higher-ceiling artifact class).
 
 - **D-08 · 2026-06-08 · document-data payload · PARTIAL** — binding definitions
   + source manifests persist via `setPluginMetadata` (namespace
@@ -217,7 +225,7 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   ahead of S-05. The SDK gate — reading the host's actual frame-chain topology
   and receiving content-box reflow notifications — is unchanged.
 
-- **D-13 · 2026-06-08 · styles · OPEN (M1)** — data-driven formatting rules
+- **D-13 · 2026-06-08 · styles · PARTIALLY RESOLVED (2026-06-09)** — data-driven formatting rules
   (§9.5: `when: Expr → apply: StyleAction`) style through DOCUMENT styles, never
   a parallel styling system. Style CREATE mutations exist; there is no style
   ENUMERATION / read door, so "apply the warning character style to negative
@@ -245,17 +253,17 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
 Rows here that are the SAME platform RFCs the siblings filed independently — the
 platform should design each once, for all three plugins:
 
-| paged.data | paged.sheet | paged.image | Joint RFC |
-|---|---|---|---|
-| D-02 | S-03 | — | native table content model |
-| D-04 | S-08 | I-03 | OPFS / large-blob + file-import capability |
-| D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) |
-| D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration |
-| D-07 | S-10 | I-07 | wasm-bindgen loader door + the 8 MiB artifact budget |
-| D-09 | (consumer side) | — | core data-provider contract/registry (§7.1) |
-| D-10 | S-09 | — | owned-content attribute + edit-interception |
-| D-12 | S-05 | — | frame-chain read + content-box reflow notification |
-| D-13 | S-04 | — | document-style read+write (style-management capability) |
+| paged.data | paged.sheet | paged.image | Joint RFC | Status |
+|---|---|---|---|---|
+| D-02 | S-03 | — | native table content model | **LANDED** (`insertTable`) |
+| D-04 | S-08 | I-03 | OPFS / large-blob + file-import capability | open |
+| D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) | open |
+| D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration | open |
+| D-07 | S-10 | I-07 | wasm-bindgen loader door + the 8 MiB artifact budget | **loader ratified**; budget ceiling open |
+| D-09 | (consumer side) | — | core data-provider contract/registry (§7.1) | open |
+| D-10 | S-09 | — | owned-content attribute + edit-interception | partial (`objectType` ships) |
+| D-12 | S-05 | — | frame-chain read + content-box reflow notification | open |
+| D-13 | S-04 | — | document-style read+write (style-management capability) | **metrics landed**; style read open |
 
 Three plugins, filed independently, converging on the same surface is the
 signal these belong in plugin-api v1. The paged.data-specific rows (D-01 tagged
