@@ -42,6 +42,12 @@
   status: planned
 
 - id: data.automation.script
-  title: Constrained Boa scripting surface for scriptable queries/builds (§10)
-  spec: plugin-data data-automation (base-idea §10 — capability-gated, M2)
-  status: planned
+  title: Constrained Boa scripting surface — scriptable queries + templated runs (§10)
+  spec: plugin-data data-script (base-idea §10 — capability-gated)
+  status: implemented
+  provenance:
+    [
+      "sandboxed Boa (Rust JS); the script COMPUTES + RETURNS a build spec ({locale?,params?,build?}) — handed no host functions, so no fs/network/engine access (return-a-value, not call-the-host); consumed by data-cli (an optional job.script)",
+    ]
+  tests:
+    rust: ["data-script/src/lib.rs::data_automation_script"]

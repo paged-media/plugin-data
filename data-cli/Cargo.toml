@@ -23,5 +23,6 @@ data-core = { path = "../data-core" }
 data-lower = { path = "../data-lower" }
 data-automation = { path = "../data-automation" }
 data-js = { path = "../data-js" }
+data-script = { path = "../data-script" }
 serde.workspace = true
 serde_json.workspace = true

@@ -27,10 +27,12 @@ USAGE:
     paged-data-batch [JOB.json]      run the job file
     paged-data-batch < JOB.json      run a job from stdin
 
-The job is { today, locale?, payload, results, binding, mode, chain, opts? }.
-Pre-materialize the query `results` yourself (the CLI does not query). Prints
-{ documentCount, runs: [{ label, flow }] } — the per-document lowered IR — to
-stdout; errors + diagnostics go to stderr. Exit 0 on success, 1 on failure.";
+The job is { today, locale?, payload, results, binding?, mode?, chain, opts?,
+script? }. Pre-materialize the query `results` yourself (the CLI does not query).
+An optional constrained `script` (sandboxed Boa) may compute the params/locale/
+build for the run. Prints { documentCount, runs: [{ label, flow }] } — the
+per-document lowered IR — to stdout; errors + diagnostics go to stderr. Exit 0 on
+success, 1 on failure.";
 
 fn main() -> ExitCode {
     let arg = std::env::args().nth(1);

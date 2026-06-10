@@ -1,0 +1,19 @@
+[package]
+name = "data-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data constrained scripting surface (spec §10): a sandboxed Boa (Rust JS) context exposing the binding/build API for scriptable queries + templated runs — NOT arbitrary host access. Native-only (Boa is far too large for the wasm budget); used by the batch CLI."
+
+[lints]
+workspace = true
+
+[dependencies]
+boa_engine = "0.21.1"
+data-core = { path = "../data-core" }
+data-automation = { path = "../data-automation" }
+data-js = { path = "../data-js" }
+serde.workspace = true
+serde_json.workspace = true

@@ -54,15 +54,24 @@ pub struct Job {
     /// produces these — the CLI does not query.
     #[serde(default)]
     pub results: HashMap<String, RecordSet>,
-    /// The record-flow binding to generate documents from.
-    pub binding: String,
-    /// How the run partitions into documents (per-record / per-group / one).
-    pub mode: BatchMode,
+    /// The record-flow binding to generate documents from. Optional when a
+    /// `script` returns a `build` (which supplies it).
+    #[serde(default)]
+    pub binding: Option<String>,
+    /// How the run partitions into documents. Optional when a `script` build
+    /// supplies it.
+    #[serde(default)]
+    pub mode: Option<BatchMode>,
     /// The frame-chain capacities each document paginates into.
     pub chain: Vec<FrameCapacity>,
     /// Pagination options (header repetition, etc.). Defaults when absent.
     #[serde(default)]
     pub opts: Option<FlowLayoutOpts>,
+    /// An optional constrained build script (spec §10): computes the params /
+    /// locale / build for this run. It is sandboxed (no host access) and only
+    /// returns a spec; its `build` overrides the job's `binding`/`mode`.
+    #[serde(default)]
+    pub script: Option<String>,
 }
 
 /// The result of a batch job: one [`BatchRun`] per generated document.
@@ -84,14 +93,28 @@ pub fn run_job(job: Job) -> Result<JobOutput, String> {
     for (qid, records) in job.results {
         session.ingest_result(QueryId::from(qid.as_str()), records);
     }
+
+    // An optional §10 script computes params / locale / build. It is applied
+    // AFTER the job-level locale (so the run-specific script decision wins), and
+    // its `build` overrides the job's binding/mode.
+    let mut binding = job.binding;
+    let mut mode = job.mode;
+    if let Some(src) = &job.script {
+        let spec = data_script::eval_spec(src)?;
+        data_script::apply_to_session(&mut session, &spec);
+        if let Some(build) = spec.build {
+            binding = Some(build.binding);
+            mode = Some(build.mode);
+        }
+    }
+
+    let binding = binding
+        .ok_or_else(|| "no build: set job.binding (or return a script `build`)".to_string())?;
+    let mode =
+        mode.ok_or_else(|| "no mode: set job.mode (or return a script `build`)".to_string())?;
     let opts = job.opts.unwrap_or_default();
     let runs = session
-        .run_record_flow_batch(
-            &BindingId::from(job.binding.as_str()),
-            job.mode,
-            job.chain,
-            opts,
-        )
+        .run_record_flow_batch(&BindingId::from(binding.as_str()), mode, job.chain, opts)
         .map_err(|e| e.to_string())?;
     Ok(JobOutput {
         document_count: runs.len(),
@@ -215,15 +238,38 @@ mod tests {
             locale: None,
             payload,
             results,
-            binding: "v1".into(),
-            mode: BatchMode::OneCatalog,
+            binding: Some("v1".into()),
+            mode: Some(BatchMode::OneCatalog),
             chain: vec![FrameCapacity {
                 frame: "f0".into(),
                 page: "p0".into(),
                 height_pt: 200.0,
             }],
             opts: None,
+            script: None,
         };
         assert!(run_job(job).is_err());
+    }
+
+    #[test]
+    fn data_automation_cli_script_drives_the_build() {
+        // The job carries NO binding/mode — a §10 script supplies the build and
+        // the de locale. Proves the scriptable-run path end-to-end through the CLI.
+        let mut job: Job = serde_json::from_str(&job_json()).unwrap();
+        job.binding = None;
+        job.mode = None;
+        job.locale = None;
+        job.script = Some(
+            r#"({ locale: "de", build: { binding: "rf", mode: { mode: "perGroup", by: ["region"] } } })"#
+                .to_string(),
+        );
+        let out = run_job(job).expect("scripted job runs");
+        assert_eq!(out.document_count, 2); // per-group over region → east, west
+                                           // The script's de locale reached the kernels (CURRENCY → trailing €).
+        let json = serde_json::to_string(&out.runs[0].flow.frames[0]).unwrap();
+        assert!(
+            json.contains('€'),
+            "script locale should reach the run: {json}"
+        );
     }
 }

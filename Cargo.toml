@@ -15,6 +15,7 @@ members = [
     "data-automation",
     "data-js",
     "data-cli",
+    "data-script",
     "data-conformance",
 ]
 
