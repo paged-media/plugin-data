@@ -20,7 +20,7 @@
 use data_bind::{ResolutionEngine, Resolved};
 use data_conformance::{n, record_set, t, today};
 use data_core::{
-    Binding, BindingId, FieldType, FlowOpts, FrameChainRef, GroupFooter, Query, QueryId,
+    Binding, BindingId, FieldType, FlowOpts, FooterAgg, FrameChainRef, GroupFooter, Query, QueryId,
     ResultShape, Template, TemplateField, TemplateRef,
 };
 use data_js::core::DataSession;
@@ -238,6 +238,7 @@ fn data_bind_record_flow_footer() {
                 footer: Some(GroupFooter {
                     label: "Subtotal ({count})".into(),
                     sum_field: Some("price".into()),
+                    ..Default::default()
                 }),
             },
         },
@@ -413,4 +414,59 @@ fn data_lower_paginate_repeats_parent_path_on_spill() {
         }
         other => panic!("frame 2 should repeat the EMEA/Widgets path, got {other:?}"),
     }
+}
+
+#[test]
+fn data_bind_record_flow_footer_agg() {
+    // Group A (stabilized) = {price 1, 3}: AVG 2.00, MAX 3.00, MIN 1.00.
+    let footer_value = |agg: FooterAgg| -> String {
+        let mut e = ResolutionEngine::new(today());
+        e.add_query(Query {
+            id: QueryId::from("q1"),
+            sql: String::new(),
+            params: vec![],
+            shape: ResultShape::RecordStream,
+        });
+        e.add_template(template());
+        e.add_binding(
+            BindingId::from("rf"),
+            Binding::RecordFlow {
+                chain: FrameChainRef::from("chain1"),
+                query: QueryId::from("q1"),
+                template: TemplateRef::from("tmpl"),
+                options: FlowOpts {
+                    group_by: vec!["cat".into()],
+                    repeat_header: true,
+                    continued_marker: true,
+                    footer: Some(GroupFooter {
+                        label: "X".into(),
+                        sum_field: Some("price".into()),
+                        agg,
+                    }),
+                },
+            },
+        );
+        e.set_result(
+            QueryId::from("q1"),
+            record_set(
+                &[
+                    ("cat", FieldType::Text),
+                    ("name", FieldType::Text),
+                    ("price", FieldType::Float),
+                ],
+                vec![
+                    vec![t("A"), t("B"), t("A")],
+                    vec![t("x"), t("y"), t("z")],
+                    vec![n(1.0), n(2.0), n(3.0)],
+                ],
+            ),
+        );
+        match e.resolve(&BindingId::from("rf")).unwrap() {
+            Resolved::RecordFlow(rf) => rf.groups[0].footer.as_ref().unwrap().cells[1].clone(),
+            other => panic!("expected a record flow, got {other:?}"),
+        }
+    };
+    assert_eq!(footer_value(FooterAgg::Avg), "2.00");
+    assert_eq!(footer_value(FooterAgg::Max), "3.00");
+    assert_eq!(footer_value(FooterAgg::Min), "1.00");
 }

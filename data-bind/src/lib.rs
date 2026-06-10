@@ -34,9 +34,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use data_core::{
-    Binding, BindingId, FlowOpts, FrameChainRef, ImageReference, ImageStatus, ImgFit, ImgMissing,
-    ImgPolicy, Locale, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp,
-    ResultShape, ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef, Value,
+    Binding, BindingId, FlowOpts, FooterAgg, FrameChainRef, ImageReference, ImageStatus, ImgFit,
+    ImgMissing, ImgPolicy, Locale, Placeholder, PlaceholderRef, Query, QueryId, RecordSet,
+    ResolveStamp, ResultShape, ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef,
+    Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -573,6 +574,42 @@ fn resolve_table(
     }
 }
 
+/// Per-group footer accumulator (§9.4): record count + the running aggregate of
+/// the footer's numeric field.
+#[derive(Clone, Copy)]
+struct FooterAcc {
+    count: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+    num: usize,
+}
+
+impl FooterAcc {
+    fn new() -> Self {
+        FooterAcc {
+            count: 0,
+            sum: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+            num: 0,
+        }
+    }
+
+    /// The chosen aggregate; `0.0` when the group has no numeric value.
+    fn value(&self, agg: FooterAgg) -> f64 {
+        if self.num == 0 {
+            return 0.0;
+        }
+        match agg {
+            FooterAgg::Sum => self.sum,
+            FooterAgg::Avg => self.sum / self.num as f64,
+            FooterAgg::Min => self.min,
+            FooterAgg::Max => self.max,
+        }
+    }
+}
+
 /// Resolve a record flow (spec §9.4): stabilize the records (so groups are
 /// contiguous + stable), split into sections by the group-by key, and render
 /// one template instance per record. Each record instance is atomic (the
@@ -604,7 +641,7 @@ fn resolve_record_flow(
 
     let mut groups: Vec<ResolvedFlowGroup> = Vec::new();
     // Per-group footer accumulators (count, sum), aligned with `groups`.
-    let mut accums: Vec<(usize, f64)> = Vec::new();
+    let mut accums: Vec<FooterAcc> = Vec::new();
     let mut current_key: Option<Vec<Value>> = None;
     for row in 0..stable.row_count {
         let key: Vec<Value> = key_cols
@@ -625,7 +662,7 @@ fn resolve_record_flow(
                     records: Vec::new(),
                     footer: None,
                 });
-                accums.push((0, 0.0));
+                accums.push(FooterAcc::new());
             } else {
                 // The first level whose key value changed; open that level and
                 // every nested level below it (each parent header-only, the leaf
@@ -643,7 +680,7 @@ fn resolve_record_flow(
                         records: Vec::new(),
                         footer: None,
                     });
-                    accums.push((0, 0.0));
+                    accums.push(FooterAcc::new());
                 }
             }
             current_key = Some(key);
@@ -669,30 +706,33 @@ fn resolve_record_flow(
                 height_pt: instance_height,
             });
         // Accumulate the footer aggregates from the RAW value (not the rendered
-        // cell): count always, sum when the column is numeric.
+        // cell): record count always, sum/min/max over the numeric column.
         let acc = accums.last_mut().expect("an accumulator per group");
-        acc.0 += 1;
+        acc.count += 1;
         if let Some(c) = footer_sum_col {
             if let Some(Value::Number(n)) = stable.value(row, c) {
-                acc.1 += n;
+                acc.sum += n;
+                acc.min = acc.min.min(*n);
+                acc.max = acc.max.max(*n);
+                acc.num += 1;
             }
         }
     }
 
-    // Finalize each LEAF group's footer (label `{count}` substitution + a
-    // locale-aware sum total). Header-only parent sections carry no footer.
+    // Finalize each LEAF group's footer (label `{count}` substitution + the
+    // locale-aware aggregate). Header-only parent sections carry no footer.
     if let Some(footer) = &options.footer {
-        for (group, (count, sum)) in groups.iter_mut().zip(accums) {
+        for (group, acc) in groups.iter_mut().zip(accums) {
             if group.records.is_empty() {
                 continue;
             }
-            let label = footer.label.replace("{count}", &count.to_string());
+            let label = footer.label.replace("{count}", &acc.count.to_string());
             let mut cells = vec![label];
             if footer.sum_field.is_some() {
-                // Format the total through the DSL so it honors the locale.
-                let ctx = SimpleCtx::new().with_field("__sum", Value::Number(sum));
+                // Format the aggregate through the DSL so it honors the locale.
+                let ctx = SimpleCtx::new().with_field("__v", Value::Number(acc.value(footer.agg)));
                 let ec = EvalCtx::new(&ctx, today).with_locale(locale);
-                cells.push(eval_str("NUMBER(__sum, 2)", &ec).as_display());
+                cells.push(eval_str("NUMBER(__v, 2)", &ec).as_display());
             }
             group.footer = Some(ResolvedFlowRecord {
                 cells,

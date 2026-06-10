@@ -219,16 +219,34 @@ pub struct FlowOpts {
 
 /// A per-group section footer (§9.4): a labelled subtotal row at the end of each
 /// group. `label` may contain `{count}`, replaced with the group's record count;
-/// `sum_field`, when set, names a numeric column summed across the group (the
-/// total rendered locale-aware to 2 decimals).
+/// `sum_field`, when set, names a numeric column aggregated across the group by
+/// `agg` (the result rendered locale-aware to 2 decimals).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupFooter {
     /// The footer label, e.g. `"Subtotal"` or `"{count} items"`.
     pub label: String,
-    /// A numeric column to total across the group, if any.
+    /// A numeric column to aggregate across the group, if any.
     #[serde(default)]
     pub sum_field: Option<String>,
+    /// Which aggregate of `sum_field` to show (default `Sum`).
+    #[serde(default)]
+    pub agg: FooterAgg,
+}
+
+/// The aggregate a group footer reports over its numeric field (§9.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FooterAgg {
+    /// The total (the default).
+    #[default]
+    Sum,
+    /// The mean over the numeric values.
+    Avg,
+    /// The smallest value.
+    Min,
+    /// The largest value.
+    Max,
 }
 
 /// A designed per-record template — the "catalog cell" (§9.4). The engine

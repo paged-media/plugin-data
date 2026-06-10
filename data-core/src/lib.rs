@@ -43,9 +43,9 @@ pub mod funcs {
 }
 
 pub use binding::{
-    Binding, BindingDef, ColumnBind, FlowOpts, GroupFooter, ImageReference, ImageStatus, ImgFit,
-    ImgMissing, ImgPolicy, MissingPolicy, Placeholder, PlaceholderKind, ResolveStamp, Status,
-    StyleAction, SyncState, TableOpts, Template, TemplateField,
+    Binding, BindingDef, ColumnBind, FlowOpts, FooterAgg, GroupFooter, ImageReference, ImageStatus,
+    ImgFit, ImgMissing, ImgPolicy, MissingPolicy, Placeholder, PlaceholderKind, ResolveStamp,
+    Status, StyleAction, SyncState, TableOpts, Template, TemplateField,
 };
 pub use expr::{BinOp, Expr, FnId, UnaryOp};
 pub use ids::{
