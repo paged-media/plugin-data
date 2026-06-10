@@ -149,6 +149,19 @@ mod wasm {
             to_js(&result)
         }
 
+        /// Plan a §10 batch run over a query's result (`mode` is `BatchMode`):
+        /// `{ mode, units: [{ label, recordIndices }], totalRecords }` — which
+        /// records feed which output document (per-record / per-group / one
+        /// catalog). The executor lowers each unit through the normal pipeline.
+        pub fn plan_batch(&self, query: &str, mode: JsValue) -> Result<JsValue, JsValue> {
+            let mode = from_js(mode)?;
+            let plan = self
+                .session
+                .plan_batch(&QueryId::from(query), mode)
+                .map_err(map_err)?;
+            to_js(&plan)
+        }
+
         /// Build the §7 governed catalog for a query's result: enrich its schema
         /// with a column-metadata sidecar (`metadata` is `DatasetMetadata`) and
         /// return `{ columns, diagnostics }` — documented columns + governance

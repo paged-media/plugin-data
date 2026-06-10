@@ -20,6 +20,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow, RuleEvaluation};
 use data_core::{
     Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Schema,
@@ -294,6 +295,24 @@ impl DataSession {
             schema: stable.schema.clone(),
             records: stable,
         })
+    }
+
+    /// Plan a **batch run** over a query's result (spec §10): partition it into
+    /// the deterministic sequence of generation units — one document per record
+    /// (per-store flyers), per group (per-category catalogs), or one paginated
+    /// catalog. Returns the plan (which records feed which document); the executor
+    /// (in-app, or the napi-rs native binding) resolves + lowers + paginates each
+    /// unit through the normal pipeline — nothing renders here. Errors if the
+    /// query has no ingested result yet.
+    pub fn plan_batch(
+        &self,
+        query_id: &QueryId,
+        mode: BatchMode,
+    ) -> Result<BatchPlan, SessionError> {
+        let records = self.engine.result(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        Ok(plan_batch(records, &mode))
     }
 
     /// Build the **governed catalog** for a query's result (spec §7): enrich the

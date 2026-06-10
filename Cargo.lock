@@ -86,6 +86,8 @@ name = "data-automation"
 version = "0.0.0"
 dependencies = [
  "data-core",
+ "data-query",
+ "serde",
 ]
 
 [[package]]
@@ -102,6 +104,7 @@ dependencies = [
 name = "data-conformance"
 version = "0.0.0"
 dependencies = [
+ "data-automation",
  "data-bind",
  "data-core",
  "data-expr",
@@ -143,6 +146,7 @@ name = "data-js"
 version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
+ "data-automation",
  "data-bind",
  "data-core",
  "data-lower",

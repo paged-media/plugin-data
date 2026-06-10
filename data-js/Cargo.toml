@@ -19,6 +19,7 @@ data-sources = { path = "../data-sources" }
 data-bind = { path = "../data-bind" }
 data-lower = { path = "../data-lower" }
 data-query = { path = "../data-query" }
+data-automation = { path = "../data-automation" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

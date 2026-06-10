@@ -27,6 +27,22 @@ export interface ColumnSpec {
   expr: string;
 }
 
+/** How a §10 batch run partitions a dataset into generation units: one document
+ *  per record, per group, or one paginated catalog. */
+export type BatchMode =
+  | { mode: "perRecord"; key?: string }
+  | { mode: "perGroup"; by: string[] }
+  | { mode: "oneCatalog" };
+
+/** A §10 batch plan: the deterministic sequence of generation units (which
+ *  records feed which output document). The executor lowers each unit through
+ *  the normal pipeline — nothing renders at plan time. */
+export interface BatchPlan {
+  mode: "perRecord" | "perGroup" | "oneCatalog";
+  units: { label: string; recordIndices: number[] }[];
+  totalRecords: number;
+}
+
 /** A governed dataset's column-metadata sidecar (§7): the JSON the bundle reads
  *  from a `GovernedExtract.metadata_sidecar` location and hands to the engine. */
 export interface DatasetMetadata {
@@ -109,6 +125,12 @@ export interface DataSourceSession {
    *  (`refreshData`). The byte-read of the governed table + sidecar from a
    *  file/URL/DB location is the broader `data.governed.extract` path (M2). */
   governedCatalog(queryId: string, metadata: DatasetMetadata): Promise<GovernedCatalog>;
+  /** §10 batch plan: partition a query's resolved result into generation units
+   *  (per-record / per-group / one-catalog). Returns the plan; executing it
+   *  (resolve → lower → paginate → export each unit) reuses the normal pipeline.
+   *  Native server/CI execution is the napi-rs binding (M2); this is the in-app
+   *  plan. Requires the query's result to be ingested first (`refreshData`). */
+  planBatch(queryId: string, mode: BatchMode): Promise<BatchPlan>;
   dispose(): void;
 }
 
@@ -318,6 +340,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       // third-party engine is linked (§3 license boundary).
       const e = await ensureEngine();
       return e.governed_catalog(queryId, metadata) as GovernedCatalog;
+    },
+
+    async planBatch(queryId, mode) {
+      // §10: the engine partitions the query's resolved result into generation
+      // units. Executing the plan reuses the normal resolve/lower/paginate path.
+      const e = await ensureEngine();
+      return e.plan_batch(queryId, mode) as BatchPlan;
     },
 
     dispose() {

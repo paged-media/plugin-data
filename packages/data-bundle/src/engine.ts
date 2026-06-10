@@ -20,6 +20,7 @@ export interface DataEngineLike {
   resolve_lowered(binding: string): unknown;
   publish_provider(query: string, providerId: string, category: string): unknown;
   governed_catalog(query: string, metadata: unknown): unknown;
+  plan_batch(query: string, mode: unknown): unknown;
   sync_state(binding: string): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;
