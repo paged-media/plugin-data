@@ -319,11 +319,13 @@ async function partC() {
   eq(runs[0].label, "east", "Part C: batch run label (stabilized group order)");
   assert.ok(runs[0].flow.frames.length >= 1, "Part C: batch unit paginated (chain heightPt parsed)");
   // §9.4 footer crossed real wasm: a groupFooter block with the {count} subtotal.
-  const footer = runs[0].flow.frames
-    .flatMap((f) => f.blocks)
-    .find((b) => b.block === "groupFooter");
+  const blocks = runs[0].flow.frames.flatMap((f) => f.blocks);
+  const footer = blocks.find((b) => b.block === "groupFooter");
   assert.ok(footer, "Part C: a groupFooter block crossed the boundary");
   assert.ok(String(footer.cells[0]).startsWith("Subtotal ("), `Part C: footer label: ${footer.cells[0]}`);
+  // The group header carries its nesting `level` (0 here — single-level).
+  const header = blocks.find((b) => b.block === "groupHeader");
+  assert.ok(header && header.level === 0, "Part C: groupHeader.level crossed the boundary");
   console.log(`  ✓ batch run: per-group → 2 docs, footer "${footer.cells[0]}" through real wasm`);
 }
 

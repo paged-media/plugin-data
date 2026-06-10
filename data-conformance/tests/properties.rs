@@ -87,7 +87,7 @@ proptest! {
             .enumerate()
             .map(|(i, h)| FlowRecord { cells: vec![format!("r{i}")], height_pt: *h as f64 })
             .collect();
-        let groups = vec![FlowGroup { header: None, records: records.clone(), footer: None }];
+        let groups = vec![FlowGroup { header: None, level: 0, records: records.clone(), footer: None }];
         let chain: Vec<FrameCapacity> = caps
             .iter()
             .enumerate()

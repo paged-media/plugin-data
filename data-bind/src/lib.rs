@@ -131,14 +131,20 @@ pub struct ResolvedRecordFlow {
     pub groups: Vec<ResolvedFlowGroup>,
 }
 
-/// One section of a [`ResolvedRecordFlow`].
+/// One section of a [`ResolvedRecordFlow`]. With multi-level `group_by`, parent
+/// levels appear as header-only sections (`records` empty) preceding their leaf
+/// sections; `level` (0 = outermost) lets the host indent/style the hierarchy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedFlowGroup {
-    /// The section header text (the group-by key), or `None` when ungrouped.
+    /// The section header text (this level's group-by key), or `None` when
+    /// ungrouped.
     pub header: Option<String>,
+    /// The nesting level (0 = outermost group). Single-level/ungrouped → 0.
+    pub level: usize,
     pub records: Vec<ResolvedFlowRecord>,
     /// The section footer (a subtotal/count row), or `None` when no footer is
-    /// configured (§9.4 "section headers/footers").
+    /// configured (§9.4 "section headers/footers"). Header-only parent sections
+    /// never carry a footer.
     pub footer: Option<ResolvedFlowRecord>,
 }
 
@@ -605,25 +611,41 @@ fn resolve_record_flow(
             .iter()
             .map(|&c| stable.value(row, c).cloned().unwrap_or(Value::Null))
             .collect();
-        // A new group starts whenever the group-by key changes (ungrouped → one
-        // group, since the key is always the empty tuple).
+        // A new section opens when the group-by key changes. With multi-level
+        // grouping, the levels that changed (from the first divergent one) open
+        // as a hierarchy: each PARENT level is a header-only section, then the
+        // LEAF level (which carries the records). Single-level → one leaf;
+        // ungrouped → one headerless leaf.
         if current_key.as_ref() != Some(&key) {
-            let header = if options.group_by.is_empty() {
-                None
+            if key.is_empty() {
+                // Ungrouped (or no group-by column resolved) → one section.
+                groups.push(ResolvedFlowGroup {
+                    header: None,
+                    level: 0,
+                    records: Vec::new(),
+                    footer: None,
+                });
+                accums.push((0, 0.0));
             } else {
-                Some(
-                    key.iter()
-                        .map(Value::as_display)
-                        .collect::<Vec<_>>()
-                        .join(" · "),
-                )
-            };
-            groups.push(ResolvedFlowGroup {
-                header,
-                records: Vec::new(),
-                footer: None,
-            });
-            accums.push((0, 0.0));
+                // The first level whose key value changed; open that level and
+                // every nested level below it (each parent header-only, the leaf
+                // carrying the records).
+                let first_changed = match &current_key {
+                    None => 0,
+                    Some(prev) => (0..key.len())
+                        .find(|&i| prev.get(i) != key.get(i))
+                        .unwrap_or(0),
+                };
+                for (level, key_value) in key.iter().enumerate().skip(first_changed) {
+                    groups.push(ResolvedFlowGroup {
+                        header: Some(key_value.as_display()),
+                        level,
+                        records: Vec::new(),
+                        footer: None,
+                    });
+                    accums.push((0, 0.0));
+                }
+            }
             current_key = Some(key);
         }
 
@@ -657,10 +679,13 @@ fn resolve_record_flow(
         }
     }
 
-    // Finalize each group's footer (label `{count}` substitution + a locale-aware
-    // sum total).
+    // Finalize each LEAF group's footer (label `{count}` substitution + a
+    // locale-aware sum total). Header-only parent sections carry no footer.
     if let Some(footer) = &options.footer {
         for (group, (count, sum)) in groups.iter_mut().zip(accums) {
+            if group.records.is_empty() {
+                continue;
+            }
             let label = footer.label.replace("{count}", &count.to_string());
             let mut cells = vec![label];
             if footer.sum_field.is_some() {

@@ -49,6 +49,17 @@
   tests:
     rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow"]
 
+- id: data.bind.recordflow-nested
+  title: Record-flow multi-level nested grouping — hierarchical section headers (§9.4)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.4 advanced presentation grouping)
+  status: implemented
+  provenance:
+    [
+      "group_by [a,b,...] nests: parent levels are header-only sections preceding their leaf sections; each carries a `level` (0=outermost) for host indent/style; single-level/ungrouped unchanged (level 0); driven off the resolved key so a missing group column degrades to one section",
+    ]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow_nested"]
+
 - id: data.bind.recordflow-footer
   title: Record-flow section footers — per-group subtotal/count rows (§9.4)
   spec: plugin-data data-bind/src/lib.rs + data-lower/src/lib.rs (base-idea §9.4 "section headers/footers")

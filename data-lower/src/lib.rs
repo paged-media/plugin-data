@@ -297,11 +297,16 @@ pub struct FrameCapacity {
 }
 
 /// One section to paginate: an optional header, its atomic record instances, and
-/// an optional footer (a subtotal/count row at the group's end, §9.4).
+/// an optional footer (a subtotal/count row at the group's end, §9.4). With
+/// multi-level grouping, parent levels are header-only sections (`records` empty)
+/// and `level` (0 = outermost) carries the nesting depth.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowGroup {
     #[serde(default)]
     pub header: Option<String>,
+    /// The nesting level (0 = outermost). Single-level/ungrouped → 0.
+    #[serde(default)]
+    pub level: usize,
     pub records: Vec<FlowRecord>,
     #[serde(default)]
     pub footer: Option<FlowRecord>,
@@ -341,8 +346,13 @@ impl Default for FlowLayoutOpts {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "block", rename_all = "camelCase")]
 pub enum FlowBlock {
-    /// A section header (`continued` when re-emitted on a later frame).
-    GroupHeader { text: String, continued: bool },
+    /// A section header (`continued` when re-emitted on a later frame). `level`
+    /// (0 = outermost) lets the host indent/style nested group headers.
+    GroupHeader {
+        text: String,
+        level: usize,
+        continued: bool,
+    },
     /// A record instance.
     Record { cells: Vec<String>, height_pt: f64 },
     /// A section footer (a group subtotal/count row, §9.4).
@@ -409,6 +419,7 @@ pub fn paginate_flow(
             }
             frames[fi].blocks.push(FlowBlock::GroupHeader {
                 text: text.clone(),
+                level: group.level,
                 continued: false,
             });
             frames[fi].used_pt += opts.header_height_pt;
@@ -431,6 +442,7 @@ pub fn paginate_flow(
                     if opts.header_height_pt + h <= cap(fi) {
                         frames[fi].blocks.push(FlowBlock::GroupHeader {
                             text: text.clone(),
+                            level: group.level,
                             continued: opts.continued_marker && group_started,
                         });
                         frames[fi].used_pt += opts.header_height_pt;

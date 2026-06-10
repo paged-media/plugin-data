@@ -368,6 +368,7 @@ impl DataSession {
                             // subtotal (a footer over a single record is noise).
                             vec![FlowGroup {
                                 header: g.header.clone(),
+                                level: g.level,
                                 records: vec![rec.clone()],
                                 footer: None,
                             }],
@@ -553,6 +554,7 @@ fn to_flow_groups(rf: &ResolvedRecordFlow) -> Vec<FlowGroup> {
         .iter()
         .map(|g| FlowGroup {
             header: g.header.clone(),
+            level: g.level,
             records: g
                 .records
                 .iter()

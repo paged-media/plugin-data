@@ -121,6 +121,7 @@ fn data_lower_paginate_packs_with_continued_headers() {
     let chain = vec![frame("f1", 60.0), frame("f2", 60.0)];
     let groups = vec![FlowGroup {
         header: Some("Cat A".into()),
+        level: 0,
         records: vec![rec("r1", 20.0), rec("r2", 20.0), rec("r3", 20.0)],
         footer: None,
     }];
@@ -159,6 +160,7 @@ fn data_recordflow_pagination_converges_on_tall_record() {
     let chain = vec![frame("f1", 50.0), frame("f2", 50.0), frame("f3", 50.0)];
     let groups = vec![FlowGroup {
         header: None,
+        level: 0,
         records: vec![rec("small", 10.0), rec("tall", 80.0), rec("after", 10.0)],
         footer: None,
     }];
@@ -274,6 +276,7 @@ fn data_lower_paginate_emits_a_footer_block() {
     // A group footer paginates as an atomic block at the group's end.
     let groups = vec![FlowGroup {
         header: Some("Cat A".into()),
+        level: 0,
         records: vec![rec("r1", 20.0), rec("r2", 20.0)],
         footer: Some(FlowRecord {
             cells: vec!["Subtotal".into(), "40.00".into()],
@@ -291,5 +294,77 @@ fn data_lower_paginate_emits_a_footer_block() {
     match footers[0] {
         FlowBlock::GroupFooter { cells, .. } => assert_eq!(cells[0], "Subtotal"),
         _ => unreachable!(),
+    }
+}
+
+#[test]
+fn data_bind_record_flow_nested() {
+    // Multi-level group_by [region, category] nests: each parent level is a
+    // header-only section preceding its leaf sections (§9.4 advanced grouping).
+    let mut e = ResolutionEngine::new(today());
+    e.add_query(Query {
+        id: QueryId::from("q1"),
+        sql: String::new(),
+        params: vec![],
+        shape: ResultShape::RecordStream,
+    });
+    e.add_template(Template {
+        id: TemplateRef::from("tmpl"),
+        fields: vec![TemplateField {
+            label: String::new(),
+            expr: "name".into(),
+        }],
+        line_height_pt: 10.0,
+    });
+    e.add_binding(
+        BindingId::from("rf"),
+        Binding::RecordFlow {
+            chain: FrameChainRef::from("chain1"),
+            query: QueryId::from("q1"),
+            template: TemplateRef::from("tmpl"),
+            options: FlowOpts {
+                group_by: vec!["region".into(), "category".into()],
+                repeat_header: true,
+                continued_marker: true,
+                footer: None,
+            },
+        },
+    );
+    // Stabilized by [region, category]: north/a, north/b, south/a.
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(
+            &[
+                ("region", FieldType::Text),
+                ("category", FieldType::Text),
+                ("name", FieldType::Text),
+            ],
+            vec![
+                vec![t("north"), t("north"), t("south")],
+                vec![t("b"), t("a"), t("a")],
+                vec![t("x"), t("y"), t("z")],
+            ],
+        ),
+    );
+    match e.resolve(&BindingId::from("rf")).unwrap() {
+        Resolved::RecordFlow(rf) => {
+            // north(L0,header-only) · a(L1) · b(L1) · south(L0,header-only) · a(L1)
+            let shape: Vec<(Option<&str>, usize, usize)> = rf
+                .groups
+                .iter()
+                .map(|g| (g.header.as_deref(), g.level, g.records.len()))
+                .collect();
+            assert_eq!(
+                shape,
+                vec![
+                    (Some("north"), 0, 0),
+                    (Some("a"), 1, 1),
+                    (Some("b"), 1, 1),
+                    (Some("south"), 0, 0),
+                    (Some("a"), 1, 1),
+                ]
+            );
+        }
+        other => panic!("expected a record flow, got {other:?}"),
     }
 }
