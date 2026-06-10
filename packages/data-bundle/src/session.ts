@@ -132,6 +132,11 @@ export interface DataSourceSession {
    *  (`refreshData`). The byte-read of the governed table + sidecar from a
    *  file/URL/DB location is the broader `data.governed.extract` path (M2). */
   governedCatalog(queryId: string, metadata: DatasetMetadata): Promise<GovernedCatalog>;
+  /** §9.1: set the formatting locale (`"en"` | `"de"`) for the display kernels
+   *  (NUMBER/CURRENCY/PERCENT/DATEFMT). Applies immediately if the engine is up,
+   *  else on its next boot. Re-lower bindings to see the change in the document. */
+  setLocale(next: "en" | "de"): void;
+  getLocale(): "en" | "de";
   /** §10 batch plan: partition a query's resolved result into generation units
    *  (per-record / per-group / one-catalog). Returns the plan; executing it
    *  (resolve → lower → paginate → export each unit) reuses the normal pipeline.
@@ -155,6 +160,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // D-09: live provider registrations, keyed by provider id, so a re-publish
   // bumps the existing registration's revision instead of double-registering.
   const providerHandles = new Map<string, DataProviderHandle>();
+  // §9.1 localization — the session formatting locale (applied on engine boot,
+  // and immediately if the engine is already up). Default en.
+  let locale: "en" | "de" = "en";
 
   let engine: DataEngineLike | null = null;
   let duck: DuckDBHandle | null = null;
@@ -170,6 +178,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     if (engine) return engine;
     try {
       engine = await bootEngine(today);
+      engine.set_locale(locale); // apply the chosen locale to the fresh engine
       return engine;
     } catch (err) {
       state.status = "engine-missing";
@@ -379,6 +388,15 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       // third-party engine is linked (§3 license boundary).
       const e = await ensureEngine();
       return e.governed_catalog(queryId, metadata) as GovernedCatalog;
+    },
+
+    setLocale(next) {
+      locale = next;
+      if (engine) engine.set_locale(next);
+    },
+
+    getLocale() {
+      return locale;
     },
 
     async planBatch(queryId, mode) {

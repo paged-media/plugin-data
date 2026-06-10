@@ -46,6 +46,7 @@ export function makeDatasetPanel(
     const [plan, setPlan] = useState<BatchPlan | null>(null);
     const [providerNote, setProviderNote] = useState<string>("");
     const [error, setError] = useState<string>("");
+    const [locale, setLocaleState] = useState<"en" | "de">(session.getLocale());
 
     const queries = snapshot.queries;
     const selected = query || queries[0] || "";
@@ -102,6 +103,21 @@ export function makeDatasetPanel(
     return (
       <div style={wrap}>
         <strong>paged.data · dataset (v{host.manifest.version})</strong>
+
+        <label style={row}>
+          locale (§9.1):{" "}
+          <select
+            value={locale}
+            onChange={(e) => {
+              const next = e.target.value as "en" | "de";
+              session.setLocale(next);
+              setLocaleState(next);
+            }}
+          >
+            <option value="en">en — $1,234.50 · YYYY-MM-DD</option>
+            <option value="de">de — 1.234,56 € · DD.MM.YYYY</option>
+          </select>
+        </label>
 
         {queries.length === 0 ? (
           <p style={note}>No queries yet — define one in the Bindings panel, then return here.</p>

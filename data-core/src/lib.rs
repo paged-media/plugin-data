@@ -53,7 +53,7 @@ pub use ids::{
     TemplateRef,
 };
 pub use model::{
-    DataSource, Field, FieldType, FileFormat, ParamDecl, ParamType, Query, RecordError, RecordSet,
-    RefreshPolicy, ResultShape, Schema, SourceKind,
+    DataSource, Field, FieldType, FileFormat, Locale, ParamDecl, ParamType, Query, RecordError,
+    RecordSet, RefreshPolicy, ResultShape, Schema, SourceKind,
 };
 pub use value::{Value, ValueError};

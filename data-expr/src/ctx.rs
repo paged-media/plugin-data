@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use data_core::Value;
+use data_core::{Locale, Value};
 
 /// The record + parameter view an expression evaluates against.
 pub trait RecordCtx {
@@ -37,12 +37,25 @@ pub struct EvalCtx<'a> {
     records: &'a dyn RecordCtx,
     /// Days since 1970-01-01 for `TODAY()` (injected, deterministic).
     today: i32,
+    /// The formatting locale for the display kernels (default [`Locale::En`]).
+    locale: Locale,
 }
 
 impl<'a> EvalCtx<'a> {
-    /// Build a context over a record view and an injected `today` serial.
+    /// Build a context over a record view and an injected `today` serial. The
+    /// locale defaults to [`Locale::En`]; set it with [`with_locale`].
     pub fn new(records: &'a dyn RecordCtx, today: i32) -> Self {
-        EvalCtx { records, today }
+        EvalCtx {
+            records,
+            today,
+            locale: Locale::En,
+        }
+    }
+
+    /// Set the formatting locale (builder style).
+    pub fn with_locale(mut self, locale: Locale) -> Self {
+        self.locale = locale;
+        self
     }
 
     /// Resolve a field of the current record.
@@ -58,6 +71,11 @@ impl<'a> EvalCtx<'a> {
     /// The injected `today` serial (days since 1970-01-01).
     pub fn today(&self) -> i32 {
         self.today
+    }
+
+    /// The formatting locale for the display kernels.
+    pub fn locale(&self) -> Locale {
+        self.locale
     }
 }
 

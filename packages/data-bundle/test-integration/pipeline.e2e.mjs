@@ -269,6 +269,23 @@ async function partC() {
   eq(one.units.length, 1, "Part C: one-catalog single unit");
   eq(one.totalRecords, 3, "Part C: batch totalRecords (camelCase crossed)");
   console.log("  ✓ batch plan: per-group / one-catalog crossed");
+
+  // §9.1 — the locale shim + locale-aware formatting through the real wasm.
+  engine.set_locale("de");
+  engine.define_binding({
+    id: "v_price",
+    kind: "variable",
+    target: "ph",
+    query: "q1",
+    expr: "CURRENCY(price)",
+    missing: { missing: "blank" },
+  });
+  const v = engine.resolve_lowered("v_price");
+  // The stream's first record is price 19.99 → de "19,99 €" (trailing €, comma
+  // decimal) — proves set_locale("de") deserialized + threaded to the kernels.
+  eq(v.kind, "variable", "Part C: lowered variable kind");
+  eq(v.text, "19,99 €", "Part C: de locale via real wasm (CURRENCY → '19,99 €')");
+  console.log("  ✓ locale: set_locale('de') → CURRENCY formats '19,99 €' through real wasm");
 }
 
 const expected = await partA();

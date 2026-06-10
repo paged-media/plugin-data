@@ -12,6 +12,7 @@ import type { BundleHost } from "@paged-media/plugin-api";
 vi.mock("../engine", () => ({
   ENGINE_NOT_BUILT: "not built",
   bootEngine: vi.fn(async () => ({
+    set_locale() {},
     plan_batch(_query: string, mode: { mode: string }) {
       return {
         mode: mode.mode,

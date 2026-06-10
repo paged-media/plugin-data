@@ -1,0 +1,15 @@
+# paged.data feature registry — localization (spec §9.1; decision: v1 set =
+# en/de minimum, mirroring plugin-sheet's D-8). Build-consumed half of the
+# two-registry split. The locale affects ONLY the display kernels' output; the
+# canonical value form + content hashing stay locale-free (idempotent re-resolve).
+
+- id: data.i18n.locale
+  title: Locale-aware display formatting — en/de number/currency/date (§9.1)
+  spec: plugin-data data-core/src/model.rs (Locale) + data-expr/src/families/format.rs
+  status: implemented
+  provenance:
+    [
+      "session locale threads engine -> EvalCtx -> the format kernels; de = '.' grouping / ',' decimal / '€' trailing / DD.MM.YYYY; canonical value form stays locale-free",
+    ]
+  tests:
+    rust: ["data-conformance/tests/locale.rs::data_i18n_locale"]

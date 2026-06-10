@@ -11,6 +11,7 @@ import type { BundleHost } from "@paged-media/plugin-api";
 vi.mock("../engine", () => ({
   ENGINE_NOT_BUILT: "not built",
   bootEngine: vi.fn(async () => ({
+    set_locale() {},
     governed_catalog(_query: string, metadata: { columns: { name: string }[] }) {
       // A faithful-enough stand-in: echo the documented names so the test proves
       // the sidecar reached the engine (the real merge is Rust-tested).

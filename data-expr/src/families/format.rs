@@ -17,54 +17,61 @@
 //! `Text`; an error or unparseable input propagates as a `Value::Error`.
 
 use data_core::temporal::civil_from_days;
-use data_core::{Value, ValueError};
+use data_core::{Locale, Value, ValueError};
 
 use crate::ctx::EvalCtx;
 
-/// `NUMBER(value, [decimals])` — fixed-decimal with thousands grouping.
-pub fn number(args: &[Value], _ctx: &EvalCtx) -> Value {
+/// `NUMBER(value, [decimals])` — fixed-decimal with locale-aware grouping.
+pub fn number(args: &[Value], ctx: &EvalCtx) -> Value {
     let n = match args[0].as_number() {
         Ok(n) => n,
         Err(e) => return Value::Error(e),
     };
     let decimals = opt_usize(args.get(1), 0);
-    Value::text(fmt_fixed(n, decimals))
+    Value::text(fmt_fixed(n, decimals, ctx.locale()))
 }
 
-/// `CURRENCY(value, [decimals=2], [symbol="$"])`.
-pub fn currency(args: &[Value], _ctx: &EvalCtx) -> Value {
+/// `CURRENCY(value, [decimals=2], [symbol])` — `symbol` defaults to the locale's
+/// (`$` leading for en, `€` trailing for de).
+pub fn currency(args: &[Value], ctx: &EvalCtx) -> Value {
     let n = match args[0].as_number() {
         Ok(n) => n,
         Err(e) => return Value::Error(e),
     };
     let decimals = opt_usize(args.get(1), 2);
+    let amount = fmt_fixed(n, decimals, ctx.locale());
+    let (default_symbol, trailing) = ctx.locale().currency();
     let symbol = match args.get(2) {
         Some(v) => v.as_display(),
-        None => "$".to_string(),
+        None => default_symbol.to_string(),
     };
-    Value::text(format!("{symbol}{}", fmt_fixed(n, decimals)))
+    if trailing {
+        Value::text(format!("{amount} {symbol}"))
+    } else {
+        Value::text(format!("{symbol}{amount}"))
+    }
 }
 
-/// `PERCENT(fraction, [decimals=0])` — `0.125 → "12.5%"`.
-pub fn percent(args: &[Value], _ctx: &EvalCtx) -> Value {
+/// `PERCENT(fraction, [decimals=0])` — `0.125 → "12.5%"` (locale-aware decimal).
+pub fn percent(args: &[Value], ctx: &EvalCtx) -> Value {
     let n = match args[0].as_number() {
         Ok(n) => n,
         Err(e) => return Value::Error(e),
     };
     let decimals = opt_usize(args.get(1), 0);
-    Value::text(format!("{}%", fmt_fixed(n * 100.0, decimals)))
+    Value::text(format!("{}%", fmt_fixed(n * 100.0, decimals, ctx.locale())))
 }
 
-/// `DATEFMT(date, [pattern="YYYY-MM-DD"])`. Supported tokens: `YYYY`, `YY`,
-/// `MM`, `DD`.
-pub fn datefmt(args: &[Value], _ctx: &EvalCtx) -> Value {
+/// `DATEFMT(date, [pattern])` — `pattern` defaults to the locale's (`YYYY-MM-DD`
+/// for en, `DD.MM.YYYY` for de). Supported tokens: `YYYY`, `YY`, `MM`, `DD`.
+pub fn datefmt(args: &[Value], ctx: &EvalCtx) -> Value {
     let days = match super::to_days(&args[0]) {
         Ok(d) => d,
         Err(e) => return Value::Error(e),
     };
     let pattern = match args.get(1) {
         Some(v) => v.as_display(),
-        None => "YYYY-MM-DD".to_string(),
+        None => ctx.locale().date_pattern().to_string(),
     };
     let (y, m, d) = civil_from_days(days);
     let out = pattern
@@ -87,8 +94,9 @@ fn opt_usize(v: Option<&Value>, default: usize) -> usize {
     }
 }
 
-/// Fixed-decimal formatting with thousands grouping. Bit-stable (no locale).
-fn fmt_fixed(n: f64, decimals: usize) -> String {
+/// Fixed-decimal formatting with locale-aware grouping + decimal separators.
+/// Deterministic given the locale (re-resolution stays idempotent).
+fn fmt_fixed(n: f64, decimals: usize, locale: Locale) -> String {
     if !n.is_finite() {
         return ValueError::Value.code().to_string();
     }
@@ -102,21 +110,21 @@ fn fmt_fixed(n: f64, decimals: usize) -> String {
     if neg {
         out.push('-');
     }
-    out.push_str(&group_thousands(int_part));
+    out.push_str(&group_thousands(int_part, locale.group_sep()));
     if let Some(f) = frac {
-        out.push('.');
+        out.push(locale.decimal_sep());
         out.push_str(f);
     }
     out
 }
 
-/// Insert `,` every three digits from the right. `int_part` is digits only.
-fn group_thousands(int_part: &str) -> String {
+/// Insert `sep` every three digits from the right. `int_part` is digits only.
+fn group_thousands(int_part: &str, sep: char) -> String {
     let len = int_part.len();
     let mut out = String::with_capacity(len + len / 3);
     for (i, ch) in int_part.chars().enumerate() {
         if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
+            out.push(sep);
         }
         out.push(ch);
     }

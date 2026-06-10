@@ -16,6 +16,7 @@ export interface DataEngineLike {
   define_binding(def: unknown): void;
   define_placeholder(placeholder: unknown): void;
   set_param(name: string, value: unknown): void;
+  set_locale(locale: unknown): void;
   ingest_result(query: string, records: unknown): void;
   resolve_lowered(binding: string): unknown;
   publish_provider(query: string, providerId: string, category: string): unknown;

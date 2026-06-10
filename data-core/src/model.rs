@@ -166,6 +166,54 @@ pub enum FieldType {
     Null,
 }
 
+/// The formatting locale for the display kernels (spec §9.1; v1 = en/de minimum,
+/// mirroring plugin-sheet's D-8). It affects ONLY the `data-expr` format
+/// functions' display output (`NUMBER`/`CURRENCY`/`PERCENT`/`DATEFMT`
+/// separators, default currency symbol/placement, default date pattern). The
+/// CANONICAL value form stays locale-free — re-resolution is idempotent
+/// (`value.rs`), and content hashing never sees a locale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Locale {
+    /// English: `1,234.56`, `$` leading, `YYYY-MM-DD`.
+    #[default]
+    En,
+    /// German: `1.234,56`, `€` trailing, `DD.MM.YYYY`.
+    De,
+}
+
+impl Locale {
+    /// The decimal separator.
+    pub fn decimal_sep(self) -> char {
+        match self {
+            Locale::En => '.',
+            Locale::De => ',',
+        }
+    }
+    /// The thousands-grouping separator.
+    pub fn group_sep(self) -> char {
+        match self {
+            Locale::En => ',',
+            Locale::De => '.',
+        }
+    }
+    /// The default currency symbol + whether it TRAILS the amount
+    /// (`("€", true)` → `1.234,56 €`).
+    pub fn currency(self) -> (&'static str, bool) {
+        match self {
+            Locale::En => ("$", false),
+            Locale::De => ("€", true),
+        }
+    }
+    /// The default `DATEFMT` pattern when the caller supplies none.
+    pub fn date_pattern(self) -> &'static str {
+        match self {
+            Locale::En => "YYYY-MM-DD",
+            Locale::De => "DD.MM.YYYY",
+        }
+    }
+}
+
 /// A result schema: field names + types, in column order.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Schema {

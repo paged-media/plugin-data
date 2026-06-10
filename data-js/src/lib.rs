@@ -100,6 +100,12 @@ mod wasm {
             Ok(())
         }
 
+        /// Set the formatting locale for the display kernels (`"en"` | `"de"`).
+        pub fn set_locale(&mut self, locale: JsValue) -> Result<(), JsValue> {
+            self.session.set_locale(from_js(locale)?);
+            Ok(())
+        }
+
         /// Deliver a query's result (the DuckDB-WASM Arrow result, converted to
         /// a `RecordSet` by the TS query layer).
         pub fn ingest_result(&mut self, query: &str, records: JsValue) -> Result<(), JsValue> {

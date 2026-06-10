@@ -23,8 +23,8 @@ use thiserror::Error;
 use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow, RuleEvaluation};
 use data_core::{
-    Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Schema,
-    Status, StyleAction, SyncState, Template, Value,
+    Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query, QueryId, RecordSet,
+    Schema, Status, StyleAction, SyncState, Template, Value,
 };
 use data_lower::{
     lower_image, lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
@@ -195,6 +195,13 @@ impl DataSession {
     /// Bind a query parameter value.
     pub fn set_param(&mut self, name: &str, value: Value) {
         self.engine.set_param(name, value);
+    }
+
+    /// Set the formatting locale for the display kernels (§9.1; en/de). Affects
+    /// `NUMBER`/`CURRENCY`/`PERCENT`/`DATEFMT` output only — the canonical value
+    /// form (and content hashing) stays locale-free.
+    pub fn set_locale(&mut self, locale: Locale) {
+        self.engine.set_locale(locale);
     }
 
     /// Deliver a query's result (from the DuckDB-WASM query layer → RecordSet).

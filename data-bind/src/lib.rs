@@ -35,8 +35,8 @@ use thiserror::Error;
 
 use data_core::{
     Binding, BindingId, FlowOpts, FrameChainRef, ImageReference, ImageStatus, ImgFit, ImgMissing,
-    ImgPolicy, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp, ResultShape,
-    ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef, Value,
+    ImgPolicy, Locale, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp,
+    ResultShape, ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -177,15 +177,23 @@ pub struct ResolutionEngine {
     sync: HashMap<BindingId, SyncState>,
     params: HashMap<String, Value>,
     today: i32,
+    locale: Locale,
 }
 
 impl ResolutionEngine {
     /// A fresh engine with an injected `today` serial (days since 1970-01-01).
+    /// The formatting locale defaults to [`Locale::En`]; set it with
+    /// [`set_locale`].
     pub fn new(today: i32) -> Self {
         ResolutionEngine {
             today,
             ..Default::default()
         }
+    }
+
+    /// Set the formatting locale for the display kernels (§9.1).
+    pub fn set_locale(&mut self, locale: Locale) {
+        self.locale = locale;
     }
 
     /// Register a query (the recipe).
@@ -324,6 +332,7 @@ impl ResolutionEngine {
                 records,
                 &self.params,
                 self.today,
+                self.locale,
                 query.map(|q| &q.shape),
             )),
             Binding::Table {
@@ -338,6 +347,7 @@ impl ResolutionEngine {
                 records,
                 &self.params,
                 self.today,
+                self.locale,
             )),
             Binding::RecordFlow {
                 chain,
@@ -356,6 +366,7 @@ impl ResolutionEngine {
                     records,
                     &self.params,
                     self.today,
+                    self.locale,
                 ))
             }
             Binding::Image {
@@ -370,6 +381,7 @@ impl ResolutionEngine {
                 records,
                 &self.params,
                 self.today,
+                self.locale,
             )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
@@ -417,9 +429,12 @@ impl ResolutionEngine {
                 row,
                 params: &self.params,
             };
-            if eval_str(&when, &EvalCtx::new(&ctx, self.today))
-                .as_bool()
-                .unwrap_or(false)
+            if eval_str(
+                &when,
+                &EvalCtx::new(&ctx, self.today).with_locale(self.locale),
+            )
+            .as_bool()
+            .unwrap_or(false)
             {
                 fires.push(row);
             }
@@ -460,6 +475,7 @@ fn resolve_variable(
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
+    locale: Locale,
     _shape: Option<&ResultShape>,
 ) -> ResolvedVariable {
     if records.row_count == 0 {
@@ -471,7 +487,7 @@ fn resolve_variable(
         row: 0,
         params,
     };
-    let ec = EvalCtx::new(&ctx, today);
+    let ec = EvalCtx::new(&ctx, today).with_locale(locale);
     let value = eval_str(expr, &ec);
     if value.is_null() {
         return apply_missing(target, value, missing);
@@ -515,6 +531,7 @@ fn apply_missing(
 
 /// Resolve a dynamic table: stabilize the rows (stable identity), then evaluate
 /// each column's expression per record into a grid of display strings.
+#[allow(clippy::too_many_arguments)]
 fn resolve_table(
     region: data_core::FrameRef,
     columns: &[data_core::ColumnBind],
@@ -522,6 +539,7 @@ fn resolve_table(
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
+    locale: Locale,
 ) -> ResolvedTable {
     let stable = stabilize(records, &options.group_by);
     let headers: Vec<String> = columns.iter().map(|c| c.header.clone()).collect();
@@ -532,7 +550,7 @@ fn resolve_table(
             row,
             params,
         };
-        let ec = EvalCtx::new(&ctx, today);
+        let ec = EvalCtx::new(&ctx, today).with_locale(locale);
         let cells: Vec<String> = columns
             .iter()
             .map(|c| eval_str(&c.expr, &ec).as_display())
@@ -550,6 +568,7 @@ fn resolve_table(
 /// contiguous + stable), split into sections by the group-by key, and render
 /// one template instance per record. Each record instance is atomic (the
 /// paginator never splits it); its height is `fields × line_height`.
+#[allow(clippy::too_many_arguments)]
 fn resolve_record_flow(
     chain: FrameChainRef,
     template: &Template,
@@ -557,6 +576,7 @@ fn resolve_record_flow(
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
+    locale: Locale,
 ) -> ResolvedRecordFlow {
     let stable = stabilize(records, &options.group_by);
     let key_cols: Vec<usize> = options
@@ -598,7 +618,7 @@ fn resolve_record_flow(
             row,
             params,
         };
-        let ec = EvalCtx::new(&ctx, today);
+        let ec = EvalCtx::new(&ctx, today).with_locale(locale);
         let cells: Vec<String> = template
             .fields
             .iter()
@@ -622,6 +642,7 @@ fn resolve_record_flow(
 /// policy. Text is classified by scheme (`http(s)://` → uri, `asset:` → asset
 /// id, else a path); `Bytes` is inline image data; an absent/empty/error value
 /// applies the policy (skip / flag / fallback).
+#[allow(clippy::too_many_arguments)]
 fn resolve_image(
     target: PlaceholderRef,
     expr: &str,
@@ -629,6 +650,7 @@ fn resolve_image(
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
+    locale: Locale,
 ) -> ResolvedImage {
     let value = if records.row_count == 0 {
         Value::Null
@@ -638,7 +660,7 @@ fn resolve_image(
             row: 0,
             params,
         };
-        eval_str(expr, &EvalCtx::new(&ctx, today))
+        eval_str(expr, &EvalCtx::new(&ctx, today).with_locale(locale))
     };
 
     let reference = match &value {
