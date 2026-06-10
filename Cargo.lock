@@ -146,6 +146,7 @@ dependencies = [
  "data-bind",
  "data-core",
  "data-lower",
+ "data-query",
  "data-sources",
  "serde",
  "serde-wasm-bindgen",

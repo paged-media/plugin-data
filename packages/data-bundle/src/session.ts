@@ -27,6 +27,20 @@ export interface ColumnSpec {
   expr: string;
 }
 
+/** The §7.1 data-provider publication payload the engine produces — a schema +
+ *  the stabilized rows + an opaque content revision (etag) — ready to register
+ *  with the core data-provider registry once that contract lands (D-09). */
+export interface DataProviderPublication {
+  id: string;
+  category: string;
+  /** Content etag; changes iff the published rows change (permutation-invariant). */
+  revision: string;
+  schema: { fields: { name: string; type: string; nullable: boolean }[] };
+  rowCount: number;
+  /** The stabilized RecordSet (Arrow-shaped) — the snapshot a consumer pulls. */
+  records: unknown;
+}
+
 /** The session API the panels + commands drive. */
 export interface DataSourceSession {
   getState(): SessionState;
@@ -47,6 +61,19 @@ export interface DataSourceSession {
    *  M0 (the manifest declares `network:false`, so the host refuses) — flips on
    *  when remote sources + `network:{origins}` land (M1; a wiring change). */
   requestNetworkConsent(origins: string[], purpose: string): Promise<string[]>;
+  /** §7.1 data-provider: publish a query's resolved result as a named,
+   *  discoverable dataset for OTHER consumers (the sheets plugin sourcing a
+   *  sheet from a governed query) — declaring the provider, never knowing who
+   *  consumes it. Returns the engine-side publication payload. REGISTRATION with
+   *  the core registry is the D-09 gate (no `host.dataProviders` door yet); this
+   *  returns the payload ready for that `register(...)` call and does NOT fake a
+   *  registration (reserved seams stay honest). Requires the query's result to be
+   *  ingested first (`refreshData`). */
+  publishProvider(
+    queryId: string,
+    providerId: string,
+    category: string,
+  ): Promise<DataProviderPublication>;
   dispose(): void;
 }
 
@@ -229,6 +256,25 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         host.log.warn(`network consent unavailable: ${String(err)}`);
         return [];
       }
+    },
+
+    async publishProvider(queryId, providerId, category) {
+      // §7.1/D-09: the engine produces the publication (schema + stabilized rows
+      // + revision etag). Registration is gated on the core data-provider
+      // contract — there is no `host.dataProviders` registry door yet, so we do
+      // NOT fake a register; we return the payload that register(...) will take
+      // the day the contract lands (a wiring change, like D-02/D-03).
+      const e = await ensureEngine();
+      const pub = e.publish_provider(queryId, providerId, category) as DataProviderPublication;
+      if (!host.supports("dataProviders@1")) {
+        host.log.info(
+          `data provider "${pub.id}" (category "${pub.category}", rev ${pub.revision}) ` +
+            "ready to publish, but no host.dataProviders registry is wired yet (D-09: the " +
+            "core data-provider contract RFC, shared with the sheets consumer side). " +
+            "Registration is a one-line host.dataProviders.register(...) when that door lands.",
+        );
+      }
+      return pub;
     },
 
     dispose() {

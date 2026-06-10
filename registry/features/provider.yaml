@@ -1,0 +1,22 @@
+# paged.data feature registry — the §7.1 data-provider role (data.provider.*):
+# paged.data publishes a resolved query as a named, discoverable dataset that
+# OTHER consumers (most importantly the sheets plugin) read through a CORE SDK
+# data-provider contract — never by inter-plugin coupling (§2.1/§7.1). The
+# engine-side publication is built + tested here; registration with the core
+# registry is the D-09 gate (RFC: thoughts/docs/paged/plugin-data/rfc-data-provider.md).
+
+- id: data.provider.publish
+  title: Publish a resolved query as a §7.1 data-provider snapshot (schema + stabilized RecordSet + revision etag)
+  spec: plugin-data data-js/src/core.rs (base-idea §7.1 — D-09)
+  status: implemented
+  provenance:
+    [
+      "engine-side payload ready for host.dataProviders.register; stabilized order + content-etag revision (permutation-invariant refresh token); exposes data, never the ability to drive paged.data's queries/sources (§7.1 security note)",
+    ]
+  tests:
+    rust: ["data-conformance/tests/provider.rs::data_provider_publish"]
+
+- id: data.provider.register
+  title: Register the published provider with the core SDK data-provider registry (consumed by others, §7.1)
+  spec: plugin-data (base-idea §7.1 — core data-provider contract RFC, D-09)
+  status: planned

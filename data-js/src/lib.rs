@@ -149,6 +149,23 @@ mod wasm {
             to_js(&result)
         }
 
+        /// Publish a query's resolved result as a §7.1 data-provider snapshot
+        /// (`{ id, category, revision, schema, rowCount, records }`) — the
+        /// engine-side payload the bundle hands to the core data-provider
+        /// registry once that contract lands (D-09).
+        pub fn publish_provider(
+            &self,
+            query: &str,
+            provider_id: &str,
+            category: &str,
+        ) -> Result<JsValue, JsValue> {
+            let pub_ = self
+                .session
+                .publish_provider(&QueryId::from(query), provider_id, category)
+                .map_err(map_err)?;
+            to_js(&pub_)
+        }
+
         /// The sync state of a binding.
         pub fn sync_state(&self, binding: &str) -> JsValue {
             to_js(&self.session.sync_state(&BindingId::from(binding))).unwrap_or(JsValue::NULL)

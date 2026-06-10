@@ -18,6 +18,7 @@ export interface DataEngineLike {
   set_param(name: string, value: unknown): void;
   ingest_result(query: string, records: unknown): void;
   resolve_lowered(binding: string): unknown;
+  publish_provider(query: string, providerId: string, category: string): unknown;
   sync_state(binding: string): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;

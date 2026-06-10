@@ -22,13 +22,14 @@ use thiserror::Error;
 
 use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow, RuleEvaluation};
 use data_core::{
-    Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Status,
-    StyleAction, SyncState, Template, Value,
+    Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Schema,
+    Status, StyleAction, SyncState, Template, Value,
 };
 use data_lower::{
     lower_image, lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
     FrameCapacity, LowerOpts, LoweredImage, LoweredTable, LoweredVariable, PaginatedFlow,
 };
+use data_query::{content_hash, stabilize};
 use data_sources::{authorize, build_manifest, GrantedCapabilities, SourceManifest};
 
 /// A session-level failure (resolution or a malformed boundary value).
@@ -62,6 +63,37 @@ pub struct RuleResult {
     pub fires: Vec<usize>,
     pub apply: StyleAction,
     pub total: usize,
+}
+
+/// A §7.1 data-provider publication: a query's resolved result exposed as a
+/// named, discoverable dataset for **other** consumers (most importantly the
+/// sheets plugin — a sheet sourced from a governed query) through the core SDK
+/// data-provider registry. `paged.data` declares the provider and never knows
+/// who consumes it; consumers discover by `category`, never by plugin identity
+/// (§7.1). The publication carries *data*, never the ability to drive
+/// `paged.data`'s queries/sources (§7.1 security note). Registration with the
+/// core registry is gated on the data-provider contract RFC (D-09); this is the
+/// engine-side payload ready to hand to `host.dataProviders.register` the moment
+/// that door lands — a wiring change, like D-02/D-03.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPublication {
+    /// The provider's stable, discoverable id (the neutral rendezvous key).
+    pub id: String,
+    /// Discovery category/capability (e.g. `"dataset"`) — consumers find
+    /// providers by category, never by plugin identity (§7.1).
+    pub category: String,
+    /// An opaque content revision (an etag over the stabilized data): it changes
+    /// iff the published rows change. Consumers re-pull when it differs from the
+    /// revision they last saw — the §7.1 "sync flows through the contract".
+    pub revision: String,
+    /// The published schema (the descriptor half — what `discover` surfaces
+    /// without shipping the rows).
+    pub schema: Schema,
+    pub row_count: usize,
+    /// The resolved data, **stabilized** to a deterministic order (the snapshot
+    /// half — Arrow-shaped, the same interchange used internally, §7.1).
+    pub records: RecordSet,
 }
 
 /// The document-scoped payload (spec §5.1): the binding *recipe* (sources +
@@ -229,6 +261,35 @@ impl DataSession {
             fires,
             apply,
             total,
+        })
+    }
+
+    /// Publish a query's resolved result as a §7.1 data-provider snapshot — a
+    /// schema + the **stabilized** RecordSet + an opaque content-revision token,
+    /// ready to register with the core data-provider registry once that SDK
+    /// contract lands (D-09). The data is stabilized to a deterministic order so
+    /// the snapshot — and its revision etag — is identity-stable across
+    /// refreshes regardless of DuckDB's unordered iteration (§6.1), the
+    /// precondition for a meaningful refresh signal. Errors if the query has no
+    /// ingested result yet.
+    pub fn publish_provider(
+        &self,
+        query_id: &QueryId,
+        provider_id: &str,
+        category: &str,
+    ) -> Result<ProviderPublication, SessionError> {
+        let records = self.engine.result(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        let stable = stabilize(records, &[]);
+        let revision = format!("{:016x}", content_hash(&stable));
+        Ok(ProviderPublication {
+            id: provider_id.to_string(),
+            category: category.to_string(),
+            revision,
+            row_count: stable.row_count,
+            schema: stable.schema.clone(),
+            records: stable,
         })
     }
 

@@ -243,6 +243,14 @@ impl ResolutionEngine {
         }
     }
 
+    /// The raw result currently ingested for a query, if any. Read-only — the
+    /// §7.1 data-provider snapshot stabilizes and content-hashes this; it does
+    /// NOT let a consumer mutate the graph (provider exposes *data*, not the
+    /// ability to define queries/sources — §7.1 security note).
+    pub fn result(&self, query: &QueryId) -> Option<&RecordSet> {
+        self.results.get(query)
+    }
+
     /// The sync state of a binding.
     pub fn sync_state(&self, id: &BindingId) -> Option<SyncState> {
         self.sync.get(id).copied()

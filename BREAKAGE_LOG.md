@@ -58,7 +58,8 @@ The spec's §2.2 gap-analysis table, resolved row-by-row:
 - Document-scoped persistent plugin payload (binding defs, source manifests) —
   **PARTIAL** → D-08 (the metadata door exists but caps at 64 KiB).
 - **Register as a data provider** (publish schema + RecordSet + refresh,
-  §7.1) — **GAP** → D-09.
+  §7.1) — **PARTIAL** → D-09 (plugin side built + tested + RFC filed; the core
+  `host.dataProviders` registry door is the residual SDK gap).
 
 Net-new beyond the §2.2 table: the wasm-bindgen loader path AND the multi-MB
 DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
@@ -184,15 +185,31 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   payload small + honest. Resolution: a plugin document-data capability with a
   declared size budget. GAP (verify the cap).
 
-- **D-09 · 2026-06-08 · data-provider contract · OPEN** — no core
-  data-provider registry (§7.1). paged.data should be able to publish a resolved
-  dataset (schema + `RecordSet` + refresh/subscribe) to OTHER consumers (notably
-  the sheets plugin) THROUGH a neutral core contract — registering a provider
-  without knowing its consumers, no inter-plugin contact. The SDK has no such
-  surface. M0 keeps `RecordSet` + refresh semantics internal. Resolution: **core
-  data-provider contract/registry RFC** (shared with the sheets plugin's
-  consumer side); category/capability discovery, no consumer identity exposed to
-  the provider. M1+ gate.
+- **D-09 · 2026-06-08 (RFC filed + provider side built 2026-06-10) ·
+  data-provider contract · PARTIALLY RESOLVED (plugin-data side done; SDK door
+  OPEN)** — no core data-provider registry (§7.1). paged.data should publish a
+  resolved dataset (schema + `RecordSet` + refresh/subscribe) to OTHER consumers
+  (notably the sheets plugin) THROUGH a neutral core contract — registering a
+  provider without knowing its consumers, no inter-plugin contact. **The
+  engine/plugin side is now built + tested:**
+  `DataSession::publish_provider(query, id, category) -> ProviderPublication`
+  (`data-js/src/core.rs`) returns `{ id, category, revision, schema, rowCount,
+  records }` — the records **stabilized** to a permutation-invariant order and
+  `revision` an etag over that stabilized content (so a meaningless reorder does
+  NOT trigger a spurious consumer refresh); conformance
+  `data-conformance/tests/provider.rs` (3 tests), registry `data.provider.publish`
+  (implemented, coverage-gated). The bundle exposes it through
+  `session.publishProvider(...)` with **honest-deferred registration** (no
+  `host.dataProviders` door → it returns the publication payload and logs the
+  defer, never fakes a register), `src/__tests__/provider.test.ts` (3 vitest).
+  **Residual (the SDK gap):** the core registry door —
+  `host.dataProviders.register/discover/get/onDidChange` + a `dataProviders`
+  capability. Specified in full: **RFC
+  `thoughts/docs/paged/plugin-data/rfc-data-provider.md`** (shared with the
+  sheets plugin's consumer side; category discovery, no consumer identity exposed
+  to the provider, the §7.1 "exposes data not control" security shape). When the
+  door lands, paged.data is a one-line `register(...)` away — a wiring change,
+  like D-02/D-03. M1+ (T2) gate.
 
 - **D-10 · 2026-06-08 · owned content · OPEN** — no owned-content attribute /
   edit-interception hook. Lowered bound content is plain document content; a user
@@ -265,7 +282,7 @@ platform should design each once, for all three plugins:
 | D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) | open |
 | D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration | open |
 | D-07 | S-10 | I-07 | wasm-bindgen loader door + the 8 MiB artifact budget | **loader ratified**; budget ceiling open |
-| D-09 | (consumer side) | — | core data-provider contract/registry (§7.1) | open |
+| D-09 | (consumer side) | — | core data-provider contract/registry (§7.1) | **RFC filed + provider side built**; SDK registry door open |
 | D-10 | S-09 | — | owned-content attribute + edit-interception | partial (`objectType` ships) |
 | D-12 | S-05 | — | frame-chain read + content-box reflow notification | open |
 | D-13 | S-04 | — | document-style read+write (style-management capability) | **metrics landed**; style read open |
