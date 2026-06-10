@@ -60,3 +60,16 @@ fn data_expr_text_substitute() {
     // Empty find is a no-op (no degenerate insert-between-chars).
     assert_eq!(eval0("SUBSTITUTE(\"abc\", \"\", \"x\")"), t("abc"));
 }
+
+#[test]
+fn data_expr_text_mid() {
+    assert_eq!(eval0(r#"MID("hello", 2, 3)"#), t("ell"));
+    // A start past the end yields empty.
+    assert_eq!(eval0(r#"MID("hi", 9, 3)"#), t(""));
+}
+
+#[test]
+fn data_expr_text_proper() {
+    assert_eq!(eval0(r#"PROPER("hello WORLD")"#), t("Hello World"));
+    assert_eq!(eval0(r#"PROPER("o'brien-smith")"#), t("O'Brien-Smith"));
+}

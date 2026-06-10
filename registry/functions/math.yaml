@@ -70,3 +70,23 @@
   provenance: ["sum; own code"]
   tests:
     rust: ["data-conformance/tests/expr_math.rs::data_expr_math_sum"]
+
+- id: data.expr.math.mod
+  name: MOD
+  family: math
+  arity: { min: 2, max: 2 }
+  rust: math::mod_
+  status: implemented
+  provenance: ["remainder, sign follows divisor; #DIV/0 on zero; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_mod"]
+
+- id: data.expr.math.power
+  name: POWER
+  family: math
+  arity: { min: 2, max: 2 }
+  rust: math::power
+  status: implemented
+  provenance: ["base^exp; #VALUE on non-finite; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_power"]

@@ -15,7 +15,7 @@
 //! Text family (spec §9.1): the workhorse of variable replacement. `Null`
 //! renders as empty (via `as_display`); an error argument propagates.
 
-use data_core::Value;
+use data_core::{Value, ValueError};
 
 use crate::ctx::EvalCtx;
 
@@ -106,4 +106,56 @@ pub fn substitute(args: &[Value], _ctx: &EvalCtx) -> Value {
         return Value::text(s);
     }
     Value::text(s.replace(&find, &repl))
+}
+
+/// `MID(text, start, len)` — `len` characters from 1-based `start` (char-based).
+/// `start < 1` or `len < 0` is `#VALUE`; a start past the end yields `""`.
+pub fn mid(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    let start = match args[1].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    let len = match args[2].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    if start < 1.0 || len < 0.0 {
+        return Value::Error(ValueError::Value);
+    }
+    let begin = (start as usize) - 1;
+    let out: String = args[0]
+        .as_display()
+        .chars()
+        .skip(begin)
+        .take(len as usize)
+        .collect();
+    Value::text(out)
+}
+
+/// `PROPER(text)` — title-case: the first letter of each word upper, the rest
+/// lower (a "word" starts after any non-alphabetic character).
+pub fn proper(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    let s = args[0].as_display();
+    let mut out = String::with_capacity(s.len());
+    let mut new_word = true;
+    for ch in s.chars() {
+        if ch.is_alphabetic() {
+            if new_word {
+                out.extend(ch.to_uppercase());
+            } else {
+                out.extend(ch.to_lowercase());
+            }
+            new_word = false;
+        } else {
+            out.push(ch);
+            new_word = true;
+        }
+    }
+    Value::text(out)
 }

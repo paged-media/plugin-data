@@ -16,7 +16,7 @@
 //! `f64`, bit-stable (sheet rules; no tolerance machinery). Aggregations skip
 //! `Null`; any error argument propagates.
 
-use data_core::Value;
+use data_core::{Value, ValueError};
 
 use crate::ctx::EvalCtx;
 
@@ -105,5 +105,41 @@ fn fold(args: &[Value], f: impl Fn(f64, f64) -> f64) -> Value {
     match acc {
         Some(n) => Value::Number(n),
         None => Value::Null,
+    }
+}
+
+/// `MOD(a, b)` — the remainder, sign following the divisor (Excel semantics:
+/// `a - b·floor(a/b)`). `b == 0` is `#DIV/0`.
+pub fn mod_(args: &[Value], _ctx: &EvalCtx) -> Value {
+    let a = match args[0].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    let b = match args[1].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    if b == 0.0 {
+        return Value::Error(ValueError::DivByZero);
+    }
+    Value::Number(a - b * (a / b).floor())
+}
+
+/// `POWER(base, exp)` — `base^exp`. A non-finite result (e.g. a negative base to
+/// a fractional power) is `#VALUE`.
+pub fn power(args: &[Value], _ctx: &EvalCtx) -> Value {
+    let base = match args[0].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    let exp = match args[1].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    let result = base.powf(exp);
+    if result.is_finite() {
+        Value::Number(result)
+    } else {
+        Value::Error(ValueError::Value)
     }
 }

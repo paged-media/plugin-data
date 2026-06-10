@@ -59,3 +59,11 @@ fn data_expr_logic_coalesce() {
     assert_eq!(eval0("COALESCE(NULL, NULL, \"x\")"), t("x"));
     assert_eq!(eval0("COALESCE(NULL, NULL)"), Value::Null);
 }
+
+#[test]
+fn data_expr_logic_switch() {
+    // Matches the second case → "y".
+    assert_eq!(eval0(r#"SWITCH("b", "a", "x", "b", "y", "z")"#), t("y"));
+    // No match → the odd trailing default.
+    assert_eq!(eval0(r#"SWITCH("q", "a", "x", "z")"#), t("z"));
+}

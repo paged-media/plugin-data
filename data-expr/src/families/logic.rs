@@ -87,3 +87,27 @@ pub fn coalesce(args: &[Value], _ctx: &EvalCtx) -> Value {
     }
     Value::Null
 }
+
+/// `SWITCH(value, case1, result1, [case2, result2, ...], [default])` — return
+/// the result whose case matches `value` (compared by display, so `1` matches
+/// `"1"`); an odd trailing argument is the default. No match + no default → a
+/// blank (`Null`). A `value` that is itself an error propagates.
+pub fn switch(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    let target = args[0].as_display();
+    let rest = &args[1..];
+    let mut i = 0;
+    while i + 1 < rest.len() {
+        if rest[i].as_display() == target {
+            return rest[i + 1].clone();
+        }
+        i += 2;
+    }
+    // An odd trailing argument is the default value.
+    if rest.len() % 2 == 1 {
+        return rest[rest.len() - 1].clone();
+    }
+    Value::Null
+}

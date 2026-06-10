@@ -70,3 +70,13 @@
   provenance: ["first non-null; own code"]
   tests:
     rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_coalesce"]
+
+- id: data.expr.logic.switch
+  name: SWITCH
+  family: logic
+  arity: { min: 3, max: null }
+  rust: logic::switch
+  status: implemented
+  provenance: ["multi-branch by display-match; odd trailing arg = default; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_switch"]

@@ -54,3 +54,16 @@ fn data_expr_math_sum() {
     // Nulls are skipped.
     assert_eq!(eval0("SUM(1, NULL, 2)"), n(3.0));
 }
+
+#[test]
+fn data_expr_math_mod() {
+    assert_eq!(eval0("MOD(7, 3)"), n(1.0));
+    // Sign follows the divisor (Excel): MOD(-1, 3) = 2.
+    assert_eq!(eval0("MOD(-1, 3)"), n(2.0));
+}
+
+#[test]
+fn data_expr_math_power() {
+    assert_eq!(eval0("POWER(2, 10)"), n(1024.0));
+    assert_eq!(eval0("POWER(9, 0.5)"), n(3.0));
+}
