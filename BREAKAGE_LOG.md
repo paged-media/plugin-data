@@ -73,12 +73,20 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   `DocumentSurface.placeholders()` read door + a `setFieldValue` update mutation.
   Status: draft for plugin-platform review.
 
-- **D-02 · 2026-06-08 · engine ops · OPEN (degradation active)** — no native
-  table-creation Mutation (`insertTable` is absent from the Mutation union — the
-  same wall plugin-sheet hit at S-03). M0 dynamic-table lowering runs the spec
-  §2.2 degradation: tab-aligned text in a text frame + drawn rules, batched.
-  Resolution: native table content model RFC (shared with plugin-sheet). Lowering
-  upgrades from tab-text to real tables when it lands.
+- **D-02 · 2026-06-08 · engine ops · MOSTLY RESOLVED (2026-06-09)** — the
+  **`insertTable` op LANDED** (the platform's table-content rework, on the
+  plugin-sdk `d03-network-consent` branch): `insertTable { storyId, rows, cols,
+  headerRows?, columnWidths? }` + `insertText` with a `cell: { tableId, row,
+  col }` qualifier. plugin-data now lowers a dynamic table to a **NATIVE table**:
+  `data-host-model` derives the `insertTable` spec + the per-cell `insertText`
+  ops (pure + unit-tested — `tableInsertSpec`/`tableInsertMutation`/
+  `tableCellInserts`), and `lower.ts` commits frame → story → `insertTable`
+  (read its created id) → fill cells. The §2.2 tab-text + drawn-rules path is
+  RETAINED as the fallback for an older host. **Residual:** the platform's
+  `ElementId`/table-address shape is in flight (their table rework isn't settled
+  — failing wasm-loader tests on that branch), so `lower.ts` extracts the table
+  id defensively (`tableIdOf` handles `string | { table_id }`) until it stabilizes.
+  The original gap below is otherwise closed.
 
 - **D-02b · 2026-06-08 · asset placement · COVERED (verify)** — image
   placeholders place through the core ASSET mechanism (SDK), not `plugin-image`

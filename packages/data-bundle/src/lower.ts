@@ -1,14 +1,18 @@
 // The page lower — the ONLY place the bundle calls host.document.mutate. The
 // engine (Rust) resolves + lowers to the IR; the host-model translator (pure)
-// shapes the mutations; this drives the host writes. Two-phase for the table
-// path (mirrors plugin-sheet S-03 / BREAKAGE D-02): no `insertTable` op, and
-// `insertText` keys off a `storyId` that exists only AFTER the frame is created.
+// shapes the mutations; this drives the host writes. The table path lowers to a
+// NATIVE table via the `insertTable` op (D-02 retired); if the host is too old
+// to support it, it degrades to the spec §2.2 fallback (tab-aligned text +
+// drawn rules) into the same frame.
 
-import type { BundleHost, ElementId, PageId } from "@paged-media/plugin-api";
+import type { BundleHost, ElementId, Mutation, PageId } from "@paged-media/plugin-api";
 import {
+  bindingMetadata,
   defaultPlacement,
   makeEnvelope,
-  tableToMutations,
+  tableCellInserts,
+  tableInsertMutation,
+  tableInsertSpec,
   type LoweredTable,
   type LoweredVariable,
 } from "@paged-media/data-host-model";
@@ -33,6 +37,19 @@ function frameIdOf(id: ElementId): string | null {
   return null;
 }
 
+/** The string table id from an `insertTable` outcome's created element. The
+ *  platform's ElementId/table-address shape is in flight (the table-content
+ *  rework), so the id may be a plain string or a `{ table_id }` locator —
+ *  handle both until it settles. Returns "" when neither shape is present. */
+function tableIdOf(created: ElementId): string {
+  const id = created.id as unknown;
+  if (typeof id === "string") return id;
+  if (id && typeof id === "object" && "table_id" in id) {
+    return String((id as { table_id: unknown }).table_id);
+  }
+  return "";
+}
+
 /** Commit a lowered dynamic table to a fresh page frame (the degraded tab-text +
  *  rules path, D-02). Returns the created frame's id, or null on any failure
  *  (mutate-never-throws: outcomes are checked, not caught). */
@@ -47,37 +64,63 @@ export async function commitLoweredTable(
   }
   const placement = defaultPlacement(pageId, table.bounds);
   const envelope = makeEnvelope({ kind: "table", region: table.region });
-  const { batch, text } = tableToMutations(table, placement, envelope);
+  const [top, left] = placement.bounds;
 
-  // Phase 1 — frame + rules + binding, one undoable batch.
-  const outcome = await host.document.mutate(batch);
-  if (!outcome.applied || !outcome.createdId) {
-    host.log.warn("lower: phase-1 batch rejected");
+  // Phase 1 — the frame (both the native + degraded paths attach to its story).
+  const frameOutcome = await host.document.mutate({
+    op: "insertTextFrame",
+    args: { pageId, bounds: placement.bounds },
+  });
+  if (!frameOutcome.applied || !frameOutcome.createdId) {
+    host.log.warn("lower: insertTextFrame rejected");
     return null;
   }
-  const frameId = frameIdOf(outcome.createdId);
+  const createdFrame = frameOutcome.createdId;
+  const frameId = frameIdOf(createdFrame);
   if (!frameId) {
     host.log.warn("lower: created element is not a frame target");
     return null;
   }
 
-  // Phase 2 — resolve the new frame's story via the hitTest read door, then
-  // pour the tab/newline text.
-  if (text.length > 0) {
-    const hit = await host.document.hitTest(pageId, center(placement.bounds));
-    const storyId = hit?.storyId ?? null;
-    if (!storyId) {
-      host.log.warn("lower: could not resolve the created frame's story (D-02 phase-2 gap)");
-      return frameId;
-    }
-    const pour = await host.document.mutate({
-      op: "insertText",
-      args: { storyId, offset: 0, text },
-    });
-    if (!pour.applied) host.log.warn("lower: phase-2 insertText rejected");
+  // Resolve the new frame's story via the hitTest read door.
+  const hit = await host.document.hitTest(pageId, center(placement.bounds));
+  const storyId = hit?.storyId ?? null;
+  if (!storyId) {
+    host.log.warn("lower: could not resolve the created frame's story");
+    return frameId;
   }
 
-  await host.selection.set([outcome.createdId]);
+  // Phase 2 — NATIVE: insert the table, then fill its cells by (tableId,row,col).
+  const tableOutcome = await host.document.mutate(tableInsertMutation(storyId, tableInsertSpec(table)));
+  const tableId = tableOutcome.applied && tableOutcome.createdId ? tableIdOf(tableOutcome.createdId) : "";
+  if (tableId) {
+    const cells = tableCellInserts(table, storyId, tableId);
+    if (cells.length > 0) {
+      const filled = await host.document.mutate({ op: "batch", args: { ops: cells } });
+      if (!filled.applied) host.log.warn("lower: native table cell fill rejected");
+    }
+    await host.document.mutate(bindingMetadata(createdFrame, envelope));
+    await host.selection.set([createdFrame]);
+    return frameId;
+  }
+
+  // FALLBACK — the host has no `insertTable`: the §2.2 degradation (tab-aligned
+  // text + drawn rules) poured into the SAME frame (D-02 fallback).
+  host.log.info("lower: insertTable unsupported — degrading to tab-text + drawn rules (D-02)");
+  const ruleOps: Mutation[] = table.rules.map((r) => ({
+    op: "insertLine",
+    args: {
+      pageId,
+      start: [left + r.x1Pt, top + r.y1Pt] as [number, number],
+      end: [left + r.x2Pt, top + r.y2Pt] as [number, number],
+    },
+  }));
+  if (ruleOps.length > 0) await host.document.mutate({ op: "batch", args: { ops: ruleOps } });
+  if (table.text.length > 0) {
+    await host.document.mutate({ op: "insertText", args: { storyId, offset: 0, text: table.text } });
+  }
+  await host.document.mutate(bindingMetadata(createdFrame, envelope));
+  await host.selection.set([createdFrame]);
   return frameId;
 }
 

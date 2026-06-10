@@ -10,6 +10,9 @@ import {
   defaultPlacement,
   makeEnvelope,
   parseEnvelope,
+  tableCellInserts,
+  tableInsertMutation,
+  tableInsertSpec,
   tableToMutations,
 } from "../index";
 import type { LoweredTable } from "../lowered";
@@ -63,5 +66,35 @@ describe("data-host-model", () => {
       | undefined;
     expect(meta?.args.key).toBe(BINDING_KEY);
     expect(text).toBe("SKU\tPrice\nA-1\t$9.99");
+  });
+
+  it("derives the native insertTable spec from the IR (D-02)", () => {
+    const spec = tableInsertSpec(table());
+    expect(spec.rows).toBe(2); // header + 1 data row
+    expect(spec.cols).toBe(2);
+    expect(spec.headerRows).toBe(1); // first IR row is the header
+    expect(spec.columnWidths).toEqual([40, 50]);
+    const m = tableInsertMutation("story-1", spec);
+    expect(m.op).toBe("insertTable");
+    expect((m as { args: { rows: number; cols: number } }).args.rows).toBe(2);
+  });
+
+  it("fills native cells by (tableId, row, col), skipping empties", () => {
+    const ops = tableCellInserts(table(), "story-1", "tbl-1");
+    // 2 rows × 2 cols, all non-empty → 4 inserts.
+    expect(ops).toHaveLength(4);
+    const first = ops[0] as {
+      op: string;
+      args: { storyId: string; text: string; cell: { tableId: string; row: number; col: number } };
+    };
+    expect(first.op).toBe("insertText");
+    expect(first.args.cell).toEqual({ tableId: "tbl-1", row: 0, col: 0 });
+    expect(first.args.text).toBe("SKU");
+    // An empty cell is skipped.
+    const withEmpty: LoweredTable = {
+      ...table(),
+      rows: [{ cells: ["only", ""], yPt: 0, heightPt: 14, header: false }],
+    };
+    expect(tableCellInserts(withEmpty, "s", "t")).toHaveLength(1);
   });
 });

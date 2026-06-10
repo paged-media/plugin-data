@@ -25,5 +25,9 @@ export { DEFAULT_INSET_PT, defaultPlacement, type Placement } from "./placement"
 export {
   bindingMetadata,
   tableToMutations,
+  tableInsertSpec,
+  tableInsertMutation,
+  tableCellInserts,
+  type TableInsertSpec,
   type TableLowerResult,
 } from "./lower-to-mutations";

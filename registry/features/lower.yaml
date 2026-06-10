@@ -39,6 +39,14 @@
   tests:
     rust: ["data-conformance/tests/recordflow.rs::data_recordflow_pagination"]
 
+- id: data.lower.table-native
+  title: Native table lowering (insertTable + per-cell insertText; D-02 retired)
+  spec: plugin-data packages/data-host-model (base-idea §9.3, D-02)
+  status: implemented
+  provenance: ["consumes the landed insertTable op; pure tableInsertSpec/tableCellInserts translation; tab-text+rules retained as fallback"]
+  tests:
+    vitest: ["packages/data-host-model/src/__tests__/lower.test.ts"]
+
 - id: data.lower.rule
   title: Data-driven formatting rules (when -> document style, §9.5)
   spec: plugin-data data-lower (base-idea §9.5, D-13)

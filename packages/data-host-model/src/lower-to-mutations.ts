@@ -89,3 +89,72 @@ export function bindingMetadata(element: ElementId, bindingJson: string): Mutati
     args: { elementId: element, key: BINDING_KEY, value: bindingJson },
   };
 }
+
+// ── Native table lowering (D-02 — consumes the insertTable op) ──────────────
+//
+// The wire now has `insertTable` ({ storyId, rows, cols, headerRows,
+// columnWidths }) + `insertText` with a `cell: { tableId, row, col }`
+// qualifier, so a dynamic table lowers to a REAL native table instead of the
+// tab-text + drawn-rules degradation (D-02 retired). The table id is the
+// `insertTable` mutation's `createdId`, so this is a THREE-phase commit the
+// caller (lower.ts) threads: insertTextFrame → resolve storyId → insertTable
+// (get tableId) → fill cells. The pure translation here produces the
+// insertTable args and the per-cell insertText ops (given the resolved ids);
+// orchestration + the degraded fallback are the caller's.
+
+/** The `insertTable` args derived from the lowered IR (rows / cols / header /
+ *  content-space column widths). */
+export interface TableInsertSpec {
+  rows: number;
+  cols: number;
+  headerRows: number;
+  columnWidths: number[];
+}
+
+/** Derive the `insertTable` spec from a lowered table. The first IR row is the
+ *  header when present (`headerRows: 1`); column widths are the content-space
+ *  widths the engine computed. */
+export function tableInsertSpec(table: LoweredTable): TableInsertSpec {
+  const headerRows = table.rows.length > 0 && table.rows[0].header ? 1 : 0;
+  return {
+    rows: table.rows.length,
+    cols: table.columns.length,
+    headerRows,
+    columnWidths: table.columns.map((c) => c.widthPt),
+  };
+}
+
+/** The `insertTable` mutation for a story (phase 2 of the native commit). */
+export function tableInsertMutation(storyId: string, spec: TableInsertSpec): Mutation {
+  return {
+    op: "insertTable",
+    args: {
+      storyId,
+      rows: spec.rows,
+      cols: spec.cols,
+      headerRows: spec.headerRows,
+      columnWidths: spec.columnWidths,
+    },
+  };
+}
+
+/** The per-cell `insertText` ops once the table's id is known (phase 3). Empty
+ *  cells are skipped (nothing to insert). Each addresses its cell by
+ *  `(tableId, row, col)`. */
+export function tableCellInserts(
+  table: LoweredTable,
+  storyId: string,
+  tableId: string,
+): Mutation[] {
+  const ops: Mutation[] = [];
+  table.rows.forEach((row, r) => {
+    row.cells.forEach((text, c) => {
+      if (text.length === 0) return;
+      ops.push({
+        op: "insertText",
+        args: { storyId, offset: 0, text, cell: { tableId, row: r, col: c } },
+      });
+    });
+  });
+  return ops;
+}
