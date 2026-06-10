@@ -18,7 +18,7 @@ vi.mock("../engine", () => ({
         id,
         category,
         revision: "00000000deadbeef",
-        schema: { fields: [{ name: "sku", type: "text", nullable: true }] },
+        schema: { fields: [{ name: "sku", ty: "text", nullable: true }] },
         rowCount: 3,
         records: { schema: { fields: [] }, columns: [], row_count: 3 },
       };

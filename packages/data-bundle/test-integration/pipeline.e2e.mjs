@@ -191,6 +191,89 @@ async function partB(expected) {
   }
 }
 
+// ── Part C — the dataset surfaces through the wasm serde boundary ────────────
+// Proves the §7.1 provider / §7 governed catalog / §10 batch-plan methods
+// round-trip through serde-wasm-bindgen with the camelCase shapes the bundle
+// expects — the gap the unit tests (which mock the engine) cannot cover.
+async function partC() {
+  console.log("\nPart C — provider / governed catalog / batch plan (real wasm serde):");
+  const engine = await bootEngine();
+  engine.define_query({ id: "q1", sql: "SELECT * FROM s", params: [], shape: { shape: "recordStream" } });
+  const recordSet = {
+    schema: {
+      fields: [
+        { name: "sku", ty: "text", nullable: true },
+        { name: "region", ty: "text", nullable: true },
+        { name: "price", ty: "float", nullable: true },
+      ],
+    },
+    columns: [
+      [{ t: "text", v: "B-2" }, { t: "text", v: "A-1" }, { t: "text", v: "A-3" }],
+      [{ t: "text", v: "west" }, { t: "text", v: "east" }, { t: "text", v: "east" }],
+      [{ t: "number", v: 19.99 }, { t: "number", v: 9.99 }, { t: "number", v: 5.0 }],
+    ],
+    row_count: 3,
+  };
+  engine.ingest_result("q1", recordSet);
+
+  // §7.1 — publish a provider snapshot (camelCase rowCount, an etag revision).
+  const pub1 = engine.publish_provider("q1", "catalog-dataset", "dataset");
+  eq(pub1.id, "catalog-dataset", "Part C: provider id");
+  eq(pub1.category, "dataset", "Part C: provider category");
+  eq(pub1.rowCount, 3, "Part C: provider rowCount (camelCase crossed)");
+  assert.equal(typeof pub1.revision, "string", "Part C: provider revision is a string");
+  assert.ok(pub1.revision.length > 0, "Part C: provider revision non-empty");
+  // The schema descriptor crosses with the Arrow-seam field shape (`ty`).
+  assert.notEqual(pub1.schema.fields[0].ty, undefined, "Part C: provider schema field uses `ty`");
+
+  // Permutation invariance through the real engine: the same rows in a different
+  // ingest order publish the SAME revision.
+  const engine2 = await bootEngine();
+  engine2.define_query({ id: "q1", sql: "x", params: [], shape: { shape: "recordStream" } });
+  engine2.ingest_result("q1", {
+    schema: recordSet.schema,
+    columns: [
+      [{ t: "text", v: "A-1" }, { t: "text", v: "A-3" }, { t: "text", v: "B-2" }],
+      [{ t: "text", v: "east" }, { t: "text", v: "east" }, { t: "text", v: "west" }],
+      [{ t: "number", v: 9.99 }, { t: "number", v: 5.0 }, { t: "number", v: 19.99 }],
+    ],
+    row_count: 3,
+  });
+  eq(engine2.publish_provider("q1", "catalog-dataset", "dataset").revision, pub1.revision,
+    "Part C: provider revision is permutation-invariant (real wasm)");
+  console.log("  ✓ provider snapshot stabilized; revision etag permutation-invariant");
+
+  // §7 — governed catalog: documented columns + drift (price documented int vs
+  // float data; region undocumented).
+  const cat = engine.governed_catalog("q1", {
+    columns: [
+      { name: "sku", label: "SKU", dataType: "text", provenance: "dim" },
+      { name: "price", dataType: "int" },
+    ],
+  });
+  eq(cat.columns.length, 3, "Part C: catalog column count");
+  eq(cat.columns[0].label, "SKU", "Part C: catalog label (documented)");
+  eq(cat.columns[0].dataType, "text", "Part C: catalog dataType (camelCase crossed)");
+  eq(cat.columns[2].dataType, "float", "Part C: catalog keeps the ACTUAL type (data wins)");
+  const kinds = cat.diagnostics.map((d) => d.kind);
+  assert.ok(kinds.includes("typeMismatch"), "Part C: catalog reports typeMismatch (price int↔float)");
+  assert.ok(kinds.includes("undocumentedColumn"), "Part C: catalog reports undocumented region");
+  console.log("  ✓ governed catalog: documented cols + drift diagnostics crossed");
+
+  // §10 — batch plan: per-group over region, and one catalog.
+  const perGroup = engine.plan_batch("q1", { mode: "perGroup", by: ["region"] });
+  eq(perGroup.mode, "perGroup", "Part C: batch mode");
+  eq(perGroup.units.length, 2, "Part C: per-group unit count (east, west)");
+  assert.ok(Array.isArray(perGroup.units[0].recordIndices), "Part C: unit.recordIndices (camelCase crossed)");
+  const one = engine.plan_batch("q1", { mode: "oneCatalog" });
+  eq(one.units.length, 1, "Part C: one-catalog single unit");
+  eq(one.totalRecords, 3, "Part C: batch totalRecords (camelCase crossed)");
+  console.log("  ✓ batch plan: per-group / one-catalog crossed");
+}
+
 const expected = await partA();
 const duckOk = await partB(expected);
-console.log(`\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}`);
+await partC();
+console.log(
+  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)`,
+);

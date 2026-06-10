@@ -79,7 +79,9 @@ export interface DataProviderPublication {
   category: string;
   /** Content etag; changes iff the published rows change (permutation-invariant). */
   revision: string;
-  schema: { fields: { name: string; type: string; nullable: boolean }[] };
+  /** The Arrow-seam schema: each field is `{ name, ty, nullable }` (the same
+   *  shape the engine ingests — `ty`, not `type`; verified by the e2e harness). */
+  schema: { fields: { name: string; ty: string; nullable: boolean }[] };
   rowCount: number;
   /** The stabilized RecordSet (Arrow-shaped) — the snapshot a consumer pulls. */
   records: unknown;
