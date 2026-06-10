@@ -10,6 +10,12 @@ image/sheet need); several rows are the SAME RFCs the siblings file —
 independence between plugins, convergence on the platform (joint-RFC summary at
 the foot).
 
+**Consolidated platform ask (the single rolled-up view + sequencing):**
+`thoughts/docs/paged/plugin-data/rfi-platform-gaps.md` (the RFI). This log stays
+the live per-row truth; the RFI is the entry point for the orchestrator / SDK +
+core reviewers. Detailed proposals: `rfc-tagged-placeholders.md` (D-01),
+`rfc-network-consent.md` (D-03).
+
 Format: `D-NN · date · area · status`. Verified against the published SDK +
 the manifest schema on 2026-06-08 (M0 spine).
 
