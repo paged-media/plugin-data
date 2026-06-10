@@ -16,9 +16,11 @@ import manifest from "../manifest.json";
 import { createSession } from "./session";
 import { makeSourcesPanel } from "./panels/sources-panel";
 import { makeBindingsPanel } from "./panels/bindings-panel";
+import { makeDatasetPanel } from "./panels/dataset-panel";
 
 const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
 const BINDINGS_PANEL_ID = "media.paged.data.panel.bindings";
+const DATASET_PANEL_ID = "media.paged.data.panel.dataset";
 
 /** The injected eval clock for `TODAY()` (days since 1970-01-01). The host
  *  supplies a real clock in production; M0 uses the load-time UTC day. */
@@ -42,6 +44,14 @@ export function activate(host: BundleHost): BundleHandle {
     title: "Bindings",
     icon: "panel-canvas",
     component: makeBindingsPanel(host, session),
+    defaultDock: "right",
+  });
+
+  contributePanel(host, {
+    id: DATASET_PANEL_ID,
+    title: "Dataset",
+    icon: "panel-canvas",
+    component: makeDatasetPanel(host, session),
     defaultDock: "right",
   });
 
@@ -69,6 +79,12 @@ export function activate(host: BundleHost): BundleHandle {
     category: "Data",
     handler: () => session.lowerAll(),
   });
+  host.contribute.command({
+    id: "media.paged.data.command.openDataset",
+    title: "Open the dataset catalog & build panel",
+    category: "Data",
+    handler: () => host.shell.openPanel(DATASET_PANEL_ID),
+  });
 
   host.log.info(`activated (apiVersion ${manifest.apiVersion})`);
 
@@ -79,4 +95,4 @@ export function activate(host: BundleHost): BundleHandle {
   };
 }
 
-export { manifest, SOURCES_PANEL_ID, BINDINGS_PANEL_ID };
+export { manifest, SOURCES_PANEL_ID, BINDINGS_PANEL_ID, DATASET_PANEL_ID };

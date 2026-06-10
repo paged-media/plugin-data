@@ -55,12 +55,14 @@ describe("data_plugin_bundle_activate", () => {
     expect(fake.panels.map((p) => p.id)).toEqual([
       "media.paged.data.panel.sources",
       "media.paged.data.panel.bindings",
+      "media.paged.data.panel.dataset",
     ]);
     expect(fake.panels[0].title).toBe("Data sources");
     expect(fake.panels[1].title).toBe("Bindings");
+    expect(fake.panels[2].title).toBe("Dataset");
   });
 
-  it("registers the four commands under their declared ids", () => {
+  it("registers the five commands under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
     expect(fake.commands.map((c) => c.id)).toEqual([
@@ -68,6 +70,7 @@ describe("data_plugin_bundle_activate", () => {
       "media.paged.data.command.defineBinding",
       "media.paged.data.command.resolveBindings",
       "media.paged.data.command.lowerBinding",
+      "media.paged.data.command.openDataset",
     ]);
   });
 
@@ -83,9 +86,11 @@ describe("data_plugin_bundle_activate", () => {
     dataBundle.activate(fake.host);
     fake.commands.find((c) => c.id.endsWith("importData"))?.handler(undefined);
     fake.commands.find((c) => c.id.endsWith("defineBinding"))?.handler(undefined);
+    fake.commands.find((c) => c.id.endsWith("openDataset"))?.handler(undefined);
     expect(fake.openedPanels).toEqual([
       "media.paged.data.panel.sources",
       "media.paged.data.panel.bindings",
+      "media.paged.data.panel.dataset",
     ]);
   });
 

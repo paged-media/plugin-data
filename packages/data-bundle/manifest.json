@@ -26,13 +26,15 @@
   "contributes": {
     "panels": [
       "media.paged.data.panel.sources",
-      "media.paged.data.panel.bindings"
+      "media.paged.data.panel.bindings",
+      "media.paged.data.panel.dataset"
     ],
     "commands": [
       "media.paged.data.command.importData",
       "media.paged.data.command.defineBinding",
       "media.paged.data.command.resolveBindings",
-      "media.paged.data.command.lowerBinding"
+      "media.paged.data.command.lowerBinding",
+      "media.paged.data.command.openDataset"
     ]
   }
 }
