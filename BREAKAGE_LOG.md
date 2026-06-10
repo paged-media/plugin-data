@@ -185,9 +185,23 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   payload small + honest. Resolution: a plugin document-data capability with a
   declared size budget. GAP (verify the cap).
 
-- **D-09 · 2026-06-08 (RFC filed + provider side built 2026-06-10) ·
-  data-provider contract · PARTIALLY RESOLVED (plugin-data side done; SDK door
-  OPEN)** — no core data-provider registry (§7.1). paged.data should publish a
+- **D-09 · 2026-06-08 (SDK door LANDED + provider registers 2026-06-10) ·
+  data-provider contract · MOSTLY RESOLVED** — **the core
+  `host.dataProviders` registry now EXISTS** (plugin-sdk `dbcc9dc`, branch
+  `d03-network-consent`): `capabilities.dataProviders:{publish,consume}` +
+  `DataProvidersSurface` (register / discover / get / onDidChange) + the
+  Arrow-aligned interchange types + a SHARED `createDataProviderRegistry()` the
+  editor injects into every host + the per-plugin capability gate + the honest
+  no-registry posture; DESIGN §4.6c; 6 tests. **paged.data registers against it**
+  (`session.publishProvider → host.dataProviders.register`, commit `ed32771`):
+  lazy `getSnapshot` in our realm (a consumer pull can't induce a fetch we're not
+  consented to), `row_count→rowCount` boundary map, revision-bump on re-publish.
+  **Residual:** (a) the EDITOR creates the registry once + injects it into every
+  `loadBundle` (the wiring that flips `supports("dataProviders@1")` true — like
+  D-03's consent UI); (b) the sheets CONSUMER side (plugin-sheets **S-15**:
+  discover/get/onDidChange + RecordSet→cells). Both RFCs filed
+  (`rfc-data-provider.md`, `rfc-data-provider-consumer.md`). The original gap:
+  no core data-provider registry (§7.1). paged.data should publish a
   resolved dataset (schema + `RecordSet` + refresh/subscribe) to OTHER consumers
   (notably the sheets plugin) THROUGH a neutral core contract — registering a
   provider without knowing its consumers, no inter-plugin contact. **The
@@ -282,7 +296,7 @@ platform should design each once, for all three plugins:
 | D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) | open |
 | D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration | open |
 | D-07 | S-10 | I-07 | wasm-bindgen loader door + the 8 MiB artifact budget | **loader ratified**; budget ceiling open |
-| D-09 | (consumer side) | — | core data-provider contract/registry (§7.1) | **RFC filed + provider side built**; SDK registry door open |
+| D-09 | S-15 (consumer) | — | core data-provider contract/registry (§7.1) | **SDK door LANDED** (`host.dataProviders`) + provider registers; residual = editor injection + sheets consumer |
 | D-10 | S-09 | — | owned-content attribute + edit-interception | partial (`objectType` ships) |
 | D-12 | S-05 | — | frame-chain read + content-box reflow notification | open |
 | D-13 | S-04 | — | document-style read+write (style-management capability) | **metrics landed**; style read open |
