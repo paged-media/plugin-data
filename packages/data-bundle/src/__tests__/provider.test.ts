@@ -29,14 +29,30 @@ vi.mock("../engine", () => ({
 
 import { createSession } from "../session";
 
-function fakeHost(supportsRegistry = false): BundleHost & { logs: string[] } {
+function fakeHost(
+  supportsRegistry = false,
+): BundleHost & { logs: string[]; registered: { id: string; category: string }[] } {
   const logs: string[] = [];
+  const registered: { id: string; category: string }[] = [];
   return {
     manifest: { id: "media.paged.data", name: "d", version: "0.0.1", apiVersion: "^0.2" },
     log: { debug() {}, info: (m: string) => logs.push(m), warn() {}, error() {} },
     supports: (f: string) => supportsRegistry && f === "dataProviders@1",
+    dataProviders: {
+      register: (reg: { id: string; category: string }) => {
+        registered.push(reg);
+        return { update() {}, dispose() {} };
+      },
+      discover: () => [],
+      get: async () => null,
+      onDidChange: () => ({ dispose() {} }),
+    },
     logs,
-  } as unknown as BundleHost & { logs: string[] };
+    registered,
+  } as unknown as BundleHost & {
+    logs: string[];
+    registered: { id: string; category: string }[];
+  };
 }
 
 describe("session.publishProvider (D-09, §7.1)", () => {
@@ -57,10 +73,12 @@ describe("session.publishProvider (D-09, §7.1)", () => {
     expect(host.logs.some((m) => m.includes("D-09"))).toBe(true);
   });
 
-  it("does not log the defer note once host.dataProviders is supported", async () => {
+  it("registers with host.dataProviders (no defer note) once a registry is wired", async () => {
     const host = fakeHost(true);
     const session = createSession(host, 0);
-    await session.publishProvider("q1", "p", "dataset");
+    await session.publishProvider("q1", "pricing-dataset", "dataset");
     expect(host.logs.some((m) => m.includes("D-09"))).toBe(false);
+    expect(host.registered).toHaveLength(1);
+    expect(host.registered[0]).toMatchObject({ id: "pricing-dataset", category: "dataset" });
   });
 });

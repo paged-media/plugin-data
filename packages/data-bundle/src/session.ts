@@ -5,7 +5,12 @@
 // read-only snapshot the panels render. ZERO binding/expression semantics live
 // here (CLAUDE.md hard rule) — it orchestrates the Rust engine.
 
-import type { BundleHost } from "@paged-media/plugin-api";
+import type {
+  BundleHost,
+  DataProviderHandle,
+  DataProviderRegistration,
+  ProviderSchema,
+} from "@paged-media/plugin-api";
 
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
@@ -147,6 +152,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   const sourceNames: string[] = [];
   const queries = new Map<string, QueryDef>();
   const bindingIds: string[] = [];
+  // D-09: live provider registrations, keyed by provider id, so a re-publish
+  // bumps the existing registration's revision instead of double-registering.
+  const providerHandles = new Map<string, DataProviderHandle>();
 
   let engine: DataEngineLike | null = null;
   let duck: DuckDBHandle | null = null;
@@ -319,18 +327,47 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     async publishProvider(queryId, providerId, category) {
       // §7.1/D-09: the engine produces the publication (schema + stabilized rows
-      // + revision etag). Registration is gated on the core data-provider
-      // contract — there is no `host.dataProviders` registry door yet, so we do
-      // NOT fake a register; we return the payload that register(...) will take
-      // the day the contract lands (a wiring change, like D-02/D-03).
+      // + revision etag); we register it with the core data-provider registry so
+      // OTHER consumers (the sheets plugin) can discover + read it — never
+      // knowing paged.data backs it. The snapshot getter re-resolves lazily, in
+      // OUR realm, so a consumer pull cannot induce a fetch we are not consented
+      // to (§7.1 security shape; composes with D-03).
       const e = await ensureEngine();
       const pub = e.publish_provider(queryId, providerId, category) as DataProviderPublication;
-      if (!host.supports("dataProviders@1")) {
+
+      const registry = host.dataProviders;
+      const wired = Boolean(registry) && host.supports("dataProviders@1");
+      if (registry && wired) {
+        const existing = providerHandles.get(providerId);
+        if (existing) {
+          existing.update(pub.revision); // a re-publish only bumps the revision
+        } else {
+          const registration: DataProviderRegistration = {
+            id: pub.id,
+            category: pub.category,
+            schema: pub.schema as ProviderSchema,
+            revision: pub.revision,
+            getSnapshot: () => {
+              // Re-resolve the current snapshot on demand. The engine RecordSet
+              // is snake-cased (`row_count`); map it to the contract's camelCase
+              // `rowCount` at the boundary.
+              const fresh = e.publish_provider(queryId, providerId, category) as DataProviderPublication;
+              const rec = fresh.records as {
+                schema: ProviderSchema;
+                columns: unknown[][];
+                row_count: number;
+              };
+              return { schema: rec.schema, columns: rec.columns, rowCount: rec.row_count };
+            },
+          };
+          providerHandles.set(providerId, registry.register(registration));
+        }
+      } else {
         host.log.info(
           `data provider "${pub.id}" (category "${pub.category}", rev ${pub.revision}) ` +
-            "ready to publish, but no host.dataProviders registry is wired yet (D-09: the " +
-            "core data-provider contract RFC, shared with the sheets consumer side). " +
-            "Registration is a one-line host.dataProviders.register(...) when that door lands.",
+            "ready, but no shared host.dataProviders registry is wired yet (D-09: the door " +
+            "exists; the editor injects createDataProviderRegistry). Registration deferred " +
+            "until then — never faked.",
         );
       }
       return pub;
@@ -352,6 +389,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     dispose() {
+      for (const h of providerHandles.values()) h.dispose();
+      providerHandles.clear();
       void duck?.close();
       engine?.free();
       engine = null;
