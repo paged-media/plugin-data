@@ -79,6 +79,7 @@ fn data_perf_catalog_lower_under_budget() {
                 group_by: vec![],
                 repeat_header: false,
                 continued_marker: false,
+                footer: None,
             },
         },
     });

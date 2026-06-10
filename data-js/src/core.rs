@@ -364,9 +364,12 @@ impl DataSession {
                             .unwrap_or_else(|| format!("row-{i}"));
                         out.push((
                             label,
+                            // A per-record document is one record — no section
+                            // subtotal (a footer over a single record is noise).
                             vec![FlowGroup {
                                 header: g.header.clone(),
                                 records: vec![rec.clone()],
+                                footer: None,
                             }],
                         ));
                     }
@@ -558,6 +561,10 @@ fn to_flow_groups(rf: &ResolvedRecordFlow) -> Vec<FlowGroup> {
                     height_pt: r.height_pt,
                 })
                 .collect(),
+            footer: g.footer.as_ref().map(|f| FlowRecord {
+                cells: f.cells.clone(),
+                height_pt: f.height_pt,
+            }),
         })
         .collect()
 }

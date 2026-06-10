@@ -211,6 +211,24 @@ pub struct FlowOpts {
     /// Add "continued" markers when a group continues across frames.
     #[serde(default)]
     pub continued_marker: bool,
+    /// An optional section FOOTER per group (§9.4 "section headers/footers"): a
+    /// subtotal/count row rendered at each group's end.
+    #[serde(default)]
+    pub footer: Option<GroupFooter>,
+}
+
+/// A per-group section footer (§9.4): a labelled subtotal row at the end of each
+/// group. `label` may contain `{count}`, replaced with the group's record count;
+/// `sum_field`, when set, names a numeric column summed across the group (the
+/// total rendered locale-aware to 2 decimals).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupFooter {
+    /// The footer label, e.g. `"Subtotal"` or `"{count} items"`.
+    pub label: String,
+    /// A numeric column to total across the group, if any.
+    #[serde(default)]
+    pub sum_field: Option<String>,
 }
 
 /// A designed per-record template — the "catalog cell" (§9.4). The engine

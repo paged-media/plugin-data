@@ -54,6 +54,7 @@ fn session() -> DataSession {
                 group_by: vec!["region".into()],
                 repeat_header: true,
                 continued_marker: true,
+                footer: None,
             },
         },
     });

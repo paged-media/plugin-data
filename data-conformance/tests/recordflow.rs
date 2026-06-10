@@ -20,8 +20,8 @@
 use data_bind::{ResolutionEngine, Resolved};
 use data_conformance::{n, record_set, t, today};
 use data_core::{
-    Binding, BindingId, FieldType, FlowOpts, FrameChainRef, Query, QueryId, ResultShape, Template,
-    TemplateField, TemplateRef,
+    Binding, BindingId, FieldType, FlowOpts, FrameChainRef, GroupFooter, Query, QueryId,
+    ResultShape, Template, TemplateField, TemplateRef,
 };
 use data_js::core::DataSession;
 use data_lower::{paginate_flow, FlowBlock, FlowGroup, FlowLayoutOpts, FlowRecord, FrameCapacity};
@@ -63,6 +63,7 @@ fn data_bind_record_flow_grouped() {
                 group_by: vec!["cat".into()],
                 repeat_header: true,
                 continued_marker: true,
+                footer: None,
             },
         },
     );
@@ -121,6 +122,7 @@ fn data_lower_paginate_packs_with_continued_headers() {
     let groups = vec![FlowGroup {
         header: Some("Cat A".into()),
         records: vec![rec("r1", 20.0), rec("r2", 20.0), rec("r3", 20.0)],
+        footer: None,
     }];
     let flow = paginate_flow(&groups, &chain, &FlowLayoutOpts::default());
 
@@ -158,6 +160,7 @@ fn data_recordflow_pagination_converges_on_tall_record() {
     let groups = vec![FlowGroup {
         header: None,
         records: vec![rec("small", 10.0), rec("tall", 80.0), rec("after", 10.0)],
+        footer: None,
     }];
     let flow = paginate_flow(&groups, &chain, &FlowLayoutOpts::default());
 
@@ -206,4 +209,87 @@ fn data_recordflow_e2e_via_session() {
     assert_eq!(flow.placed, 2);
     assert_eq!(flow.total, 2);
     assert!(!flow.overflow);
+}
+
+#[test]
+fn data_bind_record_flow_footer() {
+    // §9.4 section footers: each group gets a subtotal/count row. `{count}` is
+    // substituted; `sum_field` totals a numeric column (locale-aware, 2 dp).
+    let mut e = ResolutionEngine::new(today());
+    e.add_query(Query {
+        id: QueryId::from("q1"),
+        sql: String::new(),
+        params: vec![],
+        shape: ResultShape::RecordStream,
+    });
+    e.add_template(template());
+    e.add_binding(
+        BindingId::from("rf"),
+        Binding::RecordFlow {
+            chain: FrameChainRef::from("chain1"),
+            query: QueryId::from("q1"),
+            template: TemplateRef::from("tmpl"),
+            options: FlowOpts {
+                group_by: vec!["cat".into()],
+                repeat_header: true,
+                continued_marker: true,
+                footer: Some(GroupFooter {
+                    label: "Subtotal ({count})".into(),
+                    sum_field: Some("price".into()),
+                }),
+            },
+        },
+    );
+    // cat A,B,A → stabilized A:{x=1, z=3}, B:{y=2}. Sums: A=4.00, B=2.00.
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(
+            &[
+                ("cat", FieldType::Text),
+                ("name", FieldType::Text),
+                ("price", FieldType::Float),
+            ],
+            vec![
+                vec![t("A"), t("B"), t("A")],
+                vec![t("x"), t("y"), t("z")],
+                vec![n(1.0), n(2.0), n(3.0)],
+            ],
+        ),
+    );
+    match e.resolve(&BindingId::from("rf")).unwrap() {
+        Resolved::RecordFlow(rf) => {
+            let fa = rf.groups[0].footer.as_ref().expect("group A has a footer");
+            assert_eq!(fa.cells[0], "Subtotal (2)");
+            assert_eq!(fa.cells[1], "4.00");
+            let fb = rf.groups[1].footer.as_ref().expect("group B has a footer");
+            assert_eq!(fb.cells[0], "Subtotal (1)");
+            assert_eq!(fb.cells[1], "2.00");
+        }
+        other => panic!("expected a record flow, got {other:?}"),
+    }
+}
+
+#[test]
+fn data_lower_paginate_emits_a_footer_block() {
+    // A group footer paginates as an atomic block at the group's end.
+    let groups = vec![FlowGroup {
+        header: Some("Cat A".into()),
+        records: vec![rec("r1", 20.0), rec("r2", 20.0)],
+        footer: Some(FlowRecord {
+            cells: vec!["Subtotal".into(), "40.00".into()],
+            height_pt: 10.0,
+        }),
+    }];
+    let flow = paginate_flow(&groups, &[frame("f1", 100.0)], &FlowLayoutOpts::default());
+    let footers: Vec<_> = flow
+        .frames
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .filter(|b| matches!(b, FlowBlock::GroupFooter { .. }))
+        .collect();
+    assert_eq!(footers.len(), 1, "exactly one footer block");
+    match footers[0] {
+        FlowBlock::GroupFooter { cells, .. } => assert_eq!(cells[0], "Subtotal"),
+        _ => unreachable!(),
+    }
 }

@@ -300,7 +300,13 @@ async function partC() {
     chain: "chain",
     query: "q1",
     template: "tmpl",
-    options: { groupBy: ["region"], repeatHeader: true, continuedMarker: true },
+    options: {
+      groupBy: ["region"],
+      repeatHeader: true,
+      continuedMarker: true,
+      // §9.4 section footer — proves FlowOpts.footer in + the groupFooter block out.
+      footer: { label: "Subtotal ({count})", sumField: "price" },
+    },
   });
   const chain = Array.from({ length: 6 }, (_, i) => ({
     frame: `f${i}`,
@@ -312,7 +318,13 @@ async function partC() {
   eq(runs.length, 2, "Part C: batch run → one document per region");
   eq(runs[0].label, "east", "Part C: batch run label (stabilized group order)");
   assert.ok(runs[0].flow.frames.length >= 1, "Part C: batch unit paginated (chain heightPt parsed)");
-  console.log("  ✓ batch run: per-group → 2 documents, chain heightPt parsed, through real wasm");
+  // §9.4 footer crossed real wasm: a groupFooter block with the {count} subtotal.
+  const footer = runs[0].flow.frames
+    .flatMap((f) => f.blocks)
+    .find((b) => b.block === "groupFooter");
+  assert.ok(footer, "Part C: a groupFooter block crossed the boundary");
+  assert.ok(String(footer.cells[0]).startsWith("Subtotal ("), `Part C: footer label: ${footer.cells[0]}`);
+  console.log(`  ✓ batch run: per-group → 2 docs, footer "${footer.cells[0]}" through real wasm`);
 }
 
 const expected = await partA();

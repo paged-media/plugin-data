@@ -38,7 +38,7 @@ use data_core::{
     ImgPolicy, Locale, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp,
     ResultShape, ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
-use data_expr::{eval_str, EvalCtx, RecordCtx};
+use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
 use data_query::{content_hash, stabilize, stamp};
 
 pub use diff::{diff, RowDelta};
@@ -137,6 +137,9 @@ pub struct ResolvedFlowGroup {
     /// The section header text (the group-by key), or `None` when ungrouped.
     pub header: Option<String>,
     pub records: Vec<ResolvedFlowRecord>,
+    /// The section footer (a subtotal/count row), or `None` when no footer is
+    /// configured (§9.4 "section headers/footers").
+    pub footer: Option<ResolvedFlowRecord>,
 }
 
 /// One rendered record instance (the "catalog cell" for a record).
@@ -586,7 +589,16 @@ fn resolve_record_flow(
         .collect();
     let instance_height = template.fields.len() as f64 * template.line_height_pt;
 
+    // The footer's sum column (§9.4 section footer), resolved once.
+    let footer_sum_col = options
+        .footer
+        .as_ref()
+        .and_then(|f| f.sum_field.as_ref())
+        .and_then(|n| stable.schema.index_of(n));
+
     let mut groups: Vec<ResolvedFlowGroup> = Vec::new();
+    // Per-group footer accumulators (count, sum), aligned with `groups`.
+    let mut accums: Vec<(usize, f64)> = Vec::new();
     let mut current_key: Option<Vec<Value>> = None;
     for row in 0..stable.row_count {
         let key: Vec<Value> = key_cols
@@ -609,7 +621,9 @@ fn resolve_record_flow(
             groups.push(ResolvedFlowGroup {
                 header,
                 records: Vec::new(),
+                footer: None,
             });
+            accums.push((0, 0.0));
             current_key = Some(key);
         }
 
@@ -632,6 +646,34 @@ fn resolve_record_flow(
                 cells,
                 height_pt: instance_height,
             });
+        // Accumulate the footer aggregates from the RAW value (not the rendered
+        // cell): count always, sum when the column is numeric.
+        let acc = accums.last_mut().expect("an accumulator per group");
+        acc.0 += 1;
+        if let Some(c) = footer_sum_col {
+            if let Some(Value::Number(n)) = stable.value(row, c) {
+                acc.1 += n;
+            }
+        }
+    }
+
+    // Finalize each group's footer (label `{count}` substitution + a locale-aware
+    // sum total).
+    if let Some(footer) = &options.footer {
+        for (group, (count, sum)) in groups.iter_mut().zip(accums) {
+            let label = footer.label.replace("{count}", &count.to_string());
+            let mut cells = vec![label];
+            if footer.sum_field.is_some() {
+                // Format the total through the DSL so it honors the locale.
+                let ctx = SimpleCtx::new().with_field("__sum", Value::Number(sum));
+                let ec = EvalCtx::new(&ctx, today).with_locale(locale);
+                cells.push(eval_str("NUMBER(__sum, 2)", &ec).as_display());
+            }
+            group.footer = Some(ResolvedFlowRecord {
+                cells,
+                height_pt: template.line_height_pt,
+            });
+        }
     }
 
     ResolvedRecordFlow { chain, groups }

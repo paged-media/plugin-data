@@ -49,6 +49,17 @@
   tests:
     rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow"]
 
+- id: data.bind.recordflow-footer
+  title: Record-flow section footers — per-group subtotal/count rows (§9.4)
+  spec: plugin-data data-bind/src/lib.rs + data-lower/src/lib.rs (base-idea §9.4 "section headers/footers")
+  status: implemented
+  provenance:
+    [
+      "GroupFooter spec ({count} substitution + sum_field total, locale-aware); resolve accumulates per group from RAW values; paginate emits an atomic GroupFooter block at the group end",
+    ]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow_footer"]
+
 - id: data.bind.image
   title: Resolve an image binding — classify uri/path/assetId/bytes + missing policy (§9.2)
   spec: plugin-data data-bind/src/lib.rs (base-idea §9.2)

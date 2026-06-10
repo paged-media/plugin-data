@@ -296,12 +296,15 @@ pub struct FrameCapacity {
     pub height_pt: f64,
 }
 
-/// One section to paginate: an optional header + its atomic record instances.
+/// One section to paginate: an optional header, its atomic record instances, and
+/// an optional footer (a subtotal/count row at the group's end, §9.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowGroup {
     #[serde(default)]
     pub header: Option<String>,
     pub records: Vec<FlowRecord>,
+    #[serde(default)]
+    pub footer: Option<FlowRecord>,
 }
 
 /// One rendered record instance (the "catalog cell").
@@ -342,6 +345,8 @@ pub enum FlowBlock {
     GroupHeader { text: String, continued: bool },
     /// A record instance.
     Record { cells: Vec<String>, height_pt: f64 },
+    /// A section footer (a group subtotal/count row, §9.4).
+    GroupFooter { cells: Vec<String>, height_pt: f64 },
 }
 
 /// One frame after pagination.
@@ -441,6 +446,30 @@ pub fn paginate_flow(
             frames[fi].used_pt += h;
             placed += 1;
             group_started = true;
+        }
+
+        // The section footer (subtotal/count), if any — an atomic block at the
+        // group's end. Advance to the next frame when it does not fit; a footer
+        // taller than a whole frame lands over-full (like a tall record). No
+        // header is re-emitted for a footer.
+        if let Some(footer) = &group.footer {
+            let h = footer.height_pt;
+            if fi < frames.len() && frames[fi].used_pt + h > cap(fi) {
+                fi += 1;
+                if fi >= frames.len() {
+                    overflow = true;
+                    break 'groups;
+                }
+            }
+            if fi >= frames.len() {
+                overflow = true;
+                break 'groups;
+            }
+            frames[fi].blocks.push(FlowBlock::GroupFooter {
+                cells: footer.cells.clone(),
+                height_pt: h,
+            });
+            frames[fi].used_pt += h;
         }
     }
 
