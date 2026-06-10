@@ -404,9 +404,21 @@ pub fn paginate_flow(
     let mut fi = 0usize;
     let mut overflow = false;
     let mut placed = 0usize;
+    // The active ancestor headers (level, text), built from header-only parent
+    // sections, so a leaf's continuation frame can repeat its full path.
+    let mut parent_stack: Vec<(usize, String)> = Vec::new();
 
     'groups: for group in groups {
         let mut group_started = false;
+
+        // A header-only parent section becomes the active ancestor at its level
+        // (replacing any deeper context).
+        if group.records.is_empty() {
+            if let Some(text) = &group.header {
+                parent_stack.retain(|(l, _)| *l < group.level);
+                parent_stack.push((group.level, text.clone()));
+            }
+        }
 
         // The group's opening header (advance first if it won't fit here).
         if let Some(text) = &group.header {
@@ -435,15 +447,31 @@ pub fn paginate_flow(
                     overflow = true;
                     break 'groups;
                 }
-                // Re-emit the header on the continuation frame — but only when
-                // it still leaves room for the record (so a non-tall record
-                // always fits its frame; the property gate relies on this).
-                if let (true, Some(text)) = (opts.repeat_header, &group.header) {
-                    if opts.header_height_pt + h <= cap(fi) {
+                // Re-emit the header on the continuation frame — the FULL
+                // hierarchy path (ancestors + this leaf) so the context carries
+                // over — but only when it still leaves room for the record (so a
+                // non-tall record always fits its frame; the property gate relies
+                // on this). Single-level → an empty stack → just the leaf header.
+                if let (true, Some(leaf_text)) = (opts.repeat_header, &group.header) {
+                    let ancestors: Vec<&(usize, String)> = parent_stack
+                        .iter()
+                        .filter(|(l, _)| *l < group.level)
+                        .collect();
+                    let path_height = (ancestors.len() + 1) as f64 * opts.header_height_pt;
+                    if path_height + h <= cap(fi) {
+                        let continued = opts.continued_marker && group_started;
+                        for (level, text) in &ancestors {
+                            frames[fi].blocks.push(FlowBlock::GroupHeader {
+                                text: text.clone(),
+                                level: *level,
+                                continued,
+                            });
+                            frames[fi].used_pt += opts.header_height_pt;
+                        }
                         frames[fi].blocks.push(FlowBlock::GroupHeader {
-                            text: text.clone(),
+                            text: leaf_text.clone(),
                             level: group.level,
-                            continued: opts.continued_marker && group_started,
+                            continued,
                         });
                         frames[fi].used_pt += opts.header_height_pt;
                     }

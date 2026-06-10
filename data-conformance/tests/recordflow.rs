@@ -368,3 +368,49 @@ fn data_bind_record_flow_nested() {
         other => panic!("expected a record flow, got {other:?}"),
     }
 }
+
+#[test]
+fn data_lower_paginate_repeats_parent_path_on_spill() {
+    // Nested: a header-only region parent + a category leaf whose records spill.
+    // The continuation frame repeats the FULL path (region then category).
+    let groups = vec![
+        FlowGroup {
+            header: Some("EMEA".into()),
+            level: 0,
+            records: vec![],
+            footer: None,
+        },
+        FlowGroup {
+            header: Some("Widgets".into()),
+            level: 1,
+            records: vec![rec("r1", 20.0), rec("r2", 20.0)],
+            footer: None,
+        },
+    ];
+    let chain = vec![frame("f1", 60.0), frame("f2", 60.0)];
+    let flow = paginate_flow(&groups, &chain, &FlowLayoutOpts::default());
+
+    assert_eq!(flow.placed, 2);
+    assert!(!flow.overflow);
+    // Frame 1: EMEA(16) + Widgets(16) + r1(20) = 52; r2 spills.
+    // Frame 2 repeats the whole path before r2.
+    let f2 = &flow.frames[1].blocks;
+    match (&f2[0], &f2[1]) {
+        (
+            FlowBlock::GroupHeader {
+                text: t0,
+                level: 0,
+                continued: true,
+            },
+            FlowBlock::GroupHeader {
+                text: t1,
+                level: 1,
+                continued: true,
+            },
+        ) => {
+            assert_eq!(t0.as_str(), "EMEA");
+            assert_eq!(t1.as_str(), "Widgets");
+        }
+        other => panic!("frame 2 should repeat the EMEA/Widgets path, got {other:?}"),
+    }
+}
