@@ -1,0 +1,18 @@
+# paged.data feature registry — the §7 governed-data integration (data.governed.*).
+# paged.data consumes governed dataset OUTPUTS engine-neutrally (§3): the
+# materialized table (read by the file/DB/remote adapter) + an optional
+# column-metadata sidecar. The metadata-enrichment half (the "documented catalog"
+# experience + governance-drift diagnostics) is built + tested here; the full
+# end-to-end path (the bundle reading the table + sidecar from a user-provided
+# file/URL/DB location) is the broader data.governed.extract row (roadmap.yaml).
+
+- id: data.governed.catalog
+  title: Governed catalog — enrich a live schema with a column-metadata sidecar + surface drift (§7)
+  spec: plugin-data data-sources/src/governed.rs (base-idea §7)
+  status: implemented
+  provenance:
+    [
+      "engine-neutral: tables + sidecar are DATA, no third-party engine linked (§3); data is authoritative (actual type wins); drift surfaced (undocumented/stale/type-mismatch), never papered over",
+    ]
+  tests:
+    rust: ["data-conformance/tests/governed.rs::data_governed_catalog"]

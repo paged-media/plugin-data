@@ -30,7 +30,10 @@ use data_lower::{
     FrameCapacity, LowerOpts, LoweredImage, LoweredTable, LoweredVariable, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
-use data_sources::{authorize, build_manifest, GrantedCapabilities, SourceManifest};
+use data_sources::{
+    authorize, build_manifest, enrich_schema, DatasetMetadata, GovernedCatalog,
+    GrantedCapabilities, SourceManifest,
+};
 
 /// A session-level failure (resolution or a malformed boundary value).
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -291,6 +294,25 @@ impl DataSession {
             schema: stable.schema.clone(),
             records: stable,
         })
+    }
+
+    /// Build the **governed catalog** for a query's result (spec §7): enrich the
+    /// live result schema with a column-metadata sidecar (labels, descriptions,
+    /// types, provenance) and surface governance drift (undocumented / stale /
+    /// type-mismatched columns). The author binds to *documented* datasets, not
+    /// raw anonymous tables. The bundle reads the sidecar JSON from the source's
+    /// `metadata_sidecar` location and passes the parsed structure here — like a
+    /// RecordSet, it is data, never engine code (§3). Errors if the query has no
+    /// ingested result yet (the catalog enriches a real schema).
+    pub fn governed_catalog(
+        &self,
+        query_id: &QueryId,
+        metadata: DatasetMetadata,
+    ) -> Result<GovernedCatalog, SessionError> {
+        let records = self.engine.result(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        Ok(enrich_schema(&records.schema, &metadata))
     }
 
     /// Lowering options for a table binding (honors the binding's `header_row`).

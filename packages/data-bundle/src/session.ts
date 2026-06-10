@@ -27,6 +27,34 @@ export interface ColumnSpec {
   expr: string;
 }
 
+/** A governed dataset's column-metadata sidecar (§7): the JSON the bundle reads
+ *  from a `GovernedExtract.metadata_sidecar` location and hands to the engine. */
+export interface DatasetMetadata {
+  dataset?: string;
+  columns: {
+    name: string;
+    label?: string;
+    description?: string;
+    /** Arrow-aligned type label (`"text"`,`"float"`,`"int"`,…) — checked vs the live type. */
+    dataType?: string;
+    provenance?: string;
+  }[];
+}
+
+/** The §7 governed catalog the engine builds — the live schema enriched with the
+ *  sidecar (documented columns) plus governance-drift diagnostics. */
+export interface GovernedCatalog {
+  columns: {
+    name: string;
+    label: string;
+    dataType: string;
+    description?: string;
+    provenance?: string;
+    documented: boolean;
+  }[];
+  diagnostics: unknown[];
+}
+
 /** The §7.1 data-provider publication payload the engine produces — a schema +
  *  the stabilized rows + an opaque content revision (etag) — ready to register
  *  with the core data-provider registry once that contract lands (D-09). */
@@ -74,6 +102,13 @@ export interface DataSourceSession {
     providerId: string,
     category: string,
   ): Promise<DataProviderPublication>;
+  /** §7 governed catalog: enrich a query's resolved schema with a column-metadata
+   *  sidecar (the bundle reads the sidecar JSON from the source's
+   *  `metadata_sidecar` location) → documented columns + governance-drift
+   *  diagnostics. Requires the query's result to be ingested first
+   *  (`refreshData`). The byte-read of the governed table + sidecar from a
+   *  file/URL/DB location is the broader `data.governed.extract` path (M2). */
+  governedCatalog(queryId: string, metadata: DatasetMetadata): Promise<GovernedCatalog>;
   dispose(): void;
 }
 
@@ -275,6 +310,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         );
       }
       return pub;
+    },
+
+    async governedCatalog(queryId, metadata) {
+      // §7: the engine enriches the query's resolved schema with the sidecar.
+      // The sidecar JSON is data (read by the bundle from metadata_sidecar) — no
+      // third-party engine is linked (§3 license boundary).
+      const e = await ensureEngine();
+      return e.governed_catalog(queryId, metadata) as GovernedCatalog;
     },
 
     dispose() {

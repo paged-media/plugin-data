@@ -36,6 +36,12 @@ use thiserror::Error;
 
 use data_core::{DataSource, SourceKind};
 
+mod governed;
+pub use governed::{
+    enrich_schema, CatalogColumn, CatalogDiagnostic, ColumnMetadata, DatasetMetadata,
+    GovernedCatalog,
+};
+
 /// The capability a source requires before it can be created/resolved (§11).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cap", rename_all = "camelCase")]

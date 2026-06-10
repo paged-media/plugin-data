@@ -149,6 +149,20 @@ mod wasm {
             to_js(&result)
         }
 
+        /// Build the §7 governed catalog for a query's result: enrich its schema
+        /// with a column-metadata sidecar (`metadata` is `DatasetMetadata`) and
+        /// return `{ columns, diagnostics }` — documented columns + governance
+        /// drift. The bundle reads the sidecar JSON from the source's
+        /// `metadata_sidecar` location and passes it here.
+        pub fn governed_catalog(&self, query: &str, metadata: JsValue) -> Result<JsValue, JsValue> {
+            let meta = from_js(metadata)?;
+            let catalog = self
+                .session
+                .governed_catalog(&QueryId::from(query), meta)
+                .map_err(map_err)?;
+            to_js(&catalog)
+        }
+
         /// Publish a query's resolved result as a §7.1 data-provider snapshot
         /// (`{ id, category, revision, schema, rowCount, records }`) — the
         /// engine-side payload the bundle hands to the core data-provider

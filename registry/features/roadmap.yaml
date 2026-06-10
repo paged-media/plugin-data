@@ -9,7 +9,10 @@
   spec: plugin-data data-automation (base-idea §10 — RESERVED, M2)
   status: planned
 
+# data.governed.catalog (the metadata-enrichment half) is implemented in its own
+# gated file (registry/features/governed.yaml); this row is the broader
+# end-to-end path (the bundle reading the table + sidecar from a file/URL/DB).
 - id: data.governed.extract
-  title: Governed-extract path (governed tables + metadata sidecar -> catalog, §7)
+  title: Governed-extract path (read governed tables + sidecar from a file/URL/DB location, §7)
   spec: plugin-data data-sources (base-idea §7, D-1/D-5 — M2)
   status: planned
