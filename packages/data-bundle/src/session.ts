@@ -48,6 +48,21 @@ export interface BatchPlan {
   totalRecords: number;
 }
 
+/** A frame's content-box capacity in a chain (the host frame-chain read is D-12;
+ *  caller-supplied until then). `heightPt` crosses as the engine's `height_pt`. */
+export interface FrameCapacity {
+  frame: string;
+  page: string;
+  height_pt: number;
+}
+
+/** One executed §10 batch unit: a label + the paginated flow IR for that
+ *  document (the same IR the live lower produces). */
+export interface BatchRun {
+  label: string;
+  flow: unknown;
+}
+
 /** A governed dataset's column-metadata sidecar (§7): the JSON the bundle reads
  *  from a `GovernedExtract.metadata_sidecar` location and hands to the engine. */
 export interface DatasetMetadata {
@@ -143,6 +158,16 @@ export interface DataSourceSession {
    *  Native server/CI execution is the napi-rs binding (M2); this is the in-app
    *  plan. Requires the query's result to be ingested first (`refreshData`). */
   planBatch(queryId: string, mode: BatchMode): Promise<BatchPlan>;
+  /** §10 batch RUN: execute a plan over a record-flow binding — resolve, partition
+   *  by `mode`, and paginate each unit. Returns one `BatchRun` per output
+   *  document. `chain` is caller-supplied until the host frame-chain read (D-12).
+   *  Native server/CI execution is the napi-rs binding (`data.automation.native`,
+   *  M2); this is the in-app executor. */
+  runRecordFlowBatch(
+    bindingId: string,
+    mode: BatchMode,
+    chain: FrameCapacity[],
+  ): Promise<BatchRun[]>;
   dispose(): void;
 }
 
@@ -404,6 +429,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       // units. Executing the plan reuses the normal resolve/lower/paginate path.
       const e = await ensureEngine();
       return e.plan_batch(queryId, mode) as BatchPlan;
+    },
+
+    async runRecordFlowBatch(bindingId, mode, chain) {
+      // §10: resolve the flow, partition by mode, paginate each unit — the same
+      // data-lower path the live document uses, so headless == interactive.
+      const e = await ensureEngine();
+      return e.run_record_flow_batch(bindingId, mode, chain, undefined) as BatchRun[];
     },
 
     dispose() {

@@ -69,6 +69,19 @@ pub struct RuleResult {
     pub total: usize,
 }
 
+/// One executed batch unit (spec §10): a deterministic label + the paginated
+/// flow for that output document. The batch runner partitions a resolved record
+/// flow by [`BatchMode`] (per-record / per-group / one-catalog) and paginates
+/// each unit through the SAME `data-lower` path the live document uses — so a
+/// headless batch and an interactive lower agree. Nothing renders here; the
+/// `PaginatedFlow` is the IR `data-host-model` turns into mutations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRun {
+    pub label: String,
+    pub flow: PaginatedFlow,
+}
+
 /// A §7.1 data-provider publication: a query's resolved result exposed as a
 /// named, discoverable dataset for **other** consumers (most importantly the
 /// sheets plugin — a sheet sourced from a governed query) through the core SDK
@@ -302,6 +315,72 @@ impl DataSession {
             schema: stable.schema.clone(),
             records: stable,
         })
+    }
+
+    /// **Run** a batch over a record-flow binding (spec §10): resolve the flow,
+    /// partition it by `mode` into per-document units (one document per record /
+    /// per group / one catalog), and paginate each unit over the supplied frame
+    /// chain — the headless-generation executor. Partitioning the **resolved**
+    /// flow (already stabilized by the binding's grouping) keeps each unit's
+    /// record order identical to the live document; the napi-rs native binding
+    /// (server/CI) is a thin wrapper over this (D — `data.automation.native`).
+    pub fn run_record_flow_batch(
+        &mut self,
+        id: &BindingId,
+        mode: BatchMode,
+        chain: Vec<FrameCapacity>,
+        opts: FlowLayoutOpts,
+    ) -> Result<Vec<BatchRun>, SessionError> {
+        let rf = match self.engine.resolve(id)? {
+            Resolved::RecordFlow(rf) => rf,
+            _ => {
+                return Err(SessionError::Decode(
+                    "binding is not a record flow".to_string(),
+                ))
+            }
+        };
+        let groups = to_flow_groups(&rf);
+        let units: Vec<(String, Vec<FlowGroup>)> = match mode {
+            BatchMode::OneCatalog => vec![("catalog".to_string(), groups)],
+            BatchMode::PerGroup { .. } => groups
+                .into_iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let label = g.header.clone().unwrap_or_else(|| format!("group-{i}"));
+                    (label, vec![g])
+                })
+                .collect(),
+            BatchMode::PerRecord { .. } => {
+                let mut out = Vec::new();
+                for g in &groups {
+                    for (i, rec) in g.records.iter().enumerate() {
+                        // Keep the group header so a per-record document retains
+                        // its section context; the label is the record's first
+                        // rendered field (its name), else the row position.
+                        let label = rec
+                            .cells
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| format!("row-{i}"));
+                        out.push((
+                            label,
+                            vec![FlowGroup {
+                                header: g.header.clone(),
+                                records: vec![rec.clone()],
+                            }],
+                        ));
+                    }
+                }
+                out
+            }
+        };
+        Ok(units
+            .into_iter()
+            .map(|(label, gs)| BatchRun {
+                label,
+                flow: paginate_flow(&gs, &chain, &opts),
+            })
+            .collect())
     }
 
     /// Plan a **batch run** over a query's result (spec §10): partition it into

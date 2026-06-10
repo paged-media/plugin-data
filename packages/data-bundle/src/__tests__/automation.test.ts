@@ -20,6 +20,9 @@ vi.mock("../engine", () => ({
         totalRecords: 2,
       };
     },
+    run_record_flow_batch(_binding: string, mode: { mode: string }, chain: unknown[]) {
+      return [{ label: mode.mode, flow: { frames: [], total: chain.length } }];
+    },
     free() {},
   })),
 }));
@@ -41,5 +44,14 @@ describe("session.planBatch (§10)", () => {
     expect(plan.mode).toBe("oneCatalog");
     expect(plan.units).toHaveLength(1);
     expect(plan.totalRecords).toBe(2);
+  });
+
+  it("runRecordFlowBatch executes a plan and returns one BatchRun per unit", async () => {
+    const session = createSession(fakeHost(), 0);
+    const runs = await session.runRecordFlowBatch("rf", { mode: "perGroup", by: ["region"] }, [
+      { frame: "f0", page: "p0", height_pt: 200 },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].label).toBe("perGroup");
   });
 });

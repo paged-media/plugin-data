@@ -14,6 +14,17 @@
   tests:
     rust: ["data-conformance/tests/automation.rs::data_automation_batch"]
 
+- id: data.automation.run
+  title: Batch run — execute a plan per-document (resolve + paginate each unit, §10)
+  spec: plugin-data data-js/src/core.rs (base-idea §10, D-7)
+  status: implemented
+  provenance:
+    [
+      "partitions the RESOLVED flow by mode (per-record/per-group/one-catalog) + paginates each unit through the same data-lower path the live doc uses; nothing renders here (executor, not renderer)",
+    ]
+  tests:
+    rust: ["data-conformance/tests/batch_run.rs::data_automation_run"]
+
 - id: data.automation.native
   title: Native (napi-rs) batch execution — drive a batch run server/CI without a browser (§10)
   spec: plugin-data data-automation (base-idea §10, D-7 — M2)

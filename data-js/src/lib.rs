@@ -155,6 +155,31 @@ mod wasm {
             to_js(&result)
         }
 
+        /// Run a §10 batch over a record-flow binding: resolve, partition by
+        /// `mode`, and paginate each unit. Returns `BatchRun[]`
+        /// (`{ label, flow }`). `chain` is `FrameCapacity[]`, `opts` is
+        /// `FlowLayoutOpts` (or undefined for defaults).
+        pub fn run_record_flow_batch(
+            &mut self,
+            binding: &str,
+            mode: JsValue,
+            chain: JsValue,
+            opts: JsValue,
+        ) -> Result<JsValue, JsValue> {
+            let mode = from_js(mode)?;
+            let chain: Vec<data_lower::FrameCapacity> = from_js(chain)?;
+            let opts: data_lower::FlowLayoutOpts = if opts.is_undefined() || opts.is_null() {
+                data_lower::FlowLayoutOpts::default()
+            } else {
+                from_js(opts)?
+            };
+            let runs = self
+                .session
+                .run_record_flow_batch(&BindingId::from(binding), mode, chain, opts)
+                .map_err(map_err)?;
+            to_js(&runs)
+        }
+
         /// Plan a §10 batch run over a query's result (`mode` is `BatchMode`):
         /// `{ mode, units: [{ label, recordIndices }], totalRecords }` — which
         /// records feed which output document (per-record / per-group / one
