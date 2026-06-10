@@ -56,5 +56,27 @@ export interface LoweredTable {
   bounds: ContentBox;
 }
 
+/** A classified image reference (§9.2) — matches the `data-core` serde shape. */
+export type ImageReference =
+  | { ref: "uri"; uri: string }
+  | { ref: "path"; path: string }
+  | { ref: "assetId"; id: string }
+  | { ref: "bytes"; bytes: number[] }
+  | { ref: "none" };
+
+/** The image resolution status after the missing policy. */
+export type ImageStatus = "present" | "skipped" | "flagged" | "fallback";
+
+/** A lowered image placeholder (§9.2): the reference + fit + status to place
+ *  into the target frame through the core asset mechanism. The host placement op
+ *  is an SDK gap (BREAKAGE D-14) — M0 records the binding, never `plugin-image`. */
+export interface LoweredImage {
+  kind: "image";
+  target: string;
+  reference: ImageReference;
+  fit: "fit" | "fill" | "crop";
+  status: ImageStatus;
+}
+
 /** The tagged union the engine returns from `resolve_lowered`. */
-export type LoweredOutput = LoweredVariable | LoweredTable;
+export type LoweredOutput = LoweredVariable | LoweredTable | LoweredImage;

@@ -26,8 +26,8 @@ use data_core::{
     SyncState, Template, Value,
 };
 use data_lower::{
-    lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
-    FrameCapacity, LowerOpts, LoweredTable, LoweredVariable, PaginatedFlow,
+    lower_image, lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
+    FrameCapacity, LowerOpts, LoweredImage, LoweredTable, LoweredVariable, PaginatedFlow,
 };
 use data_sources::{authorize, build_manifest, GrantedCapabilities, SourceManifest};
 
@@ -47,6 +47,7 @@ pub enum SessionError {
 pub enum LoweredOutput {
     Variable(LoweredVariable),
     Table(LoweredTable),
+    Image(LoweredImage),
 }
 
 /// The document-scoped payload (spec §5.1): the binding *recipe* (sources +
@@ -163,6 +164,12 @@ impl DataSession {
                     t.region, &t.headers, &t.rows, &opts,
                 )))
             }
+            Resolved::Image(img) => Ok(LoweredOutput::Image(lower_image(
+                img.target,
+                img.reference,
+                img.fit,
+                img.status,
+            ))),
             // A record flow needs a frame chain to paginate against — use
             // `lower_record_flow`. (The host frame-chain read is SDK-blocked,
             // D-12; the chain is caller-supplied until it lands.)

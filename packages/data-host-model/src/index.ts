@@ -5,7 +5,10 @@
 export type {
   ContentBox,
   GridRule,
+  ImageReference,
+  ImageStatus,
   LoweredColumn,
+  LoweredImage,
   LoweredOutput,
   LoweredRow,
   LoweredTable,

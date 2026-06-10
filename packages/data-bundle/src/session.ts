@@ -9,7 +9,7 @@ import type { BundleHost } from "@paged-media/plugin-api";
 
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
-import { commitLoweredTable, commitLoweredVariable } from "./lower";
+import { commitLoweredImage, commitLoweredTable, commitLoweredVariable } from "./lower";
 
 /** A read-only snapshot for the panels. */
 export interface SessionState {
@@ -186,6 +186,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           await commitLoweredTable(host, lowered as never);
         } else if (lowered?.kind === "variable") {
           await commitLoweredVariable(host, lowered as never);
+        } else if (lowered?.kind === "image") {
+          await commitLoweredImage(host, lowered as never);
         }
         state.status = "ready";
         state.message = `Resolved + lowered "${id}".`;

@@ -19,9 +19,12 @@
     rust: ["data-conformance/tests/lower.rs::data_lower_table"]
 
 - id: data.lower.image
-  title: Image placeholder (field -> asset via the core asset mechanism, §9.2)
-  spec: plugin-data data-lower (base-idea §9.2, D-02b)
-  status: planned
+  title: Image placeholder (field -> classified reference + placement IR, §9.2)
+  spec: plugin-data data-lower/src/lib.rs (base-idea §9.2)
+  status: implemented
+  provenance: ["lower_image packages the reference + fit + status; placed via the core asset mechanism, never plugin-image (§2.1); host placement op is the D-14 gap"]
+  tests:
+    rust: ["data-conformance/tests/image.rs::data_lower_image"]
 
 - id: data.lower.recordflow
   title: Record flow — template instancing + grouping over a frame chain (§9.4)

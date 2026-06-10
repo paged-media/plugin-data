@@ -34,8 +34,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use data_core::{
-    Binding, BindingId, FlowOpts, FrameChainRef, Placeholder, PlaceholderRef, Query, QueryId,
-    RecordSet, ResolveStamp, ResultShape, Status, SyncState, Template, TemplateRef, Value,
+    Binding, BindingId, FlowOpts, FrameChainRef, ImageReference, ImageStatus, ImgFit, ImgMissing,
+    ImgPolicy, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp, ResultShape,
+    Status, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -69,6 +70,20 @@ pub enum Resolved {
     Table(ResolvedTable),
     /// A resolved record flow: grouped template instances ready to paginate.
     RecordFlow(ResolvedRecordFlow),
+    /// A resolved image placeholder: the classified reference + placement.
+    Image(ResolvedImage),
+}
+
+/// A resolved image binding (spec §9.2). The field value is classified into an
+/// [`ImageReference`]; the missing policy decides the [`ImageStatus`] when
+/// absent. The host places `reference` into the `target` frame through the core
+/// asset mechanism, honoring `fit` — never via `plugin-image` (§2.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedImage {
+    pub target: PlaceholderRef,
+    pub reference: ImageReference,
+    pub fit: ImgFit,
+    pub status: ImageStatus,
 }
 
 /// A resolved variable binding (spec §9.1).
@@ -319,7 +334,19 @@ impl ResolutionEngine {
                     self.today,
                 ))
             }
-            Binding::Image { .. } => return Err(ResolveError::Unsupported("image")),
+            Binding::Image {
+                target,
+                expr,
+                policy,
+                ..
+            } => Resolved::Image(resolve_image(
+                target.clone(),
+                expr,
+                policy,
+                records,
+                &self.params,
+                self.today,
+            )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
 
@@ -519,4 +546,70 @@ fn resolve_record_flow(
     }
 
     ResolvedRecordFlow { chain, groups }
+}
+
+/// Resolve an image binding (spec §9.2): evaluate the expression against the
+/// record, classify the value into an [`ImageReference`], and apply the missing
+/// policy. Text is classified by scheme (`http(s)://` → uri, `asset:` → asset
+/// id, else a path); `Bytes` is inline image data; an absent/empty/error value
+/// applies the policy (skip / flag / fallback).
+fn resolve_image(
+    target: PlaceholderRef,
+    expr: &str,
+    policy: &ImgPolicy,
+    records: &RecordSet,
+    params: &HashMap<String, Value>,
+    today: i32,
+) -> ResolvedImage {
+    let value = if records.row_count == 0 {
+        Value::Null
+    } else {
+        let ctx = RowCtx {
+            records,
+            row: 0,
+            params,
+        };
+        eval_str(expr, &EvalCtx::new(&ctx, today))
+    };
+
+    let reference = match &value {
+        Value::Bytes(b) if !b.is_empty() => Some(ImageReference::Bytes { bytes: b.clone() }),
+        Value::Text(t) if !t.is_empty() => Some(classify_image_text(t)),
+        _ => None, // Null / empty / error → missing
+    };
+
+    match reference {
+        Some(reference) => ResolvedImage {
+            target,
+            reference,
+            fit: policy.fit,
+            status: ImageStatus::Present,
+        },
+        None => {
+            let status = match policy.missing {
+                ImgMissing::Skip => ImageStatus::Skipped,
+                ImgMissing::Flag => ImageStatus::Flagged,
+                ImgMissing::Fallback => ImageStatus::Fallback,
+            };
+            ResolvedImage {
+                target,
+                reference: ImageReference::None,
+                fit: policy.fit,
+                status,
+            }
+        }
+    }
+}
+
+/// Classify an image text reference by scheme.
+fn classify_image_text(t: &str) -> ImageReference {
+    if t.starts_with("http://") || t.starts_with("https://") {
+        ImageReference::Uri { uri: t.to_string() }
+    } else if let Some(id) = t.strip_prefix("asset:") {
+        ImageReference::AssetId { id: id.to_string() }
+    } else {
+        ImageReference::Path {
+            path: t.to_string(),
+        }
+    }
 }

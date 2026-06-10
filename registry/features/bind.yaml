@@ -48,3 +48,11 @@
   provenance: ["one template instance per record; group-by sectioning; measured atomic heights"]
   tests:
     rust: ["data-conformance/tests/recordflow.rs::data_bind_record_flow"]
+
+- id: data.bind.image
+  title: Resolve an image binding — classify uri/path/assetId/bytes + missing policy (§9.2)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.2)
+  status: implemented
+  provenance: ["scheme classification; skip/flag/fallback on absent; never plugin-image (§2.1)"]
+  tests:
+    rust: ["data-conformance/tests/image.rs::data_bind_image"]

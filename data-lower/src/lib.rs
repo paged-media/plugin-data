@@ -34,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use data_core::{FrameRef, PlaceholderRef};
+use data_core::{FrameRef, ImageReference, ImageStatus, ImgFit, PlaceholderRef};
 
 /// Layout knobs for table lowering (point units). Defaults are conservative
 /// monospace-ish estimates until the font-metrics door lands (D-13/S-13).
@@ -75,6 +75,34 @@ pub fn lower_variable(target: PlaceholderRef, display: &str, hidden: bool) -> Lo
         target,
         text: display.to_string(),
         hidden,
+    }
+}
+
+/// A lowered image placeholder (spec §9.2): the classified reference + fit +
+/// status to place into the target frame through the core asset mechanism. The
+/// host placement op is an SDK gap (BREAKAGE D-14); M0 carries the IR + records
+/// the binding, never `plugin-image` (§2.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoweredImage {
+    pub target: PlaceholderRef,
+    pub reference: ImageReference,
+    pub fit: ImgFit,
+    pub status: ImageStatus,
+}
+
+/// Lower a resolved image to the placement IR (§9.2).
+pub fn lower_image(
+    target: PlaceholderRef,
+    reference: ImageReference,
+    fit: ImgFit,
+    status: ImageStatus,
+) -> LoweredImage {
+    LoweredImage {
+        target,
+        reference,
+        fit,
+        status,
     }
 }
 

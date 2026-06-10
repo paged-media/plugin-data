@@ -216,7 +216,21 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   a parallel styling system. Style CREATE mutations exist; there is no style
   ENUMERATION / read door, so "apply the warning character style to negative
   margins" cannot resolve a style by name without the read half. **Joint with
-  plugin-sheet S-04.** M1 rules gate.
+  plugin-sheet S-04.** M1 rules gate. *Updated 2026-06-09:* the platform's
+  `host.text.measureString` door landed (on the plugin-sdk branch) — that
+  supplies the text METRICS the lowerer wants for column auto-fit (the S-13
+  half); the style READ door is still the open half here.
+
+- **D-14 · 2026-06-09 · asset placement · OPEN** — image placeholders (§9.2)
+  place a resolved reference (uri / path / asset id / bytes) into the target
+  frame through the core ASSET mechanism, but there is **no image/asset-placement
+  Mutation** in the wire (no `insertImage`/`placeImage`/`setFrameContent`; the
+  `assets` surface is font-bytes READ only). The engine resolves + classifies the
+  reference and lowers the placement IR (`data.bind.image` / `data.lower.image`
+  green), but `commitLoweredImage` cannot place it — it records the binding +
+  defers honestly (never faked, never via `plugin-image`, §2.1). Resolution: an
+  asset-placement op (`placeImage { frameId, reference, fit }`) — possibly joint
+  with plugin-image's resource-provider row (I-06). T1 gate.
 
 ---
 

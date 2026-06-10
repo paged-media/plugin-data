@@ -13,6 +13,8 @@ import {
   tableCellInserts,
   tableInsertMutation,
   tableInsertSpec,
+  type ImageReference,
+  type LoweredImage,
   type LoweredTable,
   type LoweredVariable,
 } from "@paged-media/data-host-model";
@@ -135,5 +137,42 @@ export async function commitLoweredVariable(
   host.log.info(
     `variable "${variable.target}" resolved to "${variable.text}"; in-text ` +
       "placement awaits the tagged-placeholder content model (D-01)",
+  );
+}
+
+/** A short human description of a resolved image reference. */
+function describeRef(r: ImageReference): string {
+  switch (r.ref) {
+    case "uri":
+      return r.uri;
+    case "path":
+      return r.path;
+    case "assetId":
+      return `asset:${r.id}`;
+    case "bytes":
+      return `<${r.bytes.length} bytes>`;
+    case "none":
+      return "(none)";
+  }
+}
+
+/** "Commit" a lowered image (§9.2). The engine resolved + classified the
+ *  reference and applied the missing policy; the actual placement into the
+ *  target frame goes through the core asset mechanism — but there is no
+ *  asset-placement Mutation yet (BREAKAGE D-14), so M0 records the binding
+ *  honestly and defers placement (never faked, never routed through
+ *  plugin-image, §2.1). */
+export async function commitLoweredImage(
+  host: BundleHost,
+  image: LoweredImage,
+): Promise<void> {
+  if (image.status !== "present") {
+    host.log.info(`image "${image.target}": ${image.status} (missing policy applied)`);
+    return;
+  }
+  host.log.info(
+    `image "${image.target}" resolved to ${describeRef(image.reference)} ` +
+      `(fit: ${image.fit}); placement into the target frame awaits the ` +
+      "asset-placement op (D-14)",
   );
 }

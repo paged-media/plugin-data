@@ -156,6 +156,34 @@ pub enum ImgMissing {
     Fallback,
 }
 
+/// A resolved image reference (§9.2). A field value classifies into one of
+/// these: a remote `Uri`, a local `Path`, a document `AssetId`, inline `Bytes`,
+/// or `None` (missing/absent). The image is placed through the core asset
+/// mechanism — never `plugin-image` (§2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "ref", rename_all = "camelCase")]
+pub enum ImageReference {
+    Uri { uri: String },
+    Path { path: String },
+    AssetId { id: String },
+    Bytes { bytes: Vec<u8> },
+    None,
+}
+
+/// The outcome of resolving an image binding after the missing policy (§9.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImageStatus {
+    /// A reference resolved.
+    Present,
+    /// Absent + the `Skip` policy — nothing placed.
+    Skipped,
+    /// Absent + the `Flag` policy — flagged for review.
+    Flagged,
+    /// Absent + the `Fallback` policy — a fallback asset is expected.
+    Fallback,
+}
+
 /// Dynamic-table options (§9.3). M0 honors `header_row`; grouping is M1.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TableOpts {
