@@ -1,0 +1,21 @@
+# paged.data feature registry — performance gates (spec §12.5, the Rust-engine
+# half). The DuckDB-WASM query gate (1M-row CSV -> grouped RecordSet < 1.5s) runs
+# in the worker (TS), not here. These gate the engine path the spec budgets; the
+# budgets pass with large margin (pure-Rust paginate/diff is ms-scale) so they
+# catch O(n²) regressions rather than micro-benchmarking.
+
+- id: data.perf.catalog
+  title: Resolve + lower a 200-page record-flow catalog under the §12.5 5s budget
+  spec: plugin-data data-lower/paginate + data-bind (base-idea §12.5)
+  status: implemented
+  provenance: ["7000 records -> ~200 frames; measured ~40ms locally, 5s budget"]
+  tests:
+    rust: ["data-conformance/tests/perf.rs::data_perf_catalog"]
+
+- id: data.perf.incremental
+  title: Incremental 100-record-delta diff under the §12.5 300ms budget
+  spec: plugin-data data-bind/src/diff.rs (base-idea §12.5)
+  status: implemented
+  provenance: ["5000-record set, 100-row delta; measured ~18ms locally, 300ms budget"]
+  tests:
+    rust: ["data-conformance/tests/perf.rs::data_perf_incremental"]
