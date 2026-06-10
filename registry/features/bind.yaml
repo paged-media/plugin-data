@@ -56,3 +56,11 @@
   provenance: ["scheme classification; skip/flag/fallback on absent; never plugin-image (§2.1)"]
   tests:
     rust: ["data-conformance/tests/image.rs::data_bind_image"]
+
+- id: data.bind.rule
+  title: Evaluate a data-driven formatting rule — which records fire which document style (§9.5)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9.5)
+  status: implemented
+  provenance: ["per-record `when` evaluation (stabilized order) -> fired indices + StyleAction; styling is always a document-style ref, never a literal; host application gated on D-13"]
+  tests:
+    rust: ["data-conformance/tests/rule.rs::data_bind_rule"]

@@ -139,6 +139,16 @@ mod wasm {
             to_js(&flow)
         }
 
+        /// Evaluate a data-driven formatting rule (§9.5) over a query's records:
+        /// `{ scope, fires, apply, total }`.
+        pub fn evaluate_rule(&self, rule: &str, query: &str) -> Result<JsValue, JsValue> {
+            let result = self
+                .session
+                .evaluate_rule(&BindingId::from(rule), &QueryId::from(query))
+                .map_err(map_err)?;
+            to_js(&result)
+        }
+
         /// The sync state of a binding.
         pub fn sync_state(&self, binding: &str) -> JsValue {
             to_js(&self.session.sync_state(&BindingId::from(binding))).unwrap_or(JsValue::NULL)

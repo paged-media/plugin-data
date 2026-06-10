@@ -20,10 +20,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow};
+use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow, RuleEvaluation};
 use data_core::{
     Binding, BindingDef, BindingId, DataSource, Placeholder, Query, QueryId, RecordSet, Status,
-    SyncState, Template, Value,
+    StyleAction, SyncState, Template, Value,
 };
 use data_lower::{
     lower_image, lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
@@ -48,6 +48,20 @@ pub enum LoweredOutput {
     Variable(LoweredVariable),
     Table(LoweredTable),
     Image(LoweredImage),
+}
+
+/// The evaluation of a data-driven formatting rule (spec §9.5) crossed to the
+/// host: which records fired + the document-style action to apply. The host
+/// applies `apply` to the fired content through document styles (the per-cell
+/// application is gated on D-13; the evaluation is the data-driven decision).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleResult {
+    pub scope: String,
+    /// Stabilized record indices where the rule fired.
+    pub fires: Vec<usize>,
+    pub apply: StyleAction,
+    pub total: usize,
 }
 
 /// The document-scoped payload (spec §5.1): the binding *recipe* (sources +
@@ -193,6 +207,29 @@ impl DataSession {
                 "binding is not a record flow".to_string(),
             )),
         }
+    }
+
+    /// Evaluate a data-driven formatting rule (spec §9.5) over a query's records
+    /// — which records fired the `when` condition + the document-style action to
+    /// apply. A rule carries no query of its own (it styles content within a
+    /// scope), so the caller names the records to evaluate against.
+    pub fn evaluate_rule(
+        &self,
+        rule_id: &BindingId,
+        query_id: &QueryId,
+    ) -> Result<RuleResult, SessionError> {
+        let RuleEvaluation {
+            scope,
+            fires,
+            apply,
+            total,
+        } = self.engine.evaluate_rule(rule_id, query_id)?;
+        Ok(RuleResult {
+            scope: scope.to_string(),
+            fires,
+            apply,
+            total,
+        })
     }
 
     /// Lowering options for a table binding (honors the binding's `header_row`).

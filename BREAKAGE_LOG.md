@@ -233,7 +233,12 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   plugin-sheet S-04.** M1 rules gate. *Updated 2026-06-09:* the platform's
   `host.text.measureString` door landed (on the plugin-sdk branch) — that
   supplies the text METRICS the lowerer wants for column auto-fit (the S-13
-  half); the style READ door is still the open half here.
+  half); the style READ door is still the open half here. *Updated 2026-06-10:*
+  the rule **evaluation** engine landed (`data.bind.rule` — `evaluate_rule`
+  decides which records fire which `StyleAction`, the data-driven half); what
+  this gap still blocks is the **application** of a fired style — resolving a
+  style by name (the READ door) and `applyStyle` with a cell qualifier for
+  per-row table rules (`applyStyle` has no `cell:` today).
 
 - **D-14 · 2026-06-09 · asset placement · OPEN** — image placeholders (§9.2)
   place a resolved reference (uri / path / asset id / bytes) into the target

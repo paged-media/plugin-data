@@ -36,7 +36,7 @@ use thiserror::Error;
 use data_core::{
     Binding, BindingId, FlowOpts, FrameChainRef, ImageReference, ImageStatus, ImgFit, ImgMissing,
     ImgPolicy, Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp, ResultShape,
-    Status, SyncState, Template, TemplateRef, Value,
+    ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -84,6 +84,22 @@ pub struct ResolvedImage {
     pub reference: ImageReference,
     pub fit: ImgFit,
     pub status: ImageStatus,
+}
+
+/// The evaluation of a data-driven formatting rule (spec §9.5): which records
+/// (by stabilized index) the `when` condition fired on, and the document-style
+/// action to apply to them. The host applies `apply` to the fired content
+/// through document styles — never a parallel styling system (§9.5). The
+/// per-cell application is gated on the style-read door + cell-level `applyStyle`
+/// (BREAKAGE D-13); the evaluation here is the data-driven decision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleEvaluation {
+    pub scope: ScopeRef,
+    /// Stabilized record indices where the rule fired.
+    pub fires: Vec<usize>,
+    pub apply: StyleAction,
+    /// Total records evaluated (so a consumer knows the fire rate).
+    pub total: usize,
 }
 
 /// A resolved variable binding (spec §9.1).
@@ -361,6 +377,51 @@ impl ResolutionEngine {
         st.status = Status::Linked;
         st.last_resolved = Some(stamp);
         Ok(resolved)
+    }
+
+    /// Evaluate a data-driven formatting rule (spec §9.5) over a query's records.
+    /// A rule is not a standalone resolvable (it carries no query of its own — it
+    /// styles content within a scope), so the caller names the records the `when`
+    /// condition evaluates against. Returns the stabilized indices that fired +
+    /// the [`StyleAction`] to apply. Bit-stable (sheet rules; §12.4).
+    pub fn evaluate_rule(
+        &self,
+        rule_id: &BindingId,
+        query_id: &QueryId,
+    ) -> Result<RuleEvaluation, ResolveError> {
+        let binding = self
+            .bindings
+            .get(rule_id)
+            .ok_or_else(|| ResolveError::UnknownBinding(rule_id.clone()))?;
+        let (scope, when, apply) = match binding {
+            Binding::Rule { scope, when, apply } => (scope.clone(), when.clone(), apply.clone()),
+            _ => return Err(ResolveError::Unsupported("not a rule")),
+        };
+        let records = self
+            .results
+            .get(query_id)
+            .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
+        let stable = stabilize(records, &[]);
+        let mut fires = Vec::new();
+        for row in 0..stable.row_count {
+            let ctx = RowCtx {
+                records: &stable,
+                row,
+                params: &self.params,
+            };
+            if eval_str(&when, &EvalCtx::new(&ctx, self.today))
+                .as_bool()
+                .unwrap_or(false)
+            {
+                fires.push(row);
+            }
+        }
+        Ok(RuleEvaluation {
+            scope,
+            fires,
+            apply,
+            total: stable.row_count,
+        })
     }
 
     /// The resolve stamp for a query's current result + params (§8).
