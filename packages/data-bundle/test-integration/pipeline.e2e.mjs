@@ -286,6 +286,33 @@ async function partC() {
   eq(v.kind, "variable", "Part C: lowered variable kind");
   eq(v.text, "19,99 €", "Part C: de locale via real wasm (CURRENCY → '19,99 €')");
   console.log("  ✓ locale: set_locale('de') → CURRENCY formats '19,99 €' through real wasm");
+
+  // §10 — run a record-flow batch through real wasm (proves the chain shape:
+  // FrameCapacity crosses camelCase as `heightPt`, and the BatchRun output).
+  engine.define_template({
+    id: "tmpl",
+    fields: [{ label: "", expr: "sku" }],
+    lineHeightPt: 10,
+  });
+  engine.define_binding({
+    id: "rf",
+    kind: "recordFlow",
+    chain: "chain",
+    query: "q1",
+    template: "tmpl",
+    options: { groupBy: ["region"], repeatHeader: true, continuedMarker: true },
+  });
+  const chain = Array.from({ length: 6 }, (_, i) => ({
+    frame: `f${i}`,
+    page: `p${i}`,
+    heightPt: 200,
+  }));
+  const runs = engine.run_record_flow_batch("rf", { mode: "perGroup", by: ["region"] }, chain, undefined);
+  // 2 regions (east, west) → 2 documents; each paginates (chain `heightPt` parsed).
+  eq(runs.length, 2, "Part C: batch run → one document per region");
+  eq(runs[0].label, "east", "Part C: batch run label (stabilized group order)");
+  assert.ok(runs[0].flow.frames.length >= 1, "Part C: batch unit paginated (chain heightPt parsed)");
+  console.log("  ✓ batch run: per-group → 2 documents, chain heightPt parsed, through real wasm");
 }
 
 const expected = await partA();

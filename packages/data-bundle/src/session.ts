@@ -49,11 +49,12 @@ export interface BatchPlan {
 }
 
 /** A frame's content-box capacity in a chain (the host frame-chain read is D-12;
- *  caller-supplied until then). `heightPt` crosses as the engine's `height_pt`. */
+ *  caller-supplied until then). The engine deserializes camelCase — `heightPt`,
+ *  not `height_pt` (verified by the e2e harness). */
 export interface FrameCapacity {
   frame: string;
   page: string;
-  height_pt: number;
+  heightPt: number;
 }
 
 /** One executed §10 batch unit: a label + the paginated flow IR for that

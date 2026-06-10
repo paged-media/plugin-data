@@ -49,7 +49,7 @@ describe("session.planBatch (§10)", () => {
   it("runRecordFlowBatch executes a plan and returns one BatchRun per unit", async () => {
     const session = createSession(fakeHost(), 0);
     const runs = await session.runRecordFlowBatch("rf", { mode: "perGroup", by: ["region"] }, [
-      { frame: "f0", page: "p0", height_pt: 200 },
+      { frame: "f0", page: "p0", heightPt: 200 },
     ]);
     expect(runs).toHaveLength(1);
     expect(runs[0].label).toBe("perGroup");

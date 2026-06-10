@@ -25,9 +25,20 @@
   tests:
     rust: ["data-conformance/tests/batch_run.rs::data_automation_run"]
 
+- id: data.automation.cli
+  title: Headless batch CLI — drive a batch run server/CI from a JSON job (§10)
+  spec: plugin-data data-cli (base-idea §10, D-7)
+  status: implemented
+  provenance:
+    [
+      "plain-Rust binary (paged-data-batch) + run_job lib over the SAME engine the editor uses; reads recipe + pre-materialized results + a frame chain, emits the per-document lowered IR; query engine NOT embedded (§3); napi-rs node binding is a future packaging option over run_job",
+    ]
+  tests:
+    rust: ["data-cli/src/lib.rs::data_automation_cli"]
+
 - id: data.automation.native
-  title: Native (napi-rs) batch execution — drive a batch run server/CI without a browser (§10)
-  spec: plugin-data data-automation (base-idea §10, D-7 — M2)
+  title: napi-rs node binding — call the batch runner as a native Node library (§10)
+  spec: plugin-data (base-idea §10, D-7 — a future packaging option over data-cli's run_job)
   status: planned
 
 - id: data.automation.script

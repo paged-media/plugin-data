@@ -101,6 +101,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-cli"
+version = "0.0.0"
+dependencies = [
+ "data-automation",
+ "data-core",
+ "data-js",
+ "data-lower",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "data-conformance"
 version = "0.0.0"
 dependencies = [

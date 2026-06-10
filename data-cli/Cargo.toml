@@ -1,0 +1,27 @@
+[package]
+name = "data-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data headless batch CLI (spec §10): a plain-Rust binary that drives the batch runner for server/CI generation — reads a job (recipe + pre-materialized results + a frame chain + a batch mode), runs it through the SAME engine the editor uses, and emits the per-document lowered IR as JSON. The query engine is NOT embedded (the user's platform materializes results); the napi-rs node binding is a future packaging option over the same logic."
+
+[lib]
+name = "data_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "paged-data-batch"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+data-lower = { path = "../data-lower" }
+data-automation = { path = "../data-automation" }
+data-js = { path = "../data-js" }
+serde.workspace = true
+serde_json.workspace = true
