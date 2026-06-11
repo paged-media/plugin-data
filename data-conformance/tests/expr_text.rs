@@ -80,3 +80,22 @@ fn data_expr_text_find() {
     // From a start position.
     assert_eq!(eval0(r#"FIND("o", "hello world", 6)"#), n(8.0));
 }
+
+#[test]
+fn data_expr_text_textjoin() {
+    assert_eq!(
+        eval0(r#"TEXTJOIN(" - ", "Acme", "X1", "Red")"#),
+        t("Acme - X1 - Red")
+    );
+    // Empty parts are skipped (no doubled delimiter).
+    assert_eq!(
+        eval0(r#"TEXTJOIN(" - ", "Acme", "", "Red")"#),
+        t("Acme - Red")
+    );
+}
+
+#[test]
+fn data_expr_text_rept() {
+    assert_eq!(eval0(r#"REPT("ab", 3)"#), t("ababab"));
+    assert_eq!(eval0(r#"REPT("x", 0)"#), t(""));
+}

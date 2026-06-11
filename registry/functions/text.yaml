@@ -110,3 +110,23 @@
   provenance: ["1-based char position; #VALUE if not found; own code"]
   tests:
     rust: ["data-conformance/tests/expr_text.rs::data_expr_text_find"]
+
+- id: data.expr.text.textjoin
+  name: TEXTJOIN
+  family: text
+  arity: { min: 2, max: null }
+  rust: text::textjoin
+  status: implemented
+  provenance: ["join values with a delimiter, skipping null/empty; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_text.rs::data_expr_text_textjoin"]
+
+- id: data.expr.text.rept
+  name: REPT
+  family: text
+  arity: { min: 2, max: 2 }
+  rust: text::rept
+  status: implemented
+  provenance: ["repeat text N times; #VALUE on negative; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_text.rs::data_expr_text_rept"]

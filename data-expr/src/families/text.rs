@@ -200,3 +200,41 @@ pub fn find(args: &[Value], _ctx: &EvalCtx) -> Value {
     }
     Value::Error(ValueError::Value)
 }
+
+/// `TEXTJOIN(delimiter, ...values)` — join the values with `delimiter`, skipping
+/// `Null`/empty (the composite-field idiom, e.g. `"Brand - Model - Color"`). An
+/// error value propagates.
+pub fn textjoin(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    for v in &args[1..] {
+        if v.is_error() {
+            return v.clone();
+        }
+    }
+    let delim = args[0].as_display();
+    let parts: Vec<String> = args[1..]
+        .iter()
+        .filter(|v| !v.is_null())
+        .map(|v| v.as_display())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Value::text(parts.join(&delim))
+}
+
+/// `REPT(text, count)` — `text` repeated `count` times; `#VALUE` for a negative
+/// count.
+pub fn rept(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    let count = match args[1].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    if count < 0.0 {
+        return Value::Error(ValueError::Value);
+    }
+    Value::text(args[0].as_display().repeat(count as usize))
+}
