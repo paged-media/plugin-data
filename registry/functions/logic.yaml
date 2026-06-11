@@ -80,3 +80,13 @@
   provenance: ["multi-branch by display-match; odd trailing arg = default; own code"]
   tests:
     rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_switch"]
+
+- id: data.expr.logic.iferror
+  name: IFERROR
+  family: logic
+  arity: { min: 2, max: 2 }
+  rust: logic::iferror
+  status: implemented
+  provenance: ["fallback on error; graceful degradation; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_logic.rs::data_expr_logic_iferror"]

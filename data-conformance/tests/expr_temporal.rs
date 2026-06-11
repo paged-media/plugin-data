@@ -39,3 +39,11 @@ fn data_expr_temporal_today() {
     assert_eq!(eval0("TODAY()"), Value::Date(today()));
     assert_eq!(eval0("YEAR(TODAY())"), n(2026.0));
 }
+
+#[test]
+fn data_expr_temporal_weekday() {
+    // 1970-01-01 was a Thursday (Excel default: Sun=1 → Thu=5).
+    assert_eq!(eval0(r#"WEEKDAY("1970-01-01")"#), n(5.0));
+    // 1970-01-04 was a Sunday → 1.
+    assert_eq!(eval0(r#"WEEKDAY("1970-01-04")"#), n(1.0));
+}

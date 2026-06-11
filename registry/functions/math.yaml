@@ -90,3 +90,23 @@
   provenance: ["base^exp; #VALUE on non-finite; own code"]
   tests:
     rust: ["data-conformance/tests/expr_math.rs::data_expr_math_power"]
+
+- id: data.expr.math.trunc
+  name: TRUNC
+  family: math
+  arity: { min: 1, max: 2 }
+  rust: math::trunc
+  status: implemented
+  provenance: ["truncate toward zero to digits; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_trunc"]
+
+- id: data.expr.math.sign
+  name: SIGN
+  family: math
+  arity: { min: 1, max: 1 }
+  rust: math::sign
+  status: implemented
+  provenance: ["-1/0/1; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_math.rs::data_expr_math_sign"]

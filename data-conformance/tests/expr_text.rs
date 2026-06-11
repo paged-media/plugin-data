@@ -73,3 +73,10 @@ fn data_expr_text_proper() {
     assert_eq!(eval0(r#"PROPER("hello WORLD")"#), t("Hello World"));
     assert_eq!(eval0(r#"PROPER("o'brien-smith")"#), t("O'Brien-Smith"));
 }
+
+#[test]
+fn data_expr_text_find() {
+    assert_eq!(eval0(r#"FIND("ll", "hello")"#), n(3.0));
+    // From a start position.
+    assert_eq!(eval0(r#"FIND("o", "hello world", 6)"#), n(8.0));
+}

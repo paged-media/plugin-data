@@ -67,3 +67,10 @@ fn data_expr_logic_switch() {
     // No match → the odd trailing default.
     assert_eq!(eval0(r#"SWITCH("q", "a", "x", "z")"#), t("z"));
 }
+
+#[test]
+fn data_expr_logic_iferror() {
+    // A division error → the fallback; a clean value passes through.
+    assert_eq!(eval0(r#"IFERROR(MOD(1, 0), "n/a")"#), t("n/a"));
+    assert_eq!(eval0(r#"IFERROR("ok", "n/a")"#), t("ok"));
+}

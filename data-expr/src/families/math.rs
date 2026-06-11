@@ -143,3 +143,34 @@ pub fn power(args: &[Value], _ctx: &EvalCtx) -> Value {
         Value::Error(ValueError::Value)
     }
 }
+
+/// `TRUNC(x, [digits=0])` — truncate toward zero to `digits` decimals.
+pub fn trunc(args: &[Value], _ctx: &EvalCtx) -> Value {
+    let x = match args[0].as_number() {
+        Ok(n) => n,
+        Err(e) => return Value::Error(e),
+    };
+    let digits = match args.get(1) {
+        Some(v) => match v.as_number() {
+            Ok(n) => n as i32,
+            Err(e) => return Value::Error(e),
+        },
+        None => 0,
+    };
+    let factor = 10f64.powi(digits);
+    Value::Number((x * factor).trunc() / factor)
+}
+
+/// `SIGN(x)` — `-1`, `0`, or `1`.
+pub fn sign(args: &[Value], _ctx: &EvalCtx) -> Value {
+    match args[0].as_number() {
+        Ok(n) => Value::Number(if n > 0.0 {
+            1.0
+        } else if n < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }),
+        Err(e) => Value::Error(e),
+    }
+}

@@ -159,3 +159,44 @@ pub fn proper(args: &[Value], _ctx: &EvalCtx) -> Value {
     }
     Value::text(out)
 }
+
+/// `FIND(needle, haystack, [start=1])` — the 1-based character position of
+/// `needle` in `haystack` at or after `start`; `#VALUE` when not found or
+/// `start < 1`. An empty `needle` returns `start`.
+pub fn find(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        return args[0].clone();
+    }
+    if args[1].is_error() {
+        return args[1].clone();
+    }
+    let needle: Vec<char> = args[0].as_display().chars().collect();
+    let hay: Vec<char> = args[1].as_display().chars().collect();
+    let start = match args.get(2) {
+        Some(v) => match v.as_number() {
+            Ok(n) => n as i64,
+            Err(e) => return Value::Error(e),
+        },
+        None => 1,
+    };
+    if start < 1 {
+        return Value::Error(ValueError::Value);
+    }
+    let begin = (start - 1) as usize;
+    if needle.is_empty() {
+        return if begin <= hay.len() {
+            Value::Number(start as f64)
+        } else {
+            Value::Error(ValueError::Value)
+        };
+    }
+    if begin >= hay.len() || needle.len() > hay.len() - begin {
+        return Value::Error(ValueError::Value);
+    }
+    for i in begin..=(hay.len() - needle.len()) {
+        if hay[i..i + needle.len()] == needle[..] {
+            return Value::Number((i + 1) as f64);
+        }
+    }
+    Value::Error(ValueError::Value)
+}

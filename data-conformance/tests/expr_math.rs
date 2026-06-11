@@ -67,3 +67,16 @@ fn data_expr_math_power() {
     assert_eq!(eval0("POWER(2, 10)"), n(1024.0));
     assert_eq!(eval0("POWER(9, 0.5)"), n(3.0));
 }
+
+#[test]
+fn data_expr_math_trunc() {
+    assert_eq!(eval0("TRUNC(2.789, 1)"), n(2.7));
+    // Toward zero (not floor): TRUNC(-2.9) = -2.
+    assert_eq!(eval0("TRUNC(-2.9)"), n(-2.0));
+}
+
+#[test]
+fn data_expr_math_sign() {
+    assert_eq!(eval0("SIGN(-5)"), n(-1.0));
+    assert_eq!(eval0("SIGN(0)"), n(0.0));
+}

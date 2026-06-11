@@ -111,3 +111,13 @@ pub fn switch(args: &[Value], _ctx: &EvalCtx) -> Value {
     }
     Value::Null
 }
+
+/// `IFERROR(value, fallback)` — `fallback` when `value` is an error, else
+/// `value`. The graceful-degradation primitive for bad/missing data.
+pub fn iferror(args: &[Value], _ctx: &EvalCtx) -> Value {
+    if args[0].is_error() {
+        args[1].clone()
+    } else {
+        args[0].clone()
+    }
+}

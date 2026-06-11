@@ -100,3 +100,13 @@
   provenance: ["title-case; own code"]
   tests:
     rust: ["data-conformance/tests/expr_text.rs::data_expr_text_proper"]
+
+- id: data.expr.text.find
+  name: FIND
+  family: text
+  arity: { min: 2, max: 3 }
+  rust: text::find
+  status: implemented
+  provenance: ["1-based char position; #VALUE if not found; own code"]
+  tests:
+    rust: ["data-conformance/tests/expr_text.rs::data_expr_text_find"]
