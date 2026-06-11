@@ -21,7 +21,12 @@
         "purpose": "compute",
         "maxBytes": 8388608
       }
-    ]
+    ],
+    "dataProviders": {
+      "publish": [
+        "dataset"
+      ]
+    }
   },
   "contributes": {
     "panels": [
