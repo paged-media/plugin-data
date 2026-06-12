@@ -17,7 +17,7 @@ free. The **query/ingest engine is the MIT-licensed DuckDB-WASM artifact**
 (vendored, not compiled in-tree), kept swappable behind the Arrow seam.
 
 Spec (the authority): `thoughts/docs/paged/plugin-data/base-idea.md` (v0.4).
-SDK gap punch list: `BREAKAGE_LOG.md` (D-NN; the §2.2 resolution).
+SDK gap tracker: the cross-repo RFI `thoughts/docs/paged/plugin-platform/rfi-core-sdk-gaps.md` (D-NN ids in §6; per-plugin BREAKAGE_LOG retired 2026-06-12).
 
 Rust crates (Cargo workspace, top level per spec §4): `data-core` (frozen
 types + Expr AST), `data-expr` (the binding DSL), `data-sources`, `data-query`,
@@ -59,7 +59,7 @@ repo (separate PR there). The local `registry/` here is the BUILD-CONSUMED half
   never a sibling plugin. The §7.1 data-provider role is a CORE SDK contract —
   `paged.data` registers a provider and never knows its consumers. TS guard:
   `scripts/check-contract-imports.mjs`; Rust guard: `deny.toml` [sources] + the
-  cargo-tree CI guards. SDK gaps become `BREAKAGE_LOG.md` entries /
+  cargo-tree CI guards. SDK gaps become RFI §6 entries /
   plugin-platform RFCs — NEVER core modifications from this project.
 - **LICENSE-BOUNDARY GATE (§3 — unique to this plugin, decisive).** NO
   source-available / ELv2 / SSPL / proprietary data engine is ever embedded,
@@ -104,7 +104,7 @@ repo (separate PR there). The local `registry/` here is the BUILD-CONSUMED half
 - **Reserved seams stay honest.** Remote/DB sources, the network-consent UI,
   record flow / pagination, data-driven rules, governed extract, batch
   generation, the data-provider contract, OPFS persistence, and worker-hosted
-  DuckDB are NOT implemented at M0 — the manifest + UI + BREAKAGE_LOG say so
+  DuckDB are NOT implemented at M0 — the manifest + UI + the RFI say so
   explicitly. Never fake them.
 - **CLEAN-ROOM (§3).** `references/` (any reference engine, IF ever mounted) is
   read-only, analyst-only, gitignored, excluded from all artifacts; implementers
