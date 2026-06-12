@@ -2,8 +2,9 @@
 # paged.data publishes a resolved query as a named, discoverable dataset that
 # OTHER consumers (most importantly the sheets plugin) read through a CORE SDK
 # data-provider contract — never by inter-plugin coupling (§2.1/§7.1). The
-# engine-side publication is built + tested here; registration with the core
-# registry is the D-09 gate (RFC: thoughts/docs/paged/plugin-data/rfc-data-provider.md).
+# engine-side publication is built + tested here; the core registry door (D-09)
+# has LANDED and the editor injects it, so registration is now live in the real
+# editor (RFC: thoughts/docs/paged/plugin-data/rfc-data-provider.md).
 
 - id: data.provider.publish
   title: Publish a resolved query as a §7.1 data-provider snapshot (schema + stabilized RecordSet + revision etag)
@@ -18,5 +19,11 @@
 
 - id: data.provider.register
   title: Register the published provider with the core SDK data-provider registry (consumed by others, §7.1)
-  spec: plugin-data (base-idea §7.1 — core data-provider contract RFC, D-09)
-  status: planned
+  spec: plugin-data packages/data-bundle/src/session.ts (base-idea §7.1 — core data-provider contract, D-09)
+  status: implemented
+  provenance:
+    [
+      "the core host.dataProviders door LANDED (plugin-sdk d03-network-consent); the bundle registers for real when the host registry is wired (session.publishProvider -> host.dataProviders.register, commit ed32771) and falls back to honest-deferred logging when no door is present — never fakes a register; the editor injects createDataProviderRegistry() into every host (editor main.tsx, d66bfeb), so registration is live in the real editor (D-09 RESOLVED; sheets consumer S-15 resolved 2026-06-11)",
+    ]
+  tests:
+    vitest: ["packages/data-bundle/src/__tests__/provider.test.ts"]

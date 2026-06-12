@@ -18,9 +18,14 @@ core reviewers. Detailed proposals: `rfc-tagged-placeholders.md` (D-01),
 
 Format: `D-NN · date · area · status`. Status vocabulary: `OPEN` / `PARTIAL`
 (partially capable today) / `PARTIALLY RESOLVED` (an open gap that recently
-moved) / `MOSTLY RESOLVED` / `SUPERSEDED`. Verified against the published SDK +
-the `d03-network-consent` branch (plugin-api 0.2.7-canary.0) on 2026-06-10 (D-NN
-ids are immutable — entries drain in place, never renumber).
+moved) / `MOSTLY RESOLVED` / `RESOLVED` / `SUPERSEDED`. Verified against the
+published SDK + the `d03-network-consent` branch (plugin-api 0.2.7-canary.0) on
+2026-06-10, and re-trued 2026-06-12 against the plugin-platform RFI tracker
+(`thoughts/docs/paged/plugin-platform/rfi-core-sdk-gaps.md`) after the Wave 3 IO
+slice (K-2 importer/exporter + K-5 file picker), Wave 3b persistence (K-4
+`host.blob`), and the Wave 2 C-2 frame-chain door (v0.38.0) closed the doors
+several "OPEN" rows below describe (D-NN ids are immutable — entries drain in
+place, never renumber).
 
 ---
 
@@ -40,9 +45,10 @@ The spec's §2.2 gap-analysis table, resolved row-by-row:
 - Owned-content / lock semantics + edit-interception for bound content —
   **GAP** → D-10.
 - Frame-chain topology + overflow notification (record flow / pagination) —
-  **GAP** → D-12 (M1 record-flow gate).
+  **LANDED** → D-12 (`host.document.frameChain()` + reflow event, Wave 2 / C-2,
+  core v0.38.0; unconsumed by data's panels).
 - Reflow notification carrying content-box geometry (resize vs transform,
-  §9.6) — **GAP** → D-12.
+  §9.6) — **LANDED** → D-12 (`DocumentChangeEvent.reflow`, resize-only, C-2).
 - Document style read AND write (data-driven formatting) — read **COVERED**;
   style enumerate/read door still **GAP** → D-13 (text metrics half landed via
   `host.text.measureString`; M1 rules gate).
@@ -50,20 +56,23 @@ The spec's §2.2 gap-analysis table, resolved row-by-row:
   allow-list — **PARTIAL** → D-03 (the contract + `host.network` door landed;
   M0 still declares `network:false`; editor consent UI + CSP open).
 - **Filesystem/import capability** (local CSV/Excel/Parquet via OPFS) —
-  **GAP** → D-04.
-- Register importer/exporter (open a data file → start a binding) — **GAP** →
-  D-06.
+  **LANDED (unconsumed)** → D-04 (`host.blob` OPFS/blob store + quota, Wave 3b /
+  K-4; data still imports via in-panel `<input type=file>`).
+- Register importer/exporter (open a data file → start a binding) — **LANDED
+  (unconsumed)** → D-06 (`ContributionSurface.importer()/exporter()`, Wave 3 IO /
+  K-2).
 - Worker spawn + SharedArrayBuffer (DuckDB worker + binding workers) — **GAP**
   → D-05.
 - Document-scoped persistent plugin payload (binding defs, source manifests) —
   **PARTIAL** → D-08 (the metadata door exists but caps at 64 KiB).
 - **Register as a data provider** (publish schema + RecordSet + refresh,
-  §7.1) — **PARTIAL** → D-09 (plugin side built + tested + RFC filed; the core
-  `host.dataProviders` registry door is the residual SDK gap).
+  §7.1) — **RESOLVED** → D-09 (core `host.dataProviders` door landed; engine
+  publishes + bundle registers + editor injects the registry + sheets consumer
+  S-15 resolved 2026-06-11).
 
 Net-new beyond the §2.2 table: the wasm-bindgen loader path AND the multi-MB
 DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
-(D-11).
+(**LANDED, unconsumed** → D-11; `host.shell.pickFile`, Wave 3 IO / K-5).
 
 ---
 
@@ -131,30 +140,47 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   host-proxied fetch was rejected) — still open for **legal** review (the §11
   data-protection / GDPR posture).
 
-- **D-04 · 2026-06-08 · storage / file-import · OPEN** — no OPFS / large-blob /
-  file-import capability. `host.storage` is a localStorage-backed JSON KV
-  (get/set/delete/keys) — unfit for multi-MB source files or DuckDB's OPFS
-  persistence. M0 file import is in-panel `<input type=file>` → bytes handed to
-  DuckDB-WASM's in-memory FS (no persistence; reload re-imports — the panel says
-  so). **Joint RFC with plugin-sheet S-08 / plugin-image I-03.** Resolution:
-  storage + file-import capability with a quota declaration + an OPFS/blob store
-  distinct from the KV door.
+- **D-04 · 2026-06-08 (door LANDED 2026-06-10) · storage / file-import ·
+  RESOLVED (door); UNCONSUMED here** — the OPFS / large-blob capability LANDED:
+  `host.blob` (a `BlobSurface` with quota, distinct from the KV door) shipped in
+  the **Wave 3b persistence slice (K-4, plugin-sdk + editor, no wire/publish;
+  2026-06-10)** — exactly the OPFS/blob store, with a quota declaration, this row
+  asked for; plugin-sheet persists + restores its workbook across reloads against
+  it (the joint S-08 / plugin-image I-03 row is the same door). The platform gap
+  is **CLOSED**. **Residual is an adoption follow-up, not a platform gap:**
+  paged.data still imports via an in-panel `<input type=file>` → DuckDB-WASM's
+  in-memory FS (no persistence; reload re-imports — the panel says so); migrating
+  data's source ingest onto `host.blob` (+ pickFile/importer, D-11/D-06) is the
+  M1 second-consumer task. RFI tracker row: K-4 DONE (Wave 3b).
 
-- **D-05 · 2026-06-08 · workers · OPEN** — no worker-spawn / SharedArrayBuffer
-  capability (`docs/wasm-packaging.md`: "SharedArrayBuffer / threads are OFF in
-  v1"). DuckDB-WASM's standard `AsyncDuckDB` API is worker-hosted; M0 boots it in
-  the **bundle realm** (the bundle's own JS spawns the DuckDB worker from a
-  bundled blob URL, NOT via a host worker capability — the same own-realm pattern
-  the wasm-bindgen engine uses, D-07). The editor is already cross-origin
-  isolated (COOP/COEP), so the platform can host it; the gap is the *contract*.
-  **Joint RFC with plugin-sheet S-07 / plugin-image I-02.**
+- **D-05 · 2026-06-08 · workers · OPEN (host-worker contract DEFERRED by
+  decision)** — still no host worker-spawn / SharedArrayBuffer capability
+  (`docs/wasm-packaging.md`: "SharedArrayBuffer / threads are OFF in v1").
+  DuckDB-WASM's standard `AsyncDuckDB` API is worker-hosted; M0 boots it in the
+  **bundle realm** (the bundle's own JS spawns the DuckDB worker from a bundled
+  blob URL, NOT via a host worker capability — the same own-realm pattern the
+  wasm-bindgen engine uses, D-07). The editor is already cross-origin isolated
+  (COOP/COEP), so the platform can host it; the gap is the *contract*. **Joint
+  RFC with plugin-sheet S-07 / plugin-image I-02.** *Updated 2026-06-12:* the
+  joint **K-3 host-worker door is DEFERRED by decision (RFI, 2026-06-10)** — the
+  SDK's no-speculative-surface rule: no bundle currently *needs* a host worker
+  (sheets recalc is a sequential topo loop; data boots DuckDB in its own realm
+  fine), so K-3 is built only when a bundle actually threads (engine parallel
+  recalc, image's decode pool, or a worker-hosted DuckDB rewrite). Until then the
+  own-realm pattern stands and this row stays OPEN-but-not-blocking.
 
-- **D-06 · 2026-06-08 · importer/exporter · OPEN** — no importer/exporter
-  registration capability: `ContributionSurface` offers
-  tool/panel/schemaPanel/command/keybinding/overlay/editContext/objectType but
-  no `importer()`/`exporter()` — so a `.csv`/`.xlsx`/`.parquet` cannot register
-  as "open this file → start a binding". M0 imports via an in-panel
-  `<input type=file>`. **Joint RFC with plugin-sheet S-06 / plugin-image I-05.**
+- **D-06 · 2026-06-08 (door LANDED 2026-06-10) · importer/exporter · RESOLVED
+  (door); UNCONSUMED here** — the importer/exporter registration capability
+  LANDED in the **Wave 3 IO slice (K-2, plugin-sdk + editor, no wire/publish;
+  2026-06-10)**: `ContributionSurface.importer()/exporter()` +
+  `ImporterContribution`/`ExporterContribution` + the editor-owned File/Open +
+  drag-drop flow that resolves the importer by extension/mime (e.g. `.xlsx` opens
+  via paged.sheet; exporters surface in the Export Center). The platform gap a
+  `.csv`/`.xlsx`/`.parquet` could not register as "open this file → start a
+  binding" is **CLOSED** (joint S-06 / plugin-image I-05). **Residual is
+  adoption:** paged.data still imports via an in-panel `<input type=file>`;
+  registering data's own importer (with `host.document.open(bytes)` for the
+  open-a-new-document case, an RFI follow-on) is the M1 task.
 
 - **D-07 · 2026-06-08 · wasm packaging + budget · PARTIALLY RESOLVED
   (2026-06-09)** — TWO sub-gaps. **(a) RATIFIED:** `docs/wasm-packaging.md` now
@@ -185,8 +211,8 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   payload small + honest. Resolution: a plugin document-data capability with a
   declared size budget. GAP (verify the cap).
 
-- **D-09 · 2026-06-08 (SDK door LANDED + provider registers 2026-06-10) ·
-  data-provider contract · MOSTLY RESOLVED** — **the core
+- **D-09 · 2026-06-08 (SDK door LANDED + provider registers 2026-06-10; both
+  residuals landed 2026-06-11) · data-provider contract · RESOLVED** — **the core
   `host.dataProviders` registry now EXISTS** (plugin-sdk `dbcc9dc`, branch
   `d03-network-consent`): `capabilities.dataProviders:{publish,consume}` +
   `DataProvidersSurface` (register / discover / get / onDidChange) + the
@@ -196,11 +222,18 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   (`session.publishProvider → host.dataProviders.register`, commit `ed32771`):
   lazy `getSnapshot` in our realm (a consumer pull can't induce a fetch we're not
   consented to), `row_count→rowCount` boundary map, revision-bump on re-publish.
-  **Residual:** (a) the EDITOR creates the registry once + injects it into every
-  `loadBundle` (the wiring that flips `supports("dataProviders@1")` true — like
-  D-03's consent UI); (b) the sheets CONSUMER side (plugin-sheets **S-15**:
-  discover/get/onDidChange + RecordSet→cells). Both RFCs filed
-  (`rfc-data-provider.md`, `rfc-data-provider-consumer.md`). The original gap:
+  **Both residuals have since LANDED (2026-06-11) — this row is now RESOLVED:**
+  (a) the EDITOR creates the registry once + injects it into every host
+  (`createDataProviderRegistry()` in `editor/apps/canvas/src/main.tsx` L881,
+  commit `d66bfeb`), flipping `supports("dataProviders@1")` true; (b) the sheets
+  CONSUMER side shipped — **plugin-sheets S-15 RESOLVED 2026-06-11**
+  (`dataProviders.consume` + datasets panel + `sheetFromDataset`;
+  discover/get/onDidChange + RecordSet→cells; 12 vitest). Both RFCs filed
+  (`rfc-data-provider.md`, `rfc-data-provider-consumer.md`). **Remaining is NOT a
+  platform/SDK gap:** a cross-plugin end-to-end test in the running editor
+  (publish→discover→seed→revision-bump-marks-STALE) and a contract amendment
+  fixing the per-cell value encoding (plain JS vs tagged `{t,v}` — both sides
+  code defensively today). The original gap:
   no core data-provider registry (§7.1). paged.data should publish a
   resolved dataset (schema + `RecordSet` + refresh/subscribe) to OTHER consumers
   (notably the sheets plugin) THROUGH a neutral core contract — registering a
@@ -213,17 +246,20 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   NOT trigger a spurious consumer refresh); conformance
   `data-conformance/tests/provider.rs` (3 tests), registry `data.provider.publish`
   (implemented, coverage-gated). The bundle exposes it through
-  `session.publishProvider(...)` with **honest-deferred registration** (no
-  `host.dataProviders` door → it returns the publication payload and logs the
-  defer, never fakes a register), `src/__tests__/provider.test.ts` (3 vitest).
-  **Residual (the SDK gap):** the core registry door —
-  `host.dataProviders.register/discover/get/onDidChange` + a `dataProviders`
-  capability. Specified in full: **RFC
-  `thoughts/docs/paged/plugin-data/rfc-data-provider.md`** (shared with the
-  sheets plugin's consumer side; category discovery, no consumer identity exposed
-  to the provider, the §7.1 "exposes data not control" security shape). When the
-  door lands, paged.data is a one-line `register(...)` away — a wiring change,
-  like D-02/D-03. M1+ (T2) gate.
+  `session.publishProvider(...)`: when the host registry is wired it **registers**
+  (`host.dataProviders.register`); with no door it falls back to honest-deferred
+  (returns the publication payload + logs the defer, never fakes a register) —
+  `src/__tests__/provider.test.ts` (3 vitest, incl. "registers with
+  host.dataProviders … once a registry is wired"). **The SDK gap (the core
+  registry door — `host.dataProviders.register/discover/get/onDidChange` + a
+  `dataProviders` capability) has LANDED**, and the editor now injects the shared
+  registry into every host, so `supports("dataProviders@1")` is true in the real
+  editor and paged.data registers for real. Specified in full: **RFC
+  `thoughts/docs/paged/plugin-data/rfc-data-provider.md`** (shared with the sheets
+  plugin's consumer side; category discovery, no consumer identity exposed to the
+  provider, the §7.1 "exposes data not control" security shape). Was M1+ (T2);
+  the chain is now complete across four repos (engine → bundle → editor injection
+  → sheets consumer).
 
 - **D-10 · 2026-06-08 · owned content · OPEN** — no owned-content attribute /
   edit-interception hook. Lowered bound content is plain document content; a user
@@ -234,27 +270,37 @@ DuckDB-WASM artifact vs. the 8 MiB budget (D-07), and the host file picker
   attribute stamped on compiled content and (b) the edit-interception delivery.
   **Joint with plugin-sheet S-09.** T2 gate.
 
-- **D-11 · 2026-06-08 · shell / file input · OPEN** — no host file-picker
-  surface (`ShellSurface` = openPanel/closePanel only). M0 uses an in-panel
-  `<input type="file" accept=".csv,.json,.parquet,.xlsx">` (the React
-  expert-leaf escape hatch). Clean path: a `host.shell.pickFile()` door or the
-  D-06 importer registration.
+- **D-11 · 2026-06-08 (door LANDED 2026-06-10) · shell / file input · RESOLVED
+  (door); UNCONSUMED here** — the host file-picker surface LANDED:
+  `ShellSurface.pickFile(options?) → Promise<readonly PickedFile[]>` shipped in
+  the **Wave 3 IO slice (K-5, plugin-sdk + editor, no wire/publish; 2026-06-10)** —
+  exactly the `host.shell.pickFile()` door this row named as the clean path. The
+  platform gap is **CLOSED**. **Residual is adoption:** paged.data still uses an
+  in-panel `<input type="file" accept=".csv,.json,.parquet,.xlsx">` (the React
+  expert-leaf escape hatch); switching to `host.shell.pickFile` (or the D-06
+  importer registration) is the M1 task. (Cross-reference note: D-11 here is the
+  FILE-PICKER gap — not "DB-attach"; DB-attach is a base-idea decision id, not
+  this log's D-11.)
 
-- **D-12 · 2026-06-08 · frames / threading · OPEN** — no frame-chain
-  topology read for owned frames and no reflow/overflow subscription. Record flow
-  / pagination (the spec §9.4 killer feature) binds a query to a frame chain +
-  template and paginates across pages; it needs chain reads, overflow
-  notification, and the content-box-resize-vs-transform distinction (§9.6 — a
-  pure transform must NOT re-paginate). `DocumentChangeEvent` carries only
-  `{kind, pageIds}` today. **Joint with plugin-sheet S-05.** *Updated
-  2026-06-09:* the Rust **record-flow + pagination engine landed**
-  (`data-bind::resolve_record_flow` → grouped atomic template instances;
-  `data-lower::paginate_flow` → greedy packing with repeated/continued headers,
-  tall-record convergence, order-preserving — property tested). It paginates
-  against a **caller-supplied** chain (`FrameCapacity[]`) handed to
-  `DataSession::lower_record_flow`, exactly as plugin-sheet's paginator runs
-  ahead of S-05. The SDK gate — reading the host's actual frame-chain topology
-  and receiving content-box reflow notifications — is unchanged.
+- **D-12 · 2026-06-08 (door LANDED 2026-06-10) · frames / threading · RESOLVED
+  (door); UNCONSUMED here** — the frame-chain read + reflow door LANDED:
+  `host.document.frameChain(id) → FrameChainResult` (next + overflow state) plus
+  an additive `DocumentChangeEvent.reflow` (fired on `mutationApplied`,
+  **resize-only**, §8.5 — so a pure transform does NOT re-paginate, the §9.6
+  distinction this row asked for) shipped in the **Wave 2 page-fidelity slice
+  (C-2, core v0.38.0; 2026-06-10)**. plugin-sheet already consumes it
+  (`lowerPaginatedToChain` + `subscribeChainReflow` — S-05 resolved). The SDK
+  gate this row named — reading the host's actual frame-chain topology and
+  receiving content-box reflow notifications — is **CLOSED** (joint S-05). *Prior
+  (2026-06-09):* the Rust **record-flow + pagination engine** already landed on
+  data's side (`data-bind::resolve_record_flow` → grouped atomic template
+  instances; `data-lower::paginate_flow` → greedy packing with
+  repeated/continued headers, tall-record convergence, order-preserving —
+  property tested), paginating against a **caller-supplied** chain
+  (`FrameCapacity[]`) handed to `DataSession::lower_record_flow`. **Residual is
+  adoption:** wiring data's `lower_record_flow` to the live `frameChain()` reads +
+  reflow subscription (so the caller-supplied chain becomes the host's real one)
+  is the M1 record-flow task.
 
 - **D-13 · 2026-06-08 · styles · PARTIALLY RESOLVED (2026-06-09)** — data-driven formatting rules
   (§9.5: `when: Expr → apply: StyleAction`) style through DOCUMENT styles, never
@@ -292,17 +338,26 @@ platform should design each once, for all three plugins:
 | paged.data | paged.sheet | paged.image | Joint RFC | Status |
 |---|---|---|---|---|
 | D-02 | S-03 | — | native table content model | **LANDED** (`insertTable`) |
-| D-04 | S-08 | I-03 | OPFS / large-blob + file-import capability | open |
-| D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) | open |
-| D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration | open |
+| D-04 | S-08 | I-03 | OPFS / large-blob + file-import capability | **LANDED** (`host.blob`, K-4 Wave 3b); data unconsumed |
+| D-05 | S-07 | I-02 | worker spawn + SharedArrayBuffer (COOP/COEP) | **DEFERRED by decision** (K-3, RFI 2026-06-10 — no worker consumer yet) |
+| D-06 | S-06 | I-05 | importer/exporter (document-type handler) registration | **LANDED** (`importer()/exporter()`, K-2 Wave 3 IO); data unconsumed |
 | D-07 | S-10 | I-07 | wasm-bindgen loader door + the 8 MiB artifact budget | **loader ratified**; budget ceiling open |
-| D-09 | S-15 (consumer) | — | core data-provider contract/registry (§7.1) | **SDK door LANDED** (`host.dataProviders`) + provider registers; residual = editor injection + sheets consumer |
+| D-09 | S-15 (consumer) | — | core data-provider contract/registry (§7.1) | **RESOLVED** — door + provider register + editor injection (`d66bfeb`) + sheets consumer (S-15, 2026-06-11) |
 | D-10 | S-09 | — | owned-content attribute + edit-interception | partial (`objectType` ships) |
-| D-12 | S-05 | — | frame-chain read + content-box reflow notification | open |
+| D-12 | S-05 | — | frame-chain read + content-box reflow notification | **LANDED** (`frameChain()` + reflow, C-2 v0.38.0); data unconsumed |
 | D-13 | S-04 | — | document-style read+write (style-management capability) | **metrics landed**; style read open |
 
 Three plugins, filed independently, converging on the same surface is the
-signal these belong in plugin-api v1. The paged.data-specific rows (D-01 tagged
-placeholders, D-03 network consent, D-08 payload budget, D-11 file picker) are
-paged.data's own to carry — D-01 and D-03 are the two that most define this
-plugin's contract with the platform.
+signal these belong in plugin-api v1. The paged.data-specific rows that remain
+open are D-01 (tagged placeholders) and D-08 (payload budget); D-03 (network
+consent) is partially resolved (contract landed, editor UI + CSP + legal
+remain); D-11 (file picker) RESOLVED platform-side (K-5, unconsumed here). D-01
+and D-03 are the two that most define this plugin's contract with the platform.
+
+**Adoption follow-up (the second debt P9 names):** several rows above are
+RESOLVED platform-side but UNCONSUMED here — paged.data still ingests via an
+in-panel `<input type=file>` into DuckDB's in-memory FS rather than the landed
+`host.shell.pickFile` (D-11/K-5) + `host.blob` (D-04/K-4) + importer
+registration (D-06/K-2), and binds against a caller-supplied chain rather than
+the live `frameChain()` (D-12/C-2). Migrating data's ingest + record-flow onto
+those doors is the M1 task and the second-consumer proof for the Wave 3 doors.
