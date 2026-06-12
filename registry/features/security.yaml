@@ -14,15 +14,16 @@
   title: No resolution of remote sources pre-consent (no silent fetch, §11)
   spec: plugin-data data-sources/src/lib.rs (base-idea §11)
   status: implemented
-  provenance: ["per-origin consent; documents carrying queries treated as code"]
+  provenance: ["per-origin consent; documents carrying queries treated as code; a saved document with a remote source reopens cold + inert (M1)"]
   tests:
     rust: ["data-conformance/tests/security.rs::data_security_no_network_pre_consent"]
+    vitest: ["packages/data-bundle/src/__tests__/remote.test.ts"]
 
 - id: data.security.credentials-absent
   title: Credentials never serialized into the document payload (§11, D-11)
   spec: plugin-data data-js + data-sources (base-idea §11)
   status: implemented
-  provenance: ["round-trip: save -> inspect -> assert absent"]
+  provenance: ["round-trip: save -> inspect -> assert absent; remote descriptors carry credentialRef strings only (rfc-credential-store)"]
   tests:
     rust: ["data-conformance/tests/security.rs::data_security_credentials_absent"]
 

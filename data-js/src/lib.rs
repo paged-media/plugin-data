@@ -224,6 +224,19 @@ mod wasm {
             to_js(&pub_)
         }
 
+        /// The remote invalidation key (§6.2/§8): the content-addressed key for
+        /// a defined remote source over caller-supplied bytes (the bundle's
+        /// post-consent, edit-time fetch). Hex string; the engine never fetches.
+        pub fn remote_invalidation_key(
+            &self,
+            source: &str,
+            bytes: &[u8],
+        ) -> Result<String, JsValue> {
+            self.session
+                .remote_invalidation_key(&data_core::SourceId::from(source), bytes)
+                .map_err(map_err)
+        }
+
         /// The sync state of a binding.
         pub fn sync_state(&self, binding: &str) -> JsValue {
             to_js(&self.session.sync_state(&BindingId::from(binding))).unwrap_or(JsValue::NULL)

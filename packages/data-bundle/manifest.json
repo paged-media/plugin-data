@@ -12,7 +12,10 @@
     "rendering": [
       "hitTest"
     ],
-    "network": false,
+    "network": {
+      "origins": "consent",
+      "purpose": "Fetch author-selected remote data sources (CSV/JSON/Parquet over HTTP(S)) at edit time, per-origin consented — never on document open."
+    },
     "clipboard": "none",
     "wasm": [
       {

@@ -1,5 +1,6 @@
 # paged.data feature registry — source adapters (spec §6.2, §12.3
-# data.source.*). M0 implements inline + file; remote/db/governed are M1+.
+# data.source.*). M0 implements inline + file; M1 adds remote (HTTP(S),
+# consent-gated, transport-agnostic); db/governed are M2+.
 
 - id: data.source.inline
   title: Inline-seed source (data embedded in the doc; no capability)
@@ -26,9 +27,15 @@
     rust: ["data-conformance/tests/sources.rs::data_source_manifest"]
 
 - id: data.source.remote
-  title: Remote source (HTTP(S)/REST via DuckDB httpfs) — network + per-origin consent
-  spec: plugin-data data-sources (base-idea §6.2, D-03)
-  status: planned
+  title: Remote source (HTTP(S) CSV/JSON/Parquet) — network + per-origin consent
+  spec: plugin-data data-sources/src/remote.rs (base-idea §6.2, D-03)
+  status: implemented
+  provenance: ["descriptor {url, format, params} is transport-agnostic — the engine validates + keys, the bundle fetches edit-time post-consent; content-hash invalidation key; credentialRef strings only (D-11)"]
+  tests:
+    rust:
+      - "data-conformance/tests/sources.rs::data_source_remote"
+      - "data-sources/src/remote.rs::data_source_remote_validate"
+    vitest: ["packages/data-bundle/src/__tests__/remote.test.ts"]
 
 - id: data.source.db-attach
   title: DB attach (SQLite/Postgres/MySQL) — network + credential handling

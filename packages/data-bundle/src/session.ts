@@ -15,6 +15,15 @@ import type {
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
 import { commitLoweredImage, commitLoweredTable, commitLoweredVariable } from "./lower";
+import {
+  buildRemoteUrl,
+  remoteOrigin,
+  validateRemoteUrl,
+  type RemoteFormat,
+  type RemoteSourceState,
+} from "./remote";
+
+export type { RemoteFormat, RemoteSourceState } from "./remote";
 
 /** A read-only snapshot for the panels. */
 export interface SessionState {
@@ -24,6 +33,8 @@ export interface SessionState {
   sources: string[];
   queries: string[];
   bindings: string[];
+  /** Remote sources (M1, D-03) — each INERT until its origin is consented. */
+  remote: RemoteSourceState[];
 }
 
 /** A column → field mapping for a table binding (panel-authored). */
@@ -112,6 +123,27 @@ export interface DataProviderPublication {
 export interface DataSourceSession {
   getState(): SessionState;
   registerCsvSource(name: string, csvText: string): Promise<void>;
+  /** Define a remote source (M1, §6.2/D-03): records the `{url, format,
+   *  params}` descriptor only — NOTHING fetches and no engine boots. The
+   *  source is INERT until its origin is consented AND the user loads it.
+   *  `credentialRef` is a host-credential-store reference string (D-11);
+   *  secret material is rejected (an embedded `user:pass@` URL fails).
+   *  Returns an error message, or `null` on success. */
+  addRemoteSource(
+    name: string,
+    url: string,
+    format: RemoteFormat,
+    options?: { params?: Record<string, string>; credentialRef?: string },
+  ): string | null;
+  /** Request per-origin consent for one remote source through the host
+   *  (D-03). Returns true when its origin is granted afterwards. */
+  requestConsentForRemote(name: string): Promise<boolean>;
+  /** Load a remote source (edit-time fetch, M1): the consent gate runs FIRST
+   *  — an unconsented origin returns inert without touching the network. On
+   *  grant: fetch the bytes, hand them to the DuckDB query lane exactly like
+   *  an imported file, define the source on the engine, and record the
+   *  engine-computed content-hash invalidation key. */
+  loadRemoteSource(name: string): Promise<void>;
   addQuery(id: string, sql: string, shape: "recordStream" | "singleRecord" | "scalar"): void;
   addVariableBinding(id: string, target: string, query: string, expr: string): void;
   addTableBinding(id: string, region: string, query: string, columns: ColumnSpec[]): void;
@@ -124,9 +156,9 @@ export interface DataSourceSession {
   lowerAll(): Promise<void>;
   /** The §11 consent gate for remote/governed sources (D-03): review the
    *  data-source manifest (origins + purpose) and obtain per-origin consent
-   *  through the host before any reach. Returns the granted origins. Dormant at
-   *  M0 (the manifest declares `network:false`, so the host refuses) — flips on
-   *  when remote sources + `network:{origins}` land (M1; a wiring change). */
+   *  through the host before any reach. Returns the granted origins. LIVE at
+   *  M1: the manifest declares `network:{origins:"consent"}` — every reach is
+   *  runtime-consented, none pre-allowed. */
   requestNetworkConsent(origins: string[], purpose: string): Promise<string[]>;
   /** §7.1 data-provider: publish a query's resolved result as a named,
    *  discoverable dataset for OTHER consumers (the sheets plugin sourcing a
@@ -190,6 +222,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // and immediately if the engine is already up). Default en.
   let locale: "en" | "de" = "en";
 
+  // M1 remote sources (D-03): descriptor-only until consented + loaded.
+  const remoteSources = new Map<string, RemoteSourceState>();
+
   let engine: DataEngineLike | null = null;
   let duck: DuckDBHandle | null = null;
   const state: SessionState = {
@@ -198,7 +233,27 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     sources: sourceNames,
     queries: [],
     bindings: bindingIds,
+    remote: [],
   };
+
+  /** The host's currently-consented origins; [] when the door is unavailable
+   *  (network undeclared) — which keeps every remote source inert. */
+  function consentedOriginsSafe(): readonly string[] {
+    try {
+      return host.network.consentedOrigins();
+    } catch {
+      return [];
+    }
+  }
+
+  /** Recompute each remote source's consent posture from the live grant. */
+  function remoteSnapshot(): RemoteSourceState[] {
+    const consented = consentedOriginsSafe();
+    return Array.from(remoteSources.values(), (r) => ({
+      ...r,
+      consent: consented.includes(r.origin) ? ("granted" as const) : ("required" as const),
+    }));
+  }
 
   async function ensureEngine(): Promise<DataEngineLike> {
     if (engine) return engine;
@@ -236,6 +291,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         sources: [...sourceNames],
         queries: Array.from(queries.keys()),
         bindings: [...bindingIds],
+        remote: remoteSnapshot(),
       };
     },
 
@@ -257,6 +313,105 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         state.message = `Source "${name}" registered.`;
       } catch (err) {
         host.log.warn(`registerCsvSource: ${String(err)}`);
+      }
+    },
+
+    addRemoteSource(name, url, format, options) {
+      // Descriptor-only (INERT): no fetch, no engine boot — a document/panel
+      // defining a remote source touches nothing (§11: no silent fetch).
+      const invalid = validateRemoteUrl(url);
+      if (invalid) {
+        host.log.warn(`addRemoteSource(${name}): ${invalid}`);
+        return invalid;
+      }
+      const origin = remoteOrigin(url);
+      if (!origin) return `not a valid URL: ${url}`;
+      remoteSources.set(name, {
+        name,
+        url,
+        origin,
+        format,
+        params: { ...(options?.params ?? {}) },
+        credentialRef: options?.credentialRef,
+        consent: "required",
+        status: "inert",
+        message: "Inert — origin consent required before any fetch (D-03).",
+        contentKey: null,
+      });
+      return null;
+    },
+
+    async requestConsentForRemote(name) {
+      const r = remoteSources.get(name);
+      if (!r) return false;
+      const granted = await this.requestNetworkConsent(
+        [r.origin],
+        `Fetch the remote data source "${name}" (${r.format}) from ${r.origin}.`,
+      );
+      return granted.includes(r.origin);
+    },
+
+    async loadRemoteSource(name) {
+      const r = remoteSources.get(name);
+      if (!r) return;
+      // THE GATE COMES FIRST: an unconsented origin never reaches the network
+      // (no fetch, no engine boot) — the source stays inert (§11/D-03).
+      if (!consentedOriginsSafe().includes(r.origin)) {
+        r.consent = "required";
+        r.status = "inert";
+        r.message = `Origin ${r.origin} not consented — request consent first (no fetch performed).`;
+        state.message = r.message;
+        return;
+      }
+      r.consent = "granted";
+      try {
+        // Edit-time fetch (the ONLY fetch in the bundle): the editor's CSP
+        // connect-src derived from the grant backstops this gate.
+        const response = await fetch(buildRemoteUrl(r.url, r.params));
+        if (!response.ok) {
+          throw new Error(`fetch failed: HTTP ${response.status}`);
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+
+        // Hand the bytes to the query lane exactly like an imported file.
+        const d = await ensureDuck();
+        if (r.format === "csv" || r.format === "tsv") {
+          await d.registerCsv(name, new TextDecoder().decode(bytes));
+        } else {
+          await d.registerFileBuffer(`${name}.${r.format}`, bytes);
+        }
+
+        // Define the descriptor on the engine + record the content-hash
+        // invalidation key (computed in Rust; the engine never fetches).
+        const e = await ensureEngine();
+        e.define_source({
+          id: name,
+          kind: {
+            kind: "remote",
+            url: r.url,
+            format: r.format,
+            params: r.params,
+            credential_ref: r.credentialRef ?? null,
+          },
+          capability: "network",
+        });
+        r.contentKey =
+          typeof e.remote_invalidation_key === "function"
+            ? e.remote_invalidation_key(name, bytes)
+            : null;
+
+        if (!sourceNames.includes(name)) sourceNames.push(name);
+        r.status = "loaded";
+        r.message =
+          r.contentKey === null
+            ? "Loaded (engine wasm predates the invalidation key — rebuild scripts/build-wasm.sh)."
+            : `Loaded — content key ${r.contentKey}.`;
+        state.status = "ready";
+        state.message = `Remote source "${name}" loaded.`;
+      } catch (err) {
+        r.status = "error";
+        r.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`loadRemoteSource(${name}): ${r.message}`);
       }
     },
 
@@ -335,12 +490,11 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     async requestNetworkConsent(origins, purpose) {
-      // D-03: the consent gate a remote/governed source crosses before DuckDB
-      // httpfs reaches an origin. No silent fetch — the host renders the
-      // data-source manifest + records per-origin consent. At M0 the manifest
-      // declares `network:false`, so the host's capability gate refuses (the
-      // honest dormant wiring); when remote sources ship, the manifest flips to
-      // `network:{origins}` and this grants.
+      // D-03: the consent gate a remote/governed source crosses before the
+      // fetch lane reaches an origin. No silent fetch — the host renders the
+      // data-source manifest + records per-origin consent. M1: the manifest
+      // declares `network:{origins:"consent"}` (every reach runtime-consented,
+      // none pre-allowed); the editor derives CSP connect-src from the grant.
       if (!host.supports("network.consent@1")) {
         host.log.info(
           "network consent: no host consent backend wired yet (editor follow-up: " +

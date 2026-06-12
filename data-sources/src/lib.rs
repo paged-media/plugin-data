@@ -41,6 +41,11 @@ pub use governed::{
     enrich_schema, CatalogColumn, CatalogDiagnostic, ColumnMetadata, DatasetMetadata,
     GovernedCatalog,
 };
+mod remote;
+pub use remote::{
+    content_hash_bytes, remote_descriptor_hash, remote_invalidation_key, validate_remote,
+    RemoteError,
+};
 
 /// The capability a source requires before it can be created/resolved (§11).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,14 +229,14 @@ impl SourceAdapter for RemoteAdapter {
     }
     fn required_capability(&self, src: &DataSource) -> RequiredCapability {
         let origin = match &src.kind {
-            SourceKind::Remote { url } => origin_of(url),
+            SourceKind::Remote { url, .. } => origin_of(url),
             _ => None,
         };
         RequiredCapability::Network { origin }
     }
     fn manifest_target(&self, src: &DataSource) -> String {
         match &src.kind {
-            SourceKind::Remote { url } => origin_of(url).unwrap_or_else(|| url.clone()),
+            SourceKind::Remote { url, .. } => origin_of(url).unwrap_or_else(|| url.clone()),
             _ => String::new(),
         }
     }
@@ -356,7 +361,10 @@ mod tests {
                 &src(
                     "c",
                     SourceKind::Remote {
-                        url: "https://x.test/d.csv".into()
+                        url: "https://x.test/d.csv".into(),
+                        format: None,
+                        params: Default::default(),
+                        credential_ref: None,
                     }
                 ),
                 &g
@@ -376,6 +384,9 @@ mod tests {
             "c",
             SourceKind::Remote {
                 url: "https://api.test/v".into(),
+                format: None,
+                params: Default::default(),
+                credential_ref: None,
             },
         );
         // Network granted but origin not consented → rejected (§11).

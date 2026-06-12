@@ -13,7 +13,12 @@
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    # `paste` (proc-macro, pulled in via boa_engine) is UNMAINTAINED, not
+    # vulnerable — RUSTSEC-2024-0436 is informational. Pre-existing; revisit
+    # when boa moves off it. No license/security boundary impact.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2

@@ -20,6 +20,8 @@
 //! addresses rows by index — the basis for stable record identity in the sync
 //! diff (§8).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -48,9 +50,27 @@ pub enum SourceKind {
     /// A local file imported as bytes (CSV/TSV/JSON/Parquet/Excel), read by
     /// DuckDB over the imported bytes. Capability: `file-import` (D-04).
     File { format: FileFormat, name: String },
-    /// An HTTP(S) file or REST/JSON API. Capability: `network` + per-origin
-    /// consent (D-03). M1+.
-    Remote { url: String },
+    /// An HTTP(S) file or REST/JSON API (CSV/JSON/Parquet over HTTP), described
+    /// by `{url, format, params}`. Capability: `network` + per-origin consent
+    /// (D-03). The descriptor is TRANSPORT-AGNOSTIC: the engine never fetches —
+    /// the bundle supplies bytes after consent, exactly like the file adapter
+    /// (M1; versioned amendment of the M0 `Remote { url }` shape — the added
+    /// fields default, so M0 payloads still decode). Carries NO credential
+    /// material: `credential_ref` names a host-store secret (D-11,
+    /// rfc-credential-store), never the secret itself.
+    Remote {
+        url: String,
+        /// The payload format DuckDB will read; `None` = infer from the URL.
+        #[serde(default)]
+        format: Option<FileFormat>,
+        /// Extra request/query parameters (deterministically ordered).
+        #[serde(default)]
+        params: BTreeMap<String, String>,
+        /// A reference into the host credential store (D-11) — a ref string
+        /// only; secret bytes never enter the descriptor or the payload.
+        #[serde(default)]
+        credential_ref: Option<String>,
+    },
     /// An attached SQLite/Postgres/MySQL database. Capability: `network` +
     /// credential handling (D-03/D-11). M2.
     DbAttach { dsn: String },

@@ -23,6 +23,10 @@ export interface DataEngineLike {
   governed_catalog(query: string, metadata: unknown): unknown;
   plan_batch(query: string, mode: unknown): unknown;
   run_record_flow_batch(binding: string, mode: unknown, chain: unknown, opts: unknown): unknown;
+  /** M1 remote slice: the content-hash invalidation key for a defined remote
+   *  source over bundle-fetched bytes. Optional: a wasm artifact built before
+   *  the M1 slice lacks it (the session degrades honestly). */
+  remote_invalidation_key?(source: string, bytes: Uint8Array): string;
   sync_state(binding: string): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;

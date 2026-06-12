@@ -31,14 +31,18 @@ fn src(id: &str, kind: SourceKind) -> DataSource {
     }
 }
 
+fn remote_kind(url: &str) -> SourceKind {
+    SourceKind::Remote {
+        url: url.into(),
+        format: Some(FileFormat::Csv),
+        params: Default::default(),
+        credential_ref: None,
+    }
+}
+
 #[test]
 fn data_security_no_network_pre_consent() {
-    let remote = src(
-        "api",
-        SourceKind::Remote {
-            url: "https://api.test/v".into(),
-        },
-    );
+    let remote = src("api", remote_kind("https://api.test/v"));
     // M0 default: network off → remote is inert by construction.
     assert_eq!(
         authorize(&remote, &GrantedCapabilities::m0_default()),
@@ -94,4 +98,47 @@ fn data_security_credentials_absent_from_payload() {
     );
     // The redacted DSN keeps the host (so the source is still identifiable).
     assert!(json.contains("db.host"));
+}
+
+#[test]
+fn data_security_no_network_pre_consent_document_loads_inert() {
+    // A saved document carrying a remote source loads COLD: reconstructing the
+    // session from its payload performs no IO (the engine has no transport at
+    // all), and the §11 gate still reports the source unauthorized under the
+    // no-consent grant — inert until the user reviews + consents (D-03).
+    let mut session = DataSession::new(0);
+    session.define_source(src("api", remote_kind("https://api.test/feed.csv")));
+    let reopened = DataSession::from_payload(session.payload(), 0);
+    let report = reopened.authorize_report();
+    assert_eq!(report.len(), 1);
+    assert!(
+        !report[0].allowed,
+        "remote source must load inert: {report:?}"
+    );
+}
+
+#[test]
+fn data_security_credentials_absent_remote_descriptor() {
+    // Remote descriptors carry NO credential material (rfc-credential-store):
+    // an embedded user:pass@ URL is rejected at validation…
+    let bad = remote_kind("https://user:SuperSecret@api.test/feed.csv");
+    assert_eq!(
+        data_sources::validate_remote(&bad),
+        Err(data_sources::RemoteError::EmbeddedCredentials)
+    );
+    // …and an authenticated source round-trips with its credentialRef STRING
+    // only — the ref names a host-store secret, never carries one (§11/D-11).
+    let mut session = DataSession::new(0);
+    session.define_source(src(
+        "api",
+        SourceKind::Remote {
+            url: "https://api.test/feed.csv".into(),
+            format: Some(FileFormat::Csv),
+            params: Default::default(),
+            credential_ref: Some("keychain:source-api".into()),
+        },
+    ));
+    let json = serde_json::to_string(&session.payload()).unwrap();
+    assert!(json.contains("keychain:source-api"));
+    assert!(json.contains("https://api.test/feed.csv"));
 }

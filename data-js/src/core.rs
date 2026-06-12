@@ -474,6 +474,27 @@ impl DataSession {
             .collect()
     }
 
+    /// The **remote invalidation key** (§6.2/§8, the M1 remote slice): the
+    /// content-addressed key for a defined remote source over caller-supplied
+    /// bytes. The bundle fetches the bytes (edit-time, post-consent, D-03) and
+    /// hands them here — the engine validates the descriptor (no embedded
+    /// credentials, http(s) only) and computes the deterministic key; it never
+    /// fetches. Returned as a hex string (the stamp the bundle records).
+    pub fn remote_invalidation_key(
+        &self,
+        id: &data_core::SourceId,
+        bytes: &[u8],
+    ) -> Result<String, SessionError> {
+        let src = self
+            .sources
+            .iter()
+            .find(|s| &s.id == id)
+            .ok_or_else(|| SessionError::Decode(format!("no source '{id}' defined")))?;
+        let key = data_sources::remote_invalidation_key(&src.kind, bytes)
+            .map_err(|e| SessionError::Decode(e.to_string()))?;
+        Ok(format!("{key:016x}"))
+    }
+
     /// The visible data-source manifest (§11).
     pub fn source_manifest(&self) -> SourceManifest {
         build_manifest(&self.sources)
