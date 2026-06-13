@@ -87,6 +87,24 @@ pub enum Binding {
         when: String,
         apply: StyleAction,
     },
+    /// A field value is rendered as a barcode/QR symbol onto a bound frame
+    /// (§9.7 — the EasyCatalog catalog staple). The `expr` resolves to a string
+    /// (an EAN/UPC number, or arbitrary text for Code-128/QR); the engine
+    /// generates the symbology geometry; the bundle lowers it as filled-rect
+    /// vector modules scaled to the frame's content box (the VECTOR lane — no
+    /// asset-store door).
+    Barcode {
+        /// The bound frame the symbol is rendered onto.
+        target: FrameRef,
+        query: QueryId,
+        /// The barcode symbology to render.
+        symbology: BarcodeSymbology,
+        /// The binding expression (source) — resolves to the value to encode.
+        expr: String,
+        /// Policy for an empty / unencodable value.
+        #[serde(default)]
+        options: BarcodeOpts,
+    },
 }
 
 impl Binding {
@@ -97,10 +115,53 @@ impl Binding {
             Binding::Variable { query, .. }
             | Binding::Image { query, .. }
             | Binding::Table { query, .. }
-            | Binding::RecordFlow { query, .. } => Some(query),
+            | Binding::RecordFlow { query, .. }
+            | Binding::Barcode { query, .. } => Some(query),
             Binding::Rule { .. } => None,
         }
     }
+}
+
+/// The barcode symbologies a [`Binding::Barcode`] can render (§9.7). The frozen
+/// wire shape; `data-barcode::Symbology` mirrors it 1:1 and the engine bridges
+/// the two. The registry rows are `data.barcode.<id>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BarcodeSymbology {
+    /// EAN-13 — the 13-digit retail/catalog staple.
+    Ean13,
+    /// UPC-A — the 12-digit North-American retail code.
+    UpcA,
+    /// Code-128 — a general-purpose 1D symbology over ASCII.
+    Code128,
+    /// QR — the 2D matrix symbology (byte mode).
+    Qr,
+}
+
+/// Per-barcode-binding options (§9.7). `quiet_zone` lets the author widen the
+/// symbology's default light margin (in module units); `missing` governs an
+/// empty resolved value.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BarcodeOpts {
+    /// Extra quiet-zone modules added on each side beyond the symbology default
+    /// (0 = the symbology's own minimum).
+    #[serde(default)]
+    pub quiet_zone: u32,
+    /// What to do when the resolved value is empty (no record / null).
+    #[serde(default)]
+    pub missing: BarcodeMissing,
+}
+
+/// What a barcode binding does when its value is absent/empty (§9.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BarcodeMissing {
+    /// Render nothing (no symbol drawn).
+    #[default]
+    Skip,
+    /// Flag the binding for review (the panel surfaces it).
+    Flag,
 }
 
 /// A column → field mapping for a dynamic table (§9.3). The per-column `expr`

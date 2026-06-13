@@ -34,10 +34,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use data_core::{
-    Binding, BindingId, FlowOpts, FooterAgg, FrameChainRef, ImageReference, ImageStatus, ImgFit,
-    ImgMissing, ImgPolicy, Locale, Placeholder, PlaceholderRef, Query, QueryId, RecordSet,
-    ResolveStamp, ResultShape, ScopeRef, Status, StyleAction, SyncState, Template, TemplateRef,
-    Value,
+    BarcodeMissing, BarcodeOpts, BarcodeSymbology, Binding, BindingId, FlowOpts, FooterAgg,
+    FrameChainRef, FrameRef, ImageReference, ImageStatus, ImgFit, ImgMissing, ImgPolicy, Locale,
+    Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp, ResultShape, ScopeRef,
+    Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
 use data_query::{content_hash, stabilize, stamp};
@@ -73,6 +73,36 @@ pub enum Resolved {
     RecordFlow(ResolvedRecordFlow),
     /// A resolved image placeholder: the classified reference + placement.
     Image(ResolvedImage),
+    /// A resolved barcode: the symbology + the value string to encode (§9.7).
+    Barcode(ResolvedBarcode),
+}
+
+/// A resolved barcode binding (spec §9.7). The binding expression resolved to a
+/// `value` string; the engine (`data-lower`) encodes it in `symbology` into the
+/// unit-box geometry and scales it to the bound `target` frame. `status`
+/// reflects the missing policy when the value is empty (`Present`/`Skipped`/
+/// `Flagged`). The encoding itself is NOT done here (data-bind stays free of the
+/// symbology encoders) — it carries the resolved value to the lowering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedBarcode {
+    pub target: data_core::FrameRef,
+    pub symbology: data_core::BarcodeSymbology,
+    /// The value the expression resolved to (empty when absent/null).
+    pub value: String,
+    /// Extra quiet-zone modules requested beyond the symbology default.
+    pub quiet_zone: u32,
+    pub status: BarcodeResolveStatus,
+}
+
+/// The resolution status of a barcode binding after the missing policy (§9.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarcodeResolveStatus {
+    /// A value resolved — the symbol is rendered.
+    Present,
+    /// Absent + the `Skip` policy — nothing rendered.
+    Skipped,
+    /// Absent + the `Flag` policy — flagged for review.
+    Flagged,
 }
 
 /// A resolved image binding (spec §9.2). The field value is classified into an
@@ -388,6 +418,22 @@ impl ResolutionEngine {
                 target.clone(),
                 expr,
                 policy,
+                records,
+                &self.params,
+                self.today,
+                self.locale,
+            )),
+            Binding::Barcode {
+                target,
+                symbology,
+                expr,
+                options,
+                ..
+            } => Resolved::Barcode(resolve_barcode(
+                target.clone(),
+                *symbology,
+                expr,
+                options,
                 records,
                 &self.params,
                 self.today,
@@ -796,6 +842,55 @@ fn resolve_image(
                 status,
             }
         }
+    }
+}
+
+/// Resolve a barcode binding (spec §9.7): evaluate the expression against the
+/// record into a value string; apply the missing policy when it is empty/null.
+/// The symbology encoding is NOT done here — the resolved value is carried to
+/// `data-lower` (which owns the encoders). Numbers/dates render through the
+/// DSL's display so an EAN expression like a numeric field formats to its digit
+/// string.
+#[allow(clippy::too_many_arguments)]
+fn resolve_barcode(
+    target: FrameRef,
+    symbology: BarcodeSymbology,
+    expr: &str,
+    options: &BarcodeOpts,
+    records: &RecordSet,
+    params: &HashMap<String, Value>,
+    today: i32,
+    locale: Locale,
+) -> ResolvedBarcode {
+    let value = if records.row_count == 0 {
+        Value::Null
+    } else {
+        let ctx = RowCtx {
+            records,
+            row: 0,
+            params,
+        };
+        eval_str(expr, &EvalCtx::new(&ctx, today).with_locale(locale))
+    };
+    let display = if value.is_null() {
+        String::new()
+    } else {
+        value.as_display()
+    };
+    let status = if display.is_empty() {
+        match options.missing {
+            BarcodeMissing::Skip => BarcodeResolveStatus::Skipped,
+            BarcodeMissing::Flag => BarcodeResolveStatus::Flagged,
+        }
+    } else {
+        BarcodeResolveStatus::Present
+    };
+    ResolvedBarcode {
+        target,
+        symbology,
+        value: display,
+        quiet_zone: options.quiet_zone,
+        status,
     }
 }
 

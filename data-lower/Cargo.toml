@@ -5,11 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "paged.data placeholder lowering (spec §9): pure resolved-content -> LoweredContent IR. Variable replacement (§9.1) + single-region dynamic table (§9.3, degraded to tab-text + rules per D-02). Content-space geometry (§9.6 — frame ops honored for free). Pure model->IR; depends ONLY on data-core."
+description = "paged.data placeholder lowering (spec §9): pure resolved-content -> LoweredContent IR. Variable replacement (§9.1) + single-region dynamic table (§9.3, degraded to tab-text + rules per D-02) + barcode/QR symbol modules (§9.7, the VECTOR lane via data-barcode). Content-space geometry (§9.6 — frame ops honored for free). Pure model->IR; depends on data-core + data-barcode."
 
 [lints]
 workspace = true
 
 [dependencies]
 data-core = { path = "../data-core" }
+data-barcode = { path = "../data-barcode" }
 serde.workspace = true

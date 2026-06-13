@@ -145,6 +145,23 @@ mod wasm {
             to_js(&flow)
         }
 
+        /// Resolve a barcode binding (§9.7) and lower it scaled to the bound
+        /// frame's content box (`box_w_pt` × `box_h_pt`, pt). Returns the
+        /// `LoweredBarcode` IR — filled-rect modules in content-space the bundle
+        /// emits as native `insertPath` rects (the VECTOR lane).
+        pub fn lower_barcode(
+            &mut self,
+            binding: &str,
+            box_w_pt: f64,
+            box_h_pt: f64,
+        ) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .lower_barcode_sized(&BindingId::from(binding), box_w_pt, box_h_pt)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
         /// Evaluate a data-driven formatting rule (§9.5) over a query's records:
         /// `{ scope, fires, apply, total }`.
         pub fn evaluate_rule(&self, rule: &str, query: &str) -> Result<JsValue, JsValue> {

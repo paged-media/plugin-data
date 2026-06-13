@@ -21,14 +21,19 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use data_automation::{plan_batch, BatchMode, BatchPlan};
-use data_bind::{ResolutionEngine, ResolveError, Resolved, ResolvedRecordFlow, RuleEvaluation};
+use data_barcode::{encode, Symbology};
+use data_bind::{
+    BarcodeResolveStatus, ResolutionEngine, ResolveError, Resolved, ResolvedBarcode,
+    ResolvedRecordFlow, RuleEvaluation,
+};
 use data_core::{
-    Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query, QueryId, RecordSet,
-    Schema, Status, StyleAction, SyncState, Template, Value,
+    BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
+    QueryId, RecordSet, Schema, Status, StyleAction, SyncState, Template, Value,
 };
 use data_lower::{
-    lower_image, lower_table, lower_variable, paginate_flow, FlowGroup, FlowLayoutOpts, FlowRecord,
-    FrameCapacity, LowerOpts, LoweredImage, LoweredTable, LoweredVariable, PaginatedFlow,
+    lower_barcode, lower_image, lower_table, lower_variable, paginate_flow, FlowGroup,
+    FlowLayoutOpts, FlowRecord, FrameCapacity, LowerOpts, LoweredBarcode, LoweredImage,
+    LoweredTable, LoweredVariable, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
 use data_sources::{
@@ -53,6 +58,52 @@ pub enum LoweredOutput {
     Variable(LoweredVariable),
     Table(LoweredTable),
     Image(LoweredImage),
+    Barcode(LoweredBarcode),
+}
+
+/// The default square content box (pt) a barcode lowers into when the bound
+/// frame's geometry is not supplied (mirrors the table's `defaultPlacement` —
+/// the bundle re-lowers with the real frame box via `lower_barcode`). 1-inch.
+const DEFAULT_BARCODE_BOX_PT: f64 = 72.0;
+
+/// Bridge the frozen `data-core` symbology to the `data-barcode` encoder enum.
+fn to_encoder_symbology(s: BarcodeSymbology) -> Symbology {
+    match s {
+        BarcodeSymbology::Ean13 => Symbology::Ean13,
+        BarcodeSymbology::UpcA => Symbology::UpcA,
+        BarcodeSymbology::Code128 => Symbology::Code128,
+        BarcodeSymbology::Qr => Symbology::Qr,
+    }
+}
+
+/// Encode a resolved barcode + scale it into a content box (spec §9.7). The
+/// missing policy already ran in `data-bind`: a `Skipped`/`Flagged` resolution
+/// (empty value) yields an empty-module lowering (nothing drawn), never an
+/// encoder error. A `Present` value that fails to encode (e.g. a non-numeric
+/// EAN) is a typed `SessionError` the panel surfaces.
+fn encode_barcode(
+    rb: &ResolvedBarcode,
+    box_w_pt: f64,
+    box_h_pt: f64,
+) -> Result<LoweredBarcode, SessionError> {
+    if rb.status != BarcodeResolveStatus::Present {
+        // Empty/absent value → an empty symbol (no modules), never an error.
+        return Ok(LoweredBarcode {
+            target: rb.target.clone(),
+            symbology: to_encoder_symbology(rb.symbology).id().to_string(),
+            modules: Vec::new(),
+            modules_x: 0,
+            modules_y: 0,
+            bounds: data_lower::ContentBox {
+                width_pt: box_w_pt,
+                height_pt: box_h_pt,
+            },
+            text: String::new(),
+        });
+    }
+    let geometry = encode(to_encoder_symbology(rb.symbology), &rb.value)
+        .map_err(|e| SessionError::Decode(e.to_string()))?;
+    Ok(lower_barcode(rb.target.clone(), &geometry, box_w_pt, box_h_pt))
 }
 
 /// The evaluation of a data-driven formatting rule (spec §9.5) crossed to the
@@ -240,12 +291,36 @@ impl DataSession {
                 img.fit,
                 img.status,
             ))),
+            // A barcode encodes + scales into a default 1-inch square box; the
+            // bundle re-lowers with the bound frame's real geometry via
+            // `lower_barcode_sized` (like the table's defaultPlacement → frame).
+            Resolved::Barcode(rb) => Ok(LoweredOutput::Barcode(encode_barcode(
+                &rb,
+                DEFAULT_BARCODE_BOX_PT,
+                DEFAULT_BARCODE_BOX_PT,
+            )?)),
             // A record flow needs a frame chain to paginate against — use
             // `lower_record_flow`. (The host frame-chain read is SDK-blocked,
             // D-12; the chain is caller-supplied until it lands.)
             Resolved::RecordFlow(_) => Err(SessionError::Decode(
                 "record flow: call lower_record_flow(id, chain)".to_string(),
             )),
+        }
+    }
+
+    /// Resolve a barcode binding and lower it scaled to the bound frame's actual
+    /// content box (spec §9.7). The bundle reads the frame's content-box size
+    /// (`elementGeometry`) and passes it here so the symbol fills the frame; the
+    /// modules are content-space (§9.6 — frame transforms honored for free).
+    pub fn lower_barcode_sized(
+        &mut self,
+        id: &BindingId,
+        box_w_pt: f64,
+        box_h_pt: f64,
+    ) -> Result<LoweredBarcode, SessionError> {
+        match self.engine.resolve(id)? {
+            Resolved::Barcode(rb) => encode_barcode(&rb, box_w_pt, box_h_pt),
+            _ => Err(SessionError::Decode("binding is not a barcode".to_string())),
         }
     }
 

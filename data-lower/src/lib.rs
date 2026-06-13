@@ -106,6 +106,85 @@ pub fn lower_image(
     }
 }
 
+// ── Barcode / QR symbol lowering (spec §9.7 — the VECTOR lane) ──────────────
+//
+// The catalog staple: a bound field value is encoded (data-barcode) into a
+// unit-box module/bar grid, then lowered to filled-rect VECTOR modules scaled
+// to the bound frame's content box. The bundle emits one native `insertPath`
+// filled rect per module — resolution-independent, no asset-store door (raster
+// is BLOCKED today: placeImage needs a resolvable uri; inline PNG bytes can't be
+// placed). Geometry is content-space (§9.6): rects are offsets from the
+// region's top-left, so frame transforms are honored for free.
+
+/// One filled-rect module of a lowered barcode (content-space, pt) — a corner
+/// `(x_pt, y_pt)` + a size. The bundle turns each into a closed 4-anchor
+/// `insertPath` filled rect.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BarcodeModule {
+    pub x_pt: f64,
+    pub y_pt: f64,
+    pub w_pt: f64,
+    pub h_pt: f64,
+}
+
+/// A lowered barcode (spec §9.7): the symbology's dark modules as filled rects
+/// in content-space, scaled to the bound frame's content box, plus the module
+/// grid (so the host can pixel-snap) and the human-readable text line (1D only;
+/// empty for QR). The host draws one filled rect per `module` and never a
+/// background rect (the light quiet zone is the empty frame).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoweredBarcode {
+    /// The bound frame the symbol renders onto.
+    pub target: FrameRef,
+    /// The registry/wire symbology id (`"ean13"`, `"upca"`, `"code128"`, `"qr"`).
+    pub symbology: String,
+    /// The dark modules as filled rects, content-space (pt), scaled to `bounds`.
+    pub modules: Vec<BarcodeModule>,
+    /// The module grid width/height (incl. quiet zone) — lets the host snap.
+    pub modules_x: u32,
+    pub modules_y: u32,
+    /// The content-space size the modules were scaled into (the frame content box).
+    pub bounds: ContentBox,
+    /// The human-readable line (1D digits/text; empty for QR).
+    pub text: String,
+}
+
+/// Lower a barcode geometry to content-space filled-rect modules scaled to the
+/// frame's content box (spec §9.7). The unit-box rects (x/y/w/h in [0,1]) are
+/// multiplied by `box_w_pt` / `box_h_pt`. Pure: the encoding already happened
+/// (data-barcode); this is the geometry scale into content-space.
+pub fn lower_barcode(
+    target: FrameRef,
+    geometry: &data_barcode::BarcodeGeometry,
+    box_w_pt: f64,
+    box_h_pt: f64,
+) -> LoweredBarcode {
+    let modules = geometry
+        .rects
+        .iter()
+        .map(|r| BarcodeModule {
+            x_pt: r.x * box_w_pt,
+            y_pt: r.y * box_h_pt,
+            w_pt: r.w * box_w_pt,
+            h_pt: r.h * box_h_pt,
+        })
+        .collect();
+    LoweredBarcode {
+        target,
+        symbology: geometry.symbology.id().to_string(),
+        modules,
+        modules_x: geometry.modules_x,
+        modules_y: geometry.modules_y,
+        bounds: ContentBox {
+            width_pt: box_w_pt,
+            height_pt: box_h_pt,
+        },
+        text: geometry.text.clone(),
+    }
+}
+
 /// A laid-out column (content-space).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
