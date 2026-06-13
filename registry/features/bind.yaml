@@ -59,6 +59,19 @@
   tests:
     rust: ["data-conformance/tests/bind.rs::data_bind_identity_diff"]
 
+- id: data.bind.change-report
+  title: Change-highlighting on refresh — per-binding "what changed since last sync" report (§8)
+  spec: plugin-data data-bind/src/diff.rs + data-js/src/core.rs (base-idea §8)
+  status: implemented
+  provenance:
+    [
+      "resolved_fingerprint(&Resolved) is a pure, locale-free, type-tagged identity of a binding's resolved content (the host-committed display: variable display+hidden, table grid, flow instances, image ref+status, barcode value+status); diff_resolved(before, after) compares two id->fingerprint snapshots into a ChangeReport (per-binding changed/unchanged/added/removed + rolled-up counts); resolve_content(id, record) is the read-only resolve core (does NOT mutate sync state) that fingerprint_all() snapshots over",
+      "data-js: DataSession.refresh_change_report() holds the last fingerprint snapshot, diffs current vs prior, updates it (first call = baseline added); does not drive the sync-state machine (it reports the delta, never clobbers); bundle session.refreshDiff() returns the report the panel renders as a change list",
+    ]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_change_report"]
+    vitest: ["packages/data-bundle/src/__tests__/change-report.test.ts"]
+
 - id: data.bind.invalidation
   title: ResolveStamp invalidation (only the affected cut goes stale)
   spec: plugin-data data-bind/src/lib.rs (base-idea §8)

@@ -27,6 +27,11 @@ export interface DataEngineLike {
    *  query's ingested result (`ColumnMapping[]`). Optional: absent on a wasm
    *  artifact built before the wizard lane (the panel degrades honestly). */
   query_mappings?(query: string): unknown;
+  /** §8 change report: diff every binding's current resolved content against the
+   *  previous report's snapshot — `{ entries, changed, unchanged, added,
+   *  removed }`. Call AFTER re-ingesting the queries. Optional: absent on a wasm
+   *  artifact built before the change-report lane (the panel degrades honestly). */
+  refresh_change_report?(): unknown;
   /** §9 record-preview stepper: resolve a binding against a chosen RECORD INDEX
    *  (`record`) and return its lowered IR — per-record kinds (variable/image)
    *  resolve over `records[record]`; a table renders in full. Optional: absent

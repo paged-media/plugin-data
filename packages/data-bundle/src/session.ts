@@ -187,6 +187,26 @@ export interface DatasetMetadata {
   }[];
 }
 
+/** §8 change report: one binding's entry — how its resolved content changed
+ *  across a refresh (`kind` is changed/unchanged/added/removed; `before`/`after`
+ *  are opaque resolved-content fingerprints, present on the side it resolved). */
+export interface BindingChange {
+  binding: string;
+  kind: "changed" | "unchanged" | "added" | "removed";
+  before?: string;
+  after?: string;
+}
+
+/** §8 change report ("what changed since last sync"): the per-binding entries +
+ *  rolled-up counts the panel headlines. */
+export interface ChangeReport {
+  entries: BindingChange[];
+  changed: number;
+  unchanged: number;
+  added: number;
+  removed: number;
+}
+
 /** The §7 governed catalog the engine builds — the live schema enriched with the
  *  sidecar (documented columns) plus governance-drift diagnostics. */
 export interface GovernedCatalog {
@@ -286,6 +306,19 @@ export interface DataSourceSession {
   /** Re-run every query through DuckDB and ingest the results (no document
    *  writes) — updates sync states. */
   refreshData(): Promise<void>;
+  /** §8 change report — "what changed since last sync". Diffs every binding's
+   *  CURRENT resolved content against the snapshot from the previous report and
+   *  returns a per-binding changed / unchanged / added / removed summary (+
+   *  counts). Call AFTER `refreshData` (so "current" reflects the fresh data).
+   *  The first call reports every binding as `added` (the baseline); a caller
+   *  that wants the baseline silent primes it once (see `primeChangeBaseline`).
+   *  Returns an empty report honestly when the engine wasm predates the lane. */
+  refreshDiff(): Promise<ChangeReport>;
+  /** §8: prime the change-report baseline (one discarded `refreshDiff`) so the
+   *  NEXT `refreshDiff` reports real deltas instead of the initial all-`added`
+   *  baseline — call after the first lower, when the document already reflects
+   *  the current data. */
+  primeChangeBaseline(): Promise<void>;
   /** Resolve a binding and commit its lowered content to the document. */
   lowerBinding(id: string): Promise<void>;
   /** Refresh, then resolve + commit every binding. */
@@ -715,6 +748,38 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         state.message = err instanceof Error ? err.message : String(err);
         host.log.warn(`refreshData: ${state.message}`);
       }
+    },
+
+    async refreshDiff() {
+      // §8 change report: the engine fingerprints every binding's current
+      // resolved content and diffs it against the previous report's snapshot. We
+      // call it AFTER refreshData so "current" reflects the fresh data.
+      const empty: ChangeReport = { entries: [], changed: 0, unchanged: 0, added: 0, removed: 0 };
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch {
+        return empty;
+      }
+      if (typeof e.refresh_change_report !== "function") return empty;
+      try {
+        const report = (e.refresh_change_report() as ChangeReport | null) ?? empty;
+        state.message =
+          `Change report: ${report.changed} changed, ${report.unchanged} unchanged` +
+          (report.added ? `, ${report.added} added` : "") +
+          (report.removed ? `, ${report.removed} removed` : "") +
+          ".";
+        return report;
+      } catch (err) {
+        host.log.warn(`refreshDiff: ${String(err)}`);
+        return empty;
+      }
+    },
+
+    async primeChangeBaseline() {
+      // One discarded report so the NEXT refreshDiff shows real deltas, not the
+      // initial all-`added` baseline.
+      await this.refreshDiff();
     },
 
     async lowerBinding(id) {

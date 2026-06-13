@@ -10,7 +10,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 import type { IdmlFit } from "@paged-media/data-host-model";
 
-import type { BarcodeSymbology, ColumnMapping, DataSourceSession } from "../session";
+import type { BarcodeSymbology, ChangeReport, ColumnMapping, DataSourceSession } from "../session";
 
 /** The IDML FittingOnEmptyFrame choices an image binding offers (D-14). */
 const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
@@ -60,7 +60,17 @@ export function makeBindingsPanel(
     // §9 field-mapping wizard: the engine's column → binding suggestions.
     const [mappings, setMappings] = useState<ColumnMapping[]>([]);
     const [chosen, setChosen] = useState<Set<string>>(new Set());
+    // §8 change report: "what changed since last sync".
+    const [changes, setChanges] = useState<ChangeReport | null>(null);
     const refresh = () => setSnapshot(session.getState());
+
+    /** Refresh the data, then show the per-binding change report (§8). */
+    async function refreshAndReport(): Promise<void> {
+      await session.refreshData();
+      const report = await session.refreshDiff();
+      setChanges(report);
+      refresh();
+    }
 
     /** First-run import affordance (§9): refresh the demo query, then ask the
      *  engine for the source's columns → variable-binding suggestions. The
@@ -209,6 +219,15 @@ export function makeBindingsPanel(
           </button>
           <button
             type="button"
+            title="Refresh, then show what changed since the last sync (§8)"
+            onClick={() => {
+              void refreshAndReport();
+            }}
+          >
+            What changed?
+          </button>
+          <button
+            type="button"
             onClick={() => {
               void session.lowerAll().then(refresh);
             }}
@@ -306,6 +325,36 @@ export function makeBindingsPanel(
                 )}
               </label>
             ))}
+          </div>
+        )}
+        {changes && (
+          <div data-testid="change-report" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <strong>
+              changed since last sync: {changes.changed} changed · {changes.unchanged} unchanged
+              {changes.added ? ` · ${changes.added} added` : ""}
+              {changes.removed ? ` · ${changes.removed} removed` : ""}
+            </strong>
+            {changes.entries
+              .filter((c) => c.kind !== "unchanged")
+              .map((c) => (
+                <span
+                  key={c.binding}
+                  data-change-kind={c.kind}
+                  style={{
+                    color:
+                      c.kind === "changed"
+                        ? "var(--status-warn, #c80)"
+                        : c.kind === "added"
+                          ? "var(--status-ok, #2a2)"
+                          : "var(--status-error, #c33)",
+                  }}
+                >
+                  {c.binding}: {c.kind}
+                </span>
+              ))}
+            {changes.changed + changes.added + changes.removed === 0 && (
+              <span style={note}>nothing changed — every bound region is up to date.</span>
+            )}
           </div>
         )}
         <div>

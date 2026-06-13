@@ -205,6 +205,85 @@ fn data_bind_identity_diff_minimal() {
 }
 
 #[test]
+fn data_bind_change_report_resolved_diff() {
+    // The §8 refresh change report ("what changed since last sync"): fingerprint
+    // every binding's resolved content before vs after a refresh and surface a
+    // per-binding changed / unchanged / added / removed summary.
+    use data_bind::{diff_resolved, resolved_fingerprint, ChangeKind};
+    use std::collections::HashMap;
+
+    let mut e = ResolutionEngine::new(today());
+    e.add_query(query("q1", ResultShape::SingleRecord));
+    // Two variable bindings off the same query: one will change, one won't.
+    for (id, expr) in [("v_name", "name"), ("v_const", "\"fixed\"")] {
+        e.add_binding(
+            BindingId::from(id),
+            Binding::Variable {
+                target: PlaceholderRef::from(id),
+                query: QueryId::from("q1"),
+                expr: expr.into(),
+                missing: MissingPolicy::Blank,
+            },
+        );
+    }
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(&[("name", FieldType::Text)], vec![vec![t("alpha")]]),
+    );
+
+    // BEFORE snapshot: fingerprint each binding's resolved content (read-only —
+    // resolve_content never mutates sync state).
+    let snap = |eng: &ResolutionEngine| -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        for id in ["v_name", "v_const"] {
+            let r = eng.resolve_content(&BindingId::from(id), 0).unwrap();
+            m.insert(id.to_string(), resolved_fingerprint(&r));
+        }
+        m
+    };
+    let before = snap(&e);
+
+    // Refresh with changed data for `name` (v_name changes, v_const does not).
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(&[("name", FieldType::Text)], vec![vec![t("beta")]]),
+    );
+    let after = snap(&e);
+
+    let report = diff_resolved(&before, &after);
+    assert_eq!(report.changed, 1);
+    assert_eq!(report.unchanged, 1);
+    assert_eq!(report.added, 0);
+    assert_eq!(report.removed, 0);
+    // Entries are sorted by id: v_const (unchanged) then v_name (changed).
+    let kinds: Vec<(&str, ChangeKind)> = report
+        .entries
+        .iter()
+        .map(|c| (c.binding.as_str(), c.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ("v_const", ChangeKind::Unchanged),
+            ("v_name", ChangeKind::Changed),
+        ]
+    );
+
+    // The session-level convenience (fingerprint_all) snapshots all resolvables
+    // at once and feeds the same diff.
+    let all = e.fingerprint_all();
+    assert_eq!(all.len(), 2);
+
+    // An absent-before / present-after binding is `Added`; the reverse `Removed`.
+    let mut b2 = before.clone();
+    b2.remove("v_name"); // pretend v_name did not exist before
+    let r2 = diff_resolved(&b2, &after);
+    assert_eq!(r2.added, 1); // v_name newly resolved
+    let r3 = diff_resolved(&after, &b2);
+    assert_eq!(r3.removed, 1); // v_name went away
+}
+
+#[test]
 fn data_bind_invalidation_affected_cut() {
     let mut e = ResolutionEngine::new(today());
     e.add_query(query("q1", ResultShape::SingleRecord));

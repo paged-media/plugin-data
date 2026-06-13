@@ -141,6 +141,16 @@ mod wasm {
             to_js(&out)
         }
 
+        /// The §8 refresh change report — "what changed since last sync".
+        /// Fingerprints every binding's current resolved content and diffs it
+        /// against the previous report's snapshot: `{ entries: [{binding, kind,
+        /// before?, after?}], changed, unchanged, added, removed }`. Call AFTER
+        /// re-ingesting the queries; the first call reports every binding as
+        /// `added` (the baseline). Does not mutate sync states.
+        pub fn refresh_change_report(&mut self) -> JsValue {
+            to_js(&self.session.refresh_change_report()).unwrap_or(JsValue::NULL)
+        }
+
         /// Resolve a binding against a chosen RECORD INDEX and return its lowered
         /// IR — the §9 record-preview stepper. Per-record kinds (variable/image)
         /// evaluate over `records[record]`; a table renders in full.

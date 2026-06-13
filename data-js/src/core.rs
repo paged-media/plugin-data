@@ -17,14 +17,16 @@
 //! exercises it WITHOUT a wasm runtime. The `#[wasm_bindgen]` `DataEngine`
 //! (in `lib.rs`) is a forwarding shim over this; nothing computes there.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_barcode::{encode, Symbology};
 use data_bind::{
-    suggest_mappings, BarcodeResolveStatus, ColumnMapping, ResolutionEngine, ResolveError,
-    Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
+    diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
+    ResolutionEngine, ResolveError, Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
 };
 use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
@@ -205,6 +207,35 @@ pub struct SyncEntry {
     pub status: Status,
 }
 
+/// One binding's entry in the §8 refresh change report crossed to the host
+/// (`{binding, kind, before, after}`). `kind` is `"changed"`/`"unchanged"`/
+/// `"added"`/`"removed"`; `before`/`after` are the opaque resolved-content
+/// fingerprints (present on the side the binding resolved on) — the panel keys
+/// off `kind` and may show the fingerprints as an audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeEntry {
+    pub binding: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+/// The §8 refresh change report ("what changed since last sync"): per-binding
+/// entries + rolled-up counts the panel headlines. Diffed from the resolved
+/// content of every binding before vs after a refresh — pure, deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeReportOut {
+    pub entries: Vec<ChangeEntry>,
+    pub changed: usize,
+    pub unchanged: usize,
+    pub added: usize,
+    pub removed: usize,
+}
+
 /// The full engine session.
 pub struct DataSession {
     engine: ResolutionEngine,
@@ -213,6 +244,11 @@ pub struct DataSession {
     templates: Vec<Template>,
     bindings: Vec<BindingDef>,
     today: i32,
+    /// The last per-binding resolved-content fingerprint snapshot (§8 change
+    /// report). `refresh_change_report` diffs the current resolution against this
+    /// then updates it; `None` until the first report (where every binding shows
+    /// as `added` — the baseline).
+    last_fingerprints: Option<HashMap<String, String>>,
 }
 
 impl DataSession {
@@ -225,6 +261,7 @@ impl DataSession {
             templates: Vec::new(),
             bindings: Vec::new(),
             today,
+            last_fingerprints: None,
         }
     }
 
@@ -298,6 +335,46 @@ impl DataSession {
             SessionError::Decode(format!("no result ingested for query '{query_id}'"))
         })?;
         Ok(suggest_mappings(&records.schema))
+    }
+
+    /// The §8 refresh change report — "what changed since last sync". Fingerprints
+    /// every binding's CURRENT resolved content and diffs it against the snapshot
+    /// taken at the previous report, then stores the new snapshot. The bundle
+    /// calls this AFTER re-ingesting the queries (so "current" reflects the fresh
+    /// data): the result is a per-binding changed / unchanged / added / removed
+    /// summary the panel renders. Read-only over the resolution graph — it does
+    /// NOT mutate sync states (the sync-state machine is driven by `set_result` /
+    /// `resolve`; the change report only describes the delta). The FIRST call (no
+    /// prior snapshot) reports every binding as `added` — the baseline; a caller
+    /// that wants the baseline silent can prime it with one discarded call after
+    /// the first lower.
+    pub fn refresh_change_report(&mut self) -> ChangeReportOut {
+        let current = self.engine.fingerprint_all();
+        let before = self.last_fingerprints.take().unwrap_or_default();
+        let report = diff_resolved(&before, &current);
+        self.last_fingerprints = Some(current);
+        ChangeReportOut {
+            entries: report
+                .entries
+                .into_iter()
+                .map(|e| ChangeEntry {
+                    binding: e.binding,
+                    kind: match e.kind {
+                        ChangeKind::Changed => "changed",
+                        ChangeKind::Unchanged => "unchanged",
+                        ChangeKind::Added => "added",
+                        ChangeKind::Removed => "removed",
+                    }
+                    .to_string(),
+                    before: e.before,
+                    after: e.after,
+                })
+                .collect(),
+            changed: report.changed,
+            unchanged: report.unchanged,
+            added: report.added,
+            removed: report.removed,
+        }
     }
 
     /// Resolve a binding against a chosen RECORD INDEX and lower it — the §9

@@ -43,7 +43,9 @@ use data_core::{
 use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
 use data_query::{content_hash, stabilize, stamp};
 
-pub use diff::{diff, RowDelta};
+pub use diff::{
+    diff, diff_resolved, resolved_fingerprint, BindingChange, ChangeKind, ChangeReport, RowDelta,
+};
 pub use mapping::{suggest_mappings, ColumnMapping};
 
 /// A row + parameter view for expression evaluation: the field source is one
@@ -375,11 +377,40 @@ impl ResolutionEngine {
         id: &BindingId,
         record: usize,
     ) -> Result<Resolved, ResolveError> {
+        let resolved = self.resolve_content(id, record)?;
+        // Stamp + relink (non-destructive policy already protected pinned/
+        // overridden by short-circuiting before a manual resolve is requested;
+        // an explicit resolve is the user action that re-links).
+        let query_id = self
+            .bindings
+            .get(id)
+            .and_then(|b| b.query())
+            .expect("resolve_content already validated the binding + its query")
+            .clone();
+        let stamp = self.stamp_for(&query_id);
+        let st = self
+            .sync
+            .entry(id.clone())
+            .or_insert_with(SyncState::linked);
+        st.status = Status::Linked;
+        st.last_resolved = Some(stamp);
+        Ok(resolved)
+    }
+
+    /// Build a binding's resolved content WITHOUT touching the sync state — the
+    /// read-only core shared by [`resolve_at`](Self::resolve_at) and the §8
+    /// refresh change report ([`fingerprint_all`](Self::fingerprint_all)). A
+    /// change report must NOT mutate sync states (it only reports what a refresh
+    /// would change), so it resolves through here, never `resolve_at`.
+    pub fn resolve_content(
+        &self,
+        id: &BindingId,
+        record: usize,
+    ) -> Result<Resolved, ResolveError> {
         let binding = self
             .bindings
             .get(id)
-            .ok_or_else(|| ResolveError::UnknownBinding(id.clone()))?
-            .clone();
+            .ok_or_else(|| ResolveError::UnknownBinding(id.clone()))?;
         let query_id = binding
             .query()
             .ok_or_else(|| ResolveError::NoQuery(id.clone()))?;
@@ -389,7 +420,7 @@ impl ResolutionEngine {
             .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
         let query = self.queries.get(query_id);
 
-        let resolved = match &binding {
+        let resolved = match binding {
             Binding::Variable {
                 target,
                 expr,
@@ -474,18 +505,25 @@ impl ResolutionEngine {
             )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
-
-        // Stamp + relink (non-destructive policy already protected pinned/
-        // overridden by short-circuiting before a manual resolve is requested;
-        // an explicit resolve is the user action that re-links).
-        let stamp = self.stamp_for(query_id);
-        let st = self
-            .sync
-            .entry(id.clone())
-            .or_insert_with(SyncState::linked);
-        st.status = Status::Linked;
-        st.last_resolved = Some(stamp);
         Ok(resolved)
+    }
+
+    /// The §8 refresh change report: fingerprint every RESOLVABLE binding's
+    /// current resolved content (record 0 for the per-record kinds), returning a
+    /// `binding id → fingerprint` snapshot. Read-only — it does NOT mutate sync
+    /// states (a change report only reports what a refresh would change). A
+    /// binding that cannot resolve right now (no query / no result / a rule) is
+    /// omitted, so a binding present in a BEFORE snapshot but absent in the AFTER
+    /// shows up as `Removed` in [`diff_resolved`]. Pair two snapshots (before vs
+    /// after `set_result`) through [`diff_resolved`] for the per-binding report.
+    pub fn fingerprint_all(&self) -> HashMap<String, String> {
+        let mut out = HashMap::with_capacity(self.bindings.len());
+        for id in self.bindings.keys() {
+            if let Ok(resolved) = self.resolve_content(id, 0) {
+                out.insert(id.to_string(), resolved_fingerprint(&resolved));
+            }
+        }
+        out
     }
 
     /// Evaluate a data-driven formatting rule (spec §9.5) over a query's records.
