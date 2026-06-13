@@ -10,7 +10,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 import type { IdmlFit } from "@paged-media/data-host-model";
 
-import type { BarcodeSymbology, DataSourceSession } from "../session";
+import type { BarcodeSymbology, ColumnMapping, DataSourceSession } from "../session";
 
 /** The IDML FittingOnEmptyFrame choices an image binding offers (D-14). */
 const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
@@ -57,7 +57,36 @@ export function makeBindingsPanel(
     // §9 record-preview stepper: walk the demo query's records before a batch run.
     const [previewIndex, setPreviewIndex] = useState(0);
     const [recordTotal, setRecordTotal] = useState(0);
+    // §9 field-mapping wizard: the engine's column → binding suggestions.
+    const [mappings, setMappings] = useState<ColumnMapping[]>([]);
+    const [chosen, setChosen] = useState<Set<string>>(new Set());
     const refresh = () => setSnapshot(session.getState());
+
+    /** First-run import affordance (§9): refresh the demo query, then ask the
+     *  engine for the source's columns → variable-binding suggestions. The
+     *  author picks which to wire (mappable columns default to checked). */
+    async function openWizard(): Promise<void> {
+      const source = session.getState().sources[0];
+      if (!source) {
+        host.log.warn("field-mapping wizard: import a CSV source first");
+        return;
+      }
+      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
+      await session.refreshData();
+      const cols = await session.queryMappings("q_all");
+      setMappings(cols);
+      setChosen(new Set(cols.filter((c) => c.mappable).map((c) => c.column)));
+      refresh();
+    }
+
+    /** Generate variable bindings for the chosen mappable columns (§9). */
+    function confirmWizard(): void {
+      const picked = mappings.filter((m) => chosen.has(m.column));
+      session.applyMappings("q_all", picked);
+      setMappings([]);
+      setChosen(new Set());
+      refresh();
+    }
 
     /** Resolve the demo query against the stepped-to record and commit the
      *  preview (the SAME lower lanes a batch run uses). Re-reads the record
@@ -236,6 +265,49 @@ export function makeBindingsPanel(
             />
           </label>
         </div>
+        <div style={row} data-testid="field-mapping-wizard">
+          <button
+            type="button"
+            title="Map the source's columns to variable bindings (§9 field-mapping wizard)"
+            onClick={() => {
+              void openWizard();
+            }}
+          >
+            Map fields…
+          </button>
+          {mappings.length > 0 && (
+            <button type="button" onClick={confirmWizard} data-testid="wizard-confirm">
+              Create {chosen.size} binding{chosen.size === 1 ? "" : "s"}
+            </button>
+          )}
+        </div>
+        {mappings.length > 0 && (
+          <div data-testid="wizard-columns" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            {mappings.map((m) => (
+              <label key={m.column} style={note} title={m.mappable ? m.expr : "needs a manual expression"}>
+                <input
+                  type="checkbox"
+                  disabled={!m.mappable}
+                  checked={chosen.has(m.column)}
+                  onChange={(e) => {
+                    setChosen((prev) => {
+                      const nextSet = new Set(prev);
+                      if (e.target.checked) nextSet.add(m.column);
+                      else nextSet.delete(m.column);
+                      return nextSet;
+                    });
+                  }}
+                />{" "}
+                {m.header} <span style={{ opacity: 0.6 }}>({m.fieldType})</span> →{" "}
+                {m.mappable ? (
+                  <code>{m.expr}</code>
+                ) : (
+                  <span style={{ color: "var(--status-warn, #c80)" }}>manual expr needed</span>
+                )}
+              </label>
+            ))}
+          </div>
+        )}
         <div>
           bindings:{" "}
           {snapshot.bindings.length === 0 ? (

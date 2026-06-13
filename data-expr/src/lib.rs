@@ -46,6 +46,31 @@ mod generated {
 }
 pub use generated::dispatch;
 
+/// Whether `name` is a valid BARE field reference in the DSL — i.e. an
+/// expression that is exactly this identifier resolves to `field(name)`. The
+/// grammar (see [`lexer`]) admits an identifier of `[A-Za-z_][A-Za-z0-9_]*`;
+/// the three reserved words `TRUE`/`FALSE`/`NULL` parse as literals, not fields,
+/// so a column literally named one of those is NOT bare-referenceable. The DSL
+/// has NO bracketed/quoted field syntax, so a column name with spaces or
+/// punctuation cannot be referenced as a bare field either — the field-mapping
+/// wizard (§ data.bind.field-mapping) uses this to flag a column as mappable or
+/// needing a manual expression (it never invents a quoting syntax the grammar
+/// does not have).
+pub fn is_field_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false; // empty
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    if !chars.all(|c| c.is_alphanumeric() || c == '_') {
+        return false;
+    }
+    // A bare TRUE/FALSE/NULL parses as a literal, not a field reference.
+    !matches!(name, "TRUE" | "FALSE" | "NULL")
+}
+
 /// Parse + evaluate an expression source string against a context in one call
 /// (the common path). A parse error surfaces as a `#PARSE`/`#NAME` value so
 /// resolution never panics on a bad binding (the value is diagnostic data).

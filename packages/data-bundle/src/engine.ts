@@ -23,6 +23,10 @@ export interface DataEngineLike {
    *  stepper's "of N" upper bound (0 before a refresh). Optional: a wasm
    *  artifact built before the preview lane lacks it. */
   query_record_count?(query: string): number;
+  /** §9 field-mapping wizard: the column → variable-binding suggestions for a
+   *  query's ingested result (`ColumnMapping[]`). Optional: absent on a wasm
+   *  artifact built before the wizard lane (the panel degrades honestly). */
+  query_mappings?(query: string): unknown;
   /** §9 record-preview stepper: resolve a binding against a chosen RECORD INDEX
    *  (`record`) and return its lowered IR — per-record kinds (variable/image)
    *  resolve over `records[record]`; a table renders in full. Optional: absent

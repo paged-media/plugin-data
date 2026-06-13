@@ -22,6 +22,19 @@
     rust: ["data-conformance/tests/bind.rs::data_bind_preview_step_record"]
     vitest: ["packages/data-bundle/src/__tests__/preview.test.ts"]
 
+- id: data.bind.field-mapping
+  title: Field-mapping wizard — map the source's columns → variable bindings one-click (§9)
+  spec: plugin-data data-bind/src/mapping.rs + data-expr/src/lib.rs (is_field_ident) (base-idea §9 first-run import affordance)
+  status: implemented
+  provenance:
+    [
+      "suggest_mappings(schema) is a pure schema -> ColumnMapping[] kernel: one row per result column with a humanised header (unit_price -> Unit Price), the bound expression = the bare field reference, the logical type hint, and a mappable flag; mappability is data-expr::is_field_ident (the DSL grammar mirror) — the DSL has NO quoted/bracketed field syntax, so a column whose name is not a bare identifier (space/punctuation/leading digit/reserved TRUE/FALSE/NULL) is flagged non-mappable with an empty expr (the wizard asks for a manual expression, never invents a quoting grammar)",
+      "bundle: session.queryMappings(query) returns the suggestions; the field-mapping wizard panel renders the header -> binding mapping UI and, on confirm, generates each variable binding from the engine-computed expr (the data semantics stay in Rust; the bundle never decides the mapping)",
+    ]
+  tests:
+    rust: ["data-conformance/tests/mapping.rs::data_bind_field_mapping"]
+    vitest: ["packages/data-bundle/src/__tests__/mapping.test.ts"]
+
 - id: data.bind.resolve-table
   title: Resolve a single-region dynamic table (per-record column expressions)
   spec: plugin-data data-bind/src/lib.rs (base-idea §9.3)

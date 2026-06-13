@@ -314,6 +314,7 @@ dependencies = [
  "data-core",
  "data-expr",
  "data-query",
+ "serde",
  "thiserror",
 ]
 

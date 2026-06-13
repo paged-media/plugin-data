@@ -118,6 +118,25 @@ export interface ColumnSpec {
   expr: string;
 }
 
+/** §9 field-mapping wizard: one source column's suggested variable-binding
+ *  mapping, computed by the engine (`ColumnMapping` — the data semantics stay in
+ *  Rust). The wizard renders these and, on confirm, generates a variable binding
+ *  from `expr`. */
+export interface ColumnMapping {
+  /** The source column name (verbatim). */
+  column: string;
+  /** A humanised header label suggestion (`unit_price` → `Unit Price`). */
+  header: string;
+  /** The bound expression = a bare field reference, or "" when not mappable. */
+  expr: string;
+  /** The column's logical type (`"text"`,`"float"`,…) — a kind hint. */
+  fieldType: string;
+  /** Whether the column is one-click mappable (its name is a bare DSL field
+   *  identifier); false → the DSL cannot reference it bare, a manual expression
+   *  is needed (the wizard never invents a quoting syntax the grammar lacks). */
+  mappable: boolean;
+}
+
 /** The barcode symbologies a barcode binding can render (§9.7) — mirrors the
  *  Rust `BarcodeSymbology` wire enum. */
 export type BarcodeSymbology = "ean13" | "upca" | "code128" | "qr";
@@ -276,6 +295,24 @@ export interface DataSourceSession {
    *  first (`refreshData`); 0 before that. Returns 0 honestly when the engine
    *  wasm predates the preview lane. */
   recordCount(queryId: string): Promise<number>;
+  /** §9 field-mapping wizard: the engine's column → variable-binding suggestions
+   *  for a query's ingested result. Requires the query's result to be ingested
+   *  first (`refreshData`); returns `[]` honestly when no result is ingested or
+   *  the engine wasm predates the wizard lane. The wizard renders these and, on
+   *  confirm, calls `addVariableBinding` with each suggestion's engine-computed
+   *  `expr` — the bundle never decides the mapping (data semantics stay in Rust). */
+  queryMappings(queryId: string): Promise<ColumnMapping[]>;
+  /** §9 field-mapping wizard: generate variable bindings from the wizard's
+   *  confirmed mappings in one call — for each MAPPABLE column it defines a
+   *  variable binding (id `<prefix><column>`) bound to `query`, with the
+   *  engine-computed `expr`. Non-mappable columns are skipped (they need a manual
+   *  expression). Returns the ids it generated. A convenience over per-column
+   *  `addVariableBinding`; the panel can also wire columns individually. */
+  applyMappings(
+    queryId: string,
+    mappings: ColumnMapping[],
+    options?: { idPrefix?: string; target?: string },
+  ): string[];
   /** §9 record-preview stepper: "show the document resolved against record N".
    *  Resolves the binding against the chosen RECORD INDEX (per-record kinds
    *  — variable / image / barcode — evaluate over `records[record]`; a table
@@ -771,6 +808,43 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       } catch {
         return 0;
       }
+    },
+
+    async queryMappings(queryId) {
+      // §9 field-mapping wizard: the engine computes the column → binding
+      // suggestions from the ingested result's schema (the data semantics stay
+      // in Rust). Empty (honest) when no result is ingested or the wasm predates
+      // the lane.
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch {
+        return [];
+      }
+      if (typeof e.query_mappings !== "function") return [];
+      try {
+        return (e.query_mappings(queryId) as ColumnMapping[] | null) ?? [];
+      } catch (err) {
+        host.log.warn(`queryMappings(${queryId}): ${String(err)}`);
+        return [];
+      }
+    },
+
+    applyMappings(queryId, mappings, options) {
+      // §9 field-mapping wizard confirm: generate a variable binding per MAPPABLE
+      // column from the engine-computed expr. Non-mappable columns (no bare DSL
+      // reference) are skipped — they need a manual expression. The bundle does
+      // not decide the expr; it only wires what the engine suggested.
+      const prefix = options?.idPrefix ?? "v_";
+      const target = options?.target ?? "anchor";
+      const generated: string[] = [];
+      for (const m of mappings) {
+        if (!m.mappable || m.expr === "") continue;
+        const id = `${prefix}${m.column}`;
+        this.addVariableBinding(id, target, queryId, m.expr);
+        generated.push(id);
+      }
+      return generated;
     },
 
     async previewRecord(bindingId, record) {

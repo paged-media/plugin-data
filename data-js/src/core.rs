@@ -23,8 +23,8 @@ use thiserror::Error;
 use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_barcode::{encode, Symbology};
 use data_bind::{
-    BarcodeResolveStatus, ResolutionEngine, ResolveError, Resolved, ResolvedBarcode,
-    ResolvedRecordFlow, RuleEvaluation,
+    suggest_mappings, BarcodeResolveStatus, ColumnMapping, ResolutionEngine, ResolveError,
+    Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
 };
 use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
@@ -283,6 +283,21 @@ impl DataSession {
     /// first).
     pub fn query_record_count(&self, query: &QueryId) -> usize {
         self.engine.record_count(query)
+    }
+
+    /// The field-mapping wizard's column suggestions for a query's ingested
+    /// result (spec §9): one [`ColumnMapping`] per result column — a humanised
+    /// header, the bare-field-reference expression (when the name is a valid DSL
+    /// identifier), the logical type, and a `mappable` flag. The bundle renders
+    /// these as a header → variable-binding mapping UI and, on confirm, generates
+    /// each binding from the engine-computed `expr` (never deciding the mapping
+    /// itself — the data semantics stay in Rust). Errors if the query has no
+    /// ingested result yet (the wizard maps a real schema; `refreshData` first).
+    pub fn query_mappings(&self, query_id: &QueryId) -> Result<Vec<ColumnMapping>, SessionError> {
+        let records = self.engine.result(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        Ok(suggest_mappings(&records.schema))
     }
 
     /// Resolve a binding against a chosen RECORD INDEX and lower it — the §9

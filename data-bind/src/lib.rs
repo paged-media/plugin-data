@@ -28,6 +28,7 @@
 //!   deltas (insert/update/remove), keeping pagination stable and undo granular.
 
 pub mod diff;
+pub mod mapping;
 
 use std::collections::HashMap;
 
@@ -43,6 +44,7 @@ use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
 use data_query::{content_hash, stabilize, stamp};
 
 pub use diff::{diff, RowDelta};
+pub use mapping::{suggest_mappings, ColumnMapping};
 
 /// A row + parameter view for expression evaluation: the field source is one
 /// row of a resolved [`RecordSet`]; params come from the engine's bound set.

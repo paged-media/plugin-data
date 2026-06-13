@@ -129,6 +129,18 @@ mod wasm {
             self.session.query_record_count(&QueryId::from(query))
         }
 
+        /// The §9 field-mapping wizard's column suggestions for a query's
+        /// ingested result: `ColumnMapping[]` (`{column, header, expr, fieldType,
+        /// mappable}`). The bundle renders the header → variable-binding mapping
+        /// UI and generates each binding from the engine-computed `expr`.
+        pub fn query_mappings(&self, query: &str) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .query_mappings(&QueryId::from(query))
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
         /// Resolve a binding against a chosen RECORD INDEX and return its lowered
         /// IR — the §9 record-preview stepper. Per-record kinds (variable/image)
         /// evaluate over `records[record]`; a table renders in full.
