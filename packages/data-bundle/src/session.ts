@@ -271,6 +271,19 @@ export interface DataSourceSession {
   lowerBinding(id: string): Promise<void>;
   /** Refresh, then resolve + commit every binding. */
   lowerAll(): Promise<void>;
+  /** §9 record-preview stepper: the count of records ingested for a query — the
+   *  stepper's "of N" upper bound. Requires the query's result to be ingested
+   *  first (`refreshData`); 0 before that. Returns 0 honestly when the engine
+   *  wasm predates the preview lane. */
+  recordCount(queryId: string): Promise<number>;
+  /** §9 record-preview stepper: "show the document resolved against record N".
+   *  Resolves the binding against the chosen RECORD INDEX (per-record kinds
+   *  — variable / image / barcode — evaluate over `records[record]`; a table
+   *  renders in full) and commits it through the SAME lower lanes a normal lower
+   *  uses, so stepping the preview shows exactly what a per-record batch run will
+   *  generate for that record. Falls back to the record-0 resolve when the engine
+   *  wasm predates the preview lane (honest, never faked). */
+  previewRecord(bindingId: string, record: number): Promise<void>;
   /** D-01 refresh loop: re-enumerate the document's placeholder FIELDS
    *  (`host.document.placeholders()`, fresh-read addresses), resolve each
    *  `{plugin:"media.paged.data", key}` against its binding's expression, and
@@ -740,6 +753,99 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       await this.refreshData();
       for (const id of [...bindingIds]) {
         await this.lowerBinding(id);
+      }
+    },
+
+    async recordCount(queryId) {
+      // §9 stepper bound: the engine reports how many records are ingested for
+      // the query (0 before a refresh, or on an engine wasm without the lane).
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch {
+        return 0;
+      }
+      if (typeof e.query_record_count !== "function") return 0;
+      try {
+        return e.query_record_count(queryId);
+      } catch {
+        return 0;
+      }
+    },
+
+    async previewRecord(bindingId, record) {
+      // §9 record-preview stepper: resolve the binding against the chosen record
+      // index and commit it through the normal lower lanes. A barcode needs the
+      // frame box, an image its bound rectangle, a variable a placed field — the
+      // same targets a normal lower uses, so the preview and the batch output are
+      // the same content for that record.
+      try {
+        const e = await ensureEngine();
+        const kind = bindingKinds.get(bindingId);
+
+        // Barcode: re-encode for the previewed record, scaled to its frame box.
+        if (kind === "barcode") {
+          const tgt = barcodeTargets.get(bindingId);
+          let boxW = 72;
+          let boxH = 72;
+          if (tgt) {
+            const geom = await host.document.elementGeometry([
+              { kind: "rectangle", id: tgt.elementId } as ElementId,
+            ]);
+            const bounds = geom[0]?.bounds as [number, number, number, number] | undefined;
+            if (bounds) {
+              const [top, left, bottom, right] = bounds;
+              boxW = Math.max(1, right - left);
+              boxH = Math.max(1, bottom - top);
+            }
+          }
+          // The preview-aware lower (`lower_barcode_at`) falls back to the
+          // record-0 `lower_barcode` when the wasm predates the lane.
+          const lowerAt = (e as { lower_barcode_at?: (b: string, r: number, w: number, h: number) => unknown })
+            .lower_barcode_at;
+          const bc = (
+            typeof lowerAt === "function"
+              ? lowerAt.call(e, bindingId, record, boxW, boxH)
+              : e.lower_barcode(bindingId, boxW, boxH)
+          ) as LoweredBarcode | null;
+          if (bc) await commitLoweredBarcode(host, bc, tgt?.elementId ?? null);
+          state.status = "ready";
+          state.message = `Preview: barcode "${bindingId}" against record ${record}.`;
+          return;
+        }
+
+        // Variable / image / table: resolve at the chosen record (falls back to
+        // the record-0 resolve when the wasm predates `resolve_lowered_at`).
+        const resolveAt =
+          typeof e.resolve_lowered_at === "function"
+            ? (id: string) => e.resolve_lowered_at!(id, record)
+            : (id: string) => e.resolve_lowered(id);
+        const lowered = resolveAt(bindingId) as { kind?: string } | null;
+        if (lowered?.kind === "table") {
+          await commitLoweredTable(host, lowered as never);
+        } else if (lowered?.kind === "variable") {
+          // Re-resolve the previewed value into the placed field (place once).
+          if (!variableFields.has(bindingId)) {
+            const placed = await commitLoweredVariable(host, lowered as never, bindingId);
+            if (placed) variableFields.set(bindingId, placed);
+          } else {
+            const v = lowered as { hidden?: boolean; text?: string };
+            const f = variableFields.get(bindingId)!;
+            const value = v.hidden ? null : (v.text ?? null);
+            await host.document.mutate(setFieldValueMutation(f.storyId, f.offset, value));
+          }
+        } else if (lowered?.kind === "image") {
+          const tgt = imageTargets.get(bindingId);
+          if (tgt) {
+            await commitLoweredImage(host, lowered as never, tgt.elementId, tgt.fit);
+          }
+        }
+        state.status = "ready";
+        state.message = `Preview: "${bindingId}" against record ${record}.`;
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`previewRecord(${bindingId}, ${record}): ${state.message}`);
       }
     },
 

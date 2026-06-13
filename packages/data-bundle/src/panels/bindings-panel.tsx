@@ -54,7 +54,29 @@ export function makeBindingsPanel(
     const [snapshot, setSnapshot] = useState(session.getState());
     const [fit, setFit] = useState<IdmlFit>("Proportionally");
     const [symbology, setSymbology] = useState<BarcodeSymbology>("ean13");
+    // §9 record-preview stepper: walk the demo query's records before a batch run.
+    const [previewIndex, setPreviewIndex] = useState(0);
+    const [recordTotal, setRecordTotal] = useState(0);
     const refresh = () => setSnapshot(session.getState());
+
+    /** Resolve the demo query against the stepped-to record and commit the
+     *  preview (the SAME lower lanes a batch run uses). Re-reads the record
+     *  count so the "of N" bound stays honest after a refresh. */
+    async function stepTo(next: number): Promise<void> {
+      const total = await session.recordCount("q_all");
+      setRecordTotal(total);
+      if (total === 0) {
+        host.log.info("preview: no records ingested — refresh data first");
+        return;
+      }
+      const clamped = Math.max(0, Math.min(next, total - 1));
+      setPreviewIndex(clamped);
+      // Preview every wired binding against the chosen record.
+      for (const id of session.getState().bindings) {
+        await session.previewRecord(id, clamped);
+      }
+      refresh();
+    }
 
     function wireDemo(): void {
       const source = session.getState().sources[0];
@@ -173,6 +195,46 @@ export function makeBindingsPanel(
           >
             Refresh fields
           </button>
+        </div>
+        <div style={row} data-testid="preview-stepper">
+          <span style={note}>preview record:</span>
+          <button
+            type="button"
+            title="Show the document resolved against the previous record (§9)"
+            disabled={recordTotal === 0 || previewIndex <= 0}
+            onClick={() => {
+              void stepTo(previewIndex - 1);
+            }}
+          >
+            ‹ prev
+          </button>
+          <span data-testid="preview-position">
+            {recordTotal === 0 ? "— / —" : `${previewIndex + 1} / ${recordTotal}`}
+          </span>
+          <button
+            type="button"
+            title="Show the document resolved against the next record (§9)"
+            disabled={recordTotal === 0 || previewIndex >= recordTotal - 1}
+            onClick={() => {
+              void stepTo(previewIndex + 1);
+            }}
+          >
+            next ›
+          </button>
+          <label style={note}>
+            jump to:{" "}
+            <input
+              type="number"
+              min={1}
+              max={Math.max(1, recordTotal)}
+              value={recordTotal === 0 ? "" : previewIndex + 1}
+              style={{ width: "4em" }}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) void stepTo(n - 1);
+              }}
+            />
+          </label>
         </div>
         <div>
           bindings:{" "}

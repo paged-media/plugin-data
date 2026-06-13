@@ -9,6 +9,19 @@
   tests:
     rust: ["data-conformance/tests/bind.rs::data_bind_resolve_variable"]
 
+- id: data.bind.preview-step
+  title: Record-preview stepper — resolve a binding against a chosen record index N (§9)
+  spec: plugin-data data-bind/src/lib.rs (base-idea §9 record-preview affordance)
+  status: implemented
+  provenance:
+    [
+      "resolve_at(binding, record) evaluates per-record kinds (variable/image/barcode) over records[record] instead of always row 0; resolve()=resolve_at(0); record_count(query) is the stepper's of-N bound; an out-of-range index degrades to the missing policy (no panic); whole-result kinds (table/flow) ignore the index and render in full; the SAME resolve+lower lanes the batch uses, so preview == output",
+      "bundle: session.recordCount(query) + session.previewRecord(binding, record) drive a prev/next/jump stepper in the bindings panel; previewRecord commits through the normal lower lanes (variable field re-set, image place, barcode re-encode via lower_barcode_at) and falls back to the record-0 resolve on an engine wasm predating the lane",
+    ]
+  tests:
+    rust: ["data-conformance/tests/bind.rs::data_bind_preview_step_record"]
+    vitest: ["packages/data-bundle/src/__tests__/preview.test.ts"]
+
 - id: data.bind.resolve-table
   title: Resolve a single-region dynamic table (per-record column expressions)
   spec: plugin-data data-bind/src/lib.rs (base-idea §9.3)

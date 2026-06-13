@@ -299,6 +299,12 @@ impl ResolutionEngine {
         self.results.get(query)
     }
 
+    /// The number of records ingested for a query (the stepper's "of N" bound,
+    /// §9 record-preview). `0` when no result is ingested yet.
+    pub fn record_count(&self, query: &QueryId) -> usize {
+        self.results.get(query).map(|r| r.row_count).unwrap_or(0)
+    }
+
     /// The sync state of a binding.
     pub fn sync_state(&self, id: &BindingId) -> Option<SyncState> {
         self.sync.get(id).copied()
@@ -344,7 +350,29 @@ impl ResolutionEngine {
     /// Resolve a binding against its query's delivered result. Updates the sync
     /// state to `Linked` with a fresh [`ResolveStamp`]. Re-resolution is
     /// idempotent (same inputs → identical content, §12.4).
+    ///
+    /// Per-record bindings (variable / image / barcode) resolve against the
+    /// FIRST record (row 0). To preview the document against a chosen record
+    /// (the §9 record-preview stepper), use [`resolve_at`](Self::resolve_at).
     pub fn resolve(&mut self, id: &BindingId) -> Result<Resolved, ResolveError> {
+        self.resolve_at(id, 0)
+    }
+
+    /// Resolve a binding against a chosen RECORD INDEX `record` (the §9
+    /// record-preview stepper — "show the document resolved against record N").
+    /// For the per-record kinds (variable / image / barcode) the expression is
+    /// evaluated over `records[record]` (clamped harmlessly to "missing" when
+    /// out of range). Whole-result kinds (table / record-flow) resolve their
+    /// entire stabilized set regardless of `record` — a per-record preview index
+    /// is meaningless for them, so they render in full (the stepper greys their
+    /// control). Stamping + the non-destructive sync policy are identical to
+    /// [`resolve`](Self::resolve); a preview resolve is still an explicit user
+    /// action that re-links. Re-resolution is idempotent (§12.4).
+    pub fn resolve_at(
+        &mut self,
+        id: &BindingId,
+        record: usize,
+    ) -> Result<Resolved, ResolveError> {
         let binding = self
             .bindings
             .get(id)
@@ -370,6 +398,7 @@ impl ResolutionEngine {
                 expr,
                 missing,
                 records,
+                record,
                 &self.params,
                 self.today,
                 self.locale,
@@ -419,6 +448,7 @@ impl ResolutionEngine {
                 expr,
                 policy,
                 records,
+                record,
                 &self.params,
                 self.today,
                 self.locale,
@@ -435,6 +465,7 @@ impl ResolutionEngine {
                 expr,
                 options,
                 records,
+                record,
                 &self.params,
                 self.today,
                 self.locale,
@@ -522,25 +553,28 @@ impl ResolutionEngine {
 }
 
 /// Resolve a variable binding: pick the record (single/scalar → row 0; a stream
-/// → its first record), evaluate the expression, and apply the missing policy.
+/// → its first record by default, or the preview `record` index, §9), evaluate
+/// the expression, and apply the missing policy. An out-of-range `record` is
+/// treated as missing (the policy applies), never a panic.
 #[allow(clippy::too_many_arguments)]
 fn resolve_variable(
     target: PlaceholderRef,
     expr: &str,
     missing: &data_core::MissingPolicy,
     records: &RecordSet,
+    record: usize,
     params: &HashMap<String, Value>,
     today: i32,
     locale: Locale,
     _shape: Option<&ResultShape>,
 ) -> ResolvedVariable {
-    if records.row_count == 0 {
-        // No record at all → treat as missing.
+    if record >= records.row_count {
+        // No such record (empty set or out-of-range preview index) → missing.
         return apply_missing(target, Value::Null, missing);
     }
     let ctx = RowCtx {
         records,
-        row: 0,
+        row: record,
         params,
     };
     let ec = EvalCtx::new(&ctx, today).with_locale(locale);
@@ -801,16 +835,17 @@ fn resolve_image(
     expr: &str,
     policy: &ImgPolicy,
     records: &RecordSet,
+    record: usize,
     params: &HashMap<String, Value>,
     today: i32,
     locale: Locale,
 ) -> ResolvedImage {
-    let value = if records.row_count == 0 {
+    let value = if record >= records.row_count {
         Value::Null
     } else {
         let ctx = RowCtx {
             records,
-            row: 0,
+            row: record,
             params,
         };
         eval_str(expr, &EvalCtx::new(&ctx, today).with_locale(locale))
@@ -858,16 +893,17 @@ fn resolve_barcode(
     expr: &str,
     options: &BarcodeOpts,
     records: &RecordSet,
+    record: usize,
     params: &HashMap<String, Value>,
     today: i32,
     locale: Locale,
 ) -> ResolvedBarcode {
-    let value = if records.row_count == 0 {
+    let value = if record >= records.row_count {
         Value::Null
     } else {
         let ctx = RowCtx {
             records,
-            row: 0,
+            row: record,
             params,
         };
         eval_str(expr, &EvalCtx::new(&ctx, today).with_locale(locale))

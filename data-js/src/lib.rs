@@ -123,6 +123,27 @@ mod wasm {
             to_js(&out)
         }
 
+        /// The number of records ingested for a query — the §9 record-preview
+        /// stepper's "of N" upper bound (0 when no result is ingested yet).
+        pub fn query_record_count(&self, query: &str) -> usize {
+            self.session.query_record_count(&QueryId::from(query))
+        }
+
+        /// Resolve a binding against a chosen RECORD INDEX and return its lowered
+        /// IR — the §9 record-preview stepper. Per-record kinds (variable/image)
+        /// evaluate over `records[record]`; a table renders in full.
+        pub fn resolve_lowered_at(
+            &mut self,
+            binding: &str,
+            record: usize,
+        ) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .resolve_lowered_at(&BindingId::from(binding), record)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
         /// Resolve a record-flow binding and paginate it over a caller-supplied
         /// frame chain (§9.4). `chain` is `FrameCapacity[]`, `opts` is
         /// `FlowLayoutOpts` (or undefined for defaults).
@@ -158,6 +179,22 @@ mod wasm {
             let out = self
                 .session
                 .lower_barcode_sized(&BindingId::from(binding), box_w_pt, box_h_pt)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// Resolve a barcode binding against a chosen RECORD INDEX (the §9
+        /// preview stepper) and lower it scaled to the bound frame's content box.
+        pub fn lower_barcode_at(
+            &mut self,
+            binding: &str,
+            record: usize,
+            box_w_pt: f64,
+            box_h_pt: f64,
+        ) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .lower_barcode_at(&BindingId::from(binding), record, box_w_pt, box_h_pt)
                 .map_err(map_err)?;
             to_js(&out)
         }

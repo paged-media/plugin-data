@@ -275,7 +275,30 @@ impl DataSession {
 
     /// Resolve a binding and lower it to the host IR.
     pub fn resolve_lowered(&mut self, id: &BindingId) -> Result<LoweredOutput, SessionError> {
-        match self.engine.resolve(id)? {
+        self.resolve_lowered_at(id, 0)
+    }
+
+    /// The number of records ingested for a query — the record-preview stepper's
+    /// "of N" upper bound (§9). `0` when no result is ingested yet (refresh
+    /// first).
+    pub fn query_record_count(&self, query: &QueryId) -> usize {
+        self.engine.record_count(query)
+    }
+
+    /// Resolve a binding against a chosen RECORD INDEX and lower it — the §9
+    /// record-preview stepper ("show the document resolved against record N").
+    /// Per-record kinds (variable / image) evaluate over `records[record]`;
+    /// whole-result kinds (table) render in full (the index is irrelevant). A
+    /// record-flow still needs a frame chain (call `lower_record_flow`); a
+    /// barcode still needs the frame box (`lower_barcode_at`). The preview re-runs
+    /// the SAME resolve + lower lanes the batch will use, so the preview and the
+    /// generated output agree.
+    pub fn resolve_lowered_at(
+        &mut self,
+        id: &BindingId,
+        record: usize,
+    ) -> Result<LoweredOutput, SessionError> {
+        match self.engine.resolve_at(id, record)? {
             Resolved::Variable(v) => Ok(LoweredOutput::Variable(lower_variable(
                 v.target, &v.display, v.hidden,
             ))),
@@ -318,7 +341,22 @@ impl DataSession {
         box_w_pt: f64,
         box_h_pt: f64,
     ) -> Result<LoweredBarcode, SessionError> {
-        match self.engine.resolve(id)? {
+        self.lower_barcode_at(id, 0, box_w_pt, box_h_pt)
+    }
+
+    /// Resolve a barcode binding against a chosen RECORD INDEX (the §9 preview
+    /// stepper) and lower it scaled to the bound frame's content box. Identical
+    /// to [`lower_barcode_sized`](Self::lower_barcode_sized) but evaluates the
+    /// expression over `records[record]` so the preview shows the symbol for the
+    /// stepped-to record.
+    pub fn lower_barcode_at(
+        &mut self,
+        id: &BindingId,
+        record: usize,
+        box_w_pt: f64,
+        box_h_pt: f64,
+    ) -> Result<LoweredBarcode, SessionError> {
+        match self.engine.resolve_at(id, record)? {
             Resolved::Barcode(rb) => encode_barcode(&rb, box_w_pt, box_h_pt),
             _ => Err(SessionError::Decode("binding is not a barcode".to_string())),
         }

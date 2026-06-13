@@ -19,6 +19,16 @@ export interface DataEngineLike {
   set_locale(locale: unknown): void;
   ingest_result(query: string, records: unknown): void;
   resolve_lowered(binding: string): unknown;
+  /** §9 record-preview stepper: the count of records ingested for a query — the
+   *  stepper's "of N" upper bound (0 before a refresh). Optional: a wasm
+   *  artifact built before the preview lane lacks it. */
+  query_record_count?(query: string): number;
+  /** §9 record-preview stepper: resolve a binding against a chosen RECORD INDEX
+   *  (`record`) and return its lowered IR — per-record kinds (variable/image)
+   *  resolve over `records[record]`; a table renders in full. Optional: absent
+   *  on a wasm artifact built before the preview lane (the session falls back to
+   *  the record-0 resolve, honestly). */
+  resolve_lowered_at?(binding: string, record: number): unknown;
   publish_provider(query: string, providerId: string, category: string): unknown;
   governed_catalog(query: string, metadata: unknown): unknown;
   plan_batch(query: string, mode: unknown): unknown;
