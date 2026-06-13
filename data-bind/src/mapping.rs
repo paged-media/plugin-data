@@ -71,7 +71,11 @@ pub fn suggest_mappings(schema: &Schema) -> Vec<ColumnMapping> {
             ColumnMapping {
                 column: f.name.clone(),
                 header: humanise(&f.name),
-                expr: if mappable { f.name.clone() } else { String::new() },
+                expr: if mappable {
+                    f.name.clone()
+                } else {
+                    String::new()
+                },
                 field_type: f.ty,
                 mappable,
             }

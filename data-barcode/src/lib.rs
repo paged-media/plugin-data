@@ -237,7 +237,12 @@ mod tests {
     #[test]
     fn data_barcode_linear_geometry_merges_runs() {
         // dark, dark, light, dark → two bars (the first 2 modules merge).
-        let g = linear_geometry(Symbology::Code128, &[true, true, false, true], 0, "x".into());
+        let g = linear_geometry(
+            Symbology::Code128,
+            &[true, true, false, true],
+            0,
+            "x".into(),
+        );
         assert_eq!(g.rects.len(), 2);
         assert_eq!(g.modules_x, 4);
         assert_eq!(g.modules_y, 1);

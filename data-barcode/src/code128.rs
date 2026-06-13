@@ -31,6 +31,7 @@ use crate::{linear_geometry, BarcodeError, BarcodeGeometry, Symbology};
 /// (`1` = bar). Index = symbol value. Values 0–102 are data/shift, 103–105 are
 /// the START codes (A/B/C), 106 is STOP. Verbatim from ISO/IEC 15417 Annex —
 /// the canonical pattern table, the single source of truth.
+#[rustfmt::skip]
 const PATTERNS: [&str; 107] = [
     "11011001100", "11001101100", "11001100110", "10010011000", "10010001100",
     "10001001100", "10011001000", "10011000100", "10001100100", "11001001000",

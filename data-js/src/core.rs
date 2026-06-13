@@ -105,7 +105,12 @@ fn encode_barcode(
     }
     let geometry = encode(to_encoder_symbology(rb.symbology), &rb.value)
         .map_err(|e| SessionError::Decode(e.to_string()))?;
-    Ok(lower_barcode(rb.target.clone(), &geometry, box_w_pt, box_h_pt))
+    Ok(lower_barcode(
+        rb.target.clone(),
+        &geometry,
+        box_w_pt,
+        box_h_pt,
+    ))
 }
 
 /// The evaluation of a data-driven formatting rule (spec §9.5) crossed to the

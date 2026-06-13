@@ -372,11 +372,7 @@ impl ResolutionEngine {
     /// control). Stamping + the non-destructive sync policy are identical to
     /// [`resolve`](Self::resolve); a preview resolve is still an explicit user
     /// action that re-links. Re-resolution is idempotent (§12.4).
-    pub fn resolve_at(
-        &mut self,
-        id: &BindingId,
-        record: usize,
-    ) -> Result<Resolved, ResolveError> {
+    pub fn resolve_at(&mut self, id: &BindingId, record: usize) -> Result<Resolved, ResolveError> {
         let resolved = self.resolve_content(id, record)?;
         // Stamp + relink (non-destructive policy already protected pinned/
         // overridden by short-circuiting before a manual resolve is requested;
@@ -402,11 +398,7 @@ impl ResolutionEngine {
     /// refresh change report ([`fingerprint_all`](Self::fingerprint_all)). A
     /// change report must NOT mutate sync states (it only reports what a refresh
     /// would change), so it resolves through here, never `resolve_at`.
-    pub fn resolve_content(
-        &self,
-        id: &BindingId,
-        record: usize,
-    ) -> Result<Resolved, ResolveError> {
+    pub fn resolve_content(&self, id: &BindingId, record: usize) -> Result<Resolved, ResolveError> {
         let binding = self
             .bindings
             .get(id)

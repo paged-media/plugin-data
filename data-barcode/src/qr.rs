@@ -52,16 +52,66 @@ struct VersionEc {
 /// Level-M block tables for versions 1–10 (index = version − 1). Verbatim from
 /// ISO/IEC 18004 Table 9.
 const VERSION_M: [VersionEc; 10] = [
-    VersionEc { data_codewords: 16, ec_per_block: 10, g1: (1, 16), g2: (0, 0) }, // v1
-    VersionEc { data_codewords: 28, ec_per_block: 16, g1: (1, 28), g2: (0, 0) }, // v2
-    VersionEc { data_codewords: 44, ec_per_block: 26, g1: (1, 44), g2: (0, 0) }, // v3
-    VersionEc { data_codewords: 64, ec_per_block: 18, g1: (2, 32), g2: (0, 0) }, // v4
-    VersionEc { data_codewords: 86, ec_per_block: 24, g1: (2, 43), g2: (0, 0) }, // v5
-    VersionEc { data_codewords: 108, ec_per_block: 16, g1: (4, 27), g2: (0, 0) }, // v6
-    VersionEc { data_codewords: 124, ec_per_block: 18, g1: (4, 31), g2: (0, 0) }, // v7
-    VersionEc { data_codewords: 154, ec_per_block: 22, g1: (2, 38), g2: (2, 39) }, // v8
-    VersionEc { data_codewords: 182, ec_per_block: 22, g1: (3, 36), g2: (2, 37) }, // v9
-    VersionEc { data_codewords: 216, ec_per_block: 26, g1: (4, 43), g2: (1, 44) }, // v10
+    VersionEc {
+        data_codewords: 16,
+        ec_per_block: 10,
+        g1: (1, 16),
+        g2: (0, 0),
+    }, // v1
+    VersionEc {
+        data_codewords: 28,
+        ec_per_block: 16,
+        g1: (1, 28),
+        g2: (0, 0),
+    }, // v2
+    VersionEc {
+        data_codewords: 44,
+        ec_per_block: 26,
+        g1: (1, 44),
+        g2: (0, 0),
+    }, // v3
+    VersionEc {
+        data_codewords: 64,
+        ec_per_block: 18,
+        g1: (2, 32),
+        g2: (0, 0),
+    }, // v4
+    VersionEc {
+        data_codewords: 86,
+        ec_per_block: 24,
+        g1: (2, 43),
+        g2: (0, 0),
+    }, // v5
+    VersionEc {
+        data_codewords: 108,
+        ec_per_block: 16,
+        g1: (4, 27),
+        g2: (0, 0),
+    }, // v6
+    VersionEc {
+        data_codewords: 124,
+        ec_per_block: 18,
+        g1: (4, 31),
+        g2: (0, 0),
+    }, // v7
+    VersionEc {
+        data_codewords: 154,
+        ec_per_block: 22,
+        g1: (2, 38),
+        g2: (2, 39),
+    }, // v8
+    VersionEc {
+        data_codewords: 182,
+        ec_per_block: 22,
+        g1: (3, 36),
+        g2: (2, 37),
+    }, // v9
+    VersionEc {
+        data_codewords: 216,
+        ec_per_block: 26,
+        g1: (4, 43),
+        g2: (1, 44),
+    }, // v10
 ];
 
 /// Encode `data` as a byte-mode, level-M QR symbol (the §9.7 2D path). Returns
@@ -408,8 +458,7 @@ impl Matrix {
         for &cy in &centres {
             for &cx in &centres {
                 // Skip the three finder corners (top-left, top-right, bottom-left).
-                let near_finder =
-                    (cy < 8 && (cx < 8 || cx >= n - 8)) || (cx < 8 && cy >= n - 8);
+                let near_finder = (cy < 8 && (cx < 8 || cx >= n - 8)) || (cx < 8 && cy >= n - 8);
                 if near_finder {
                     continue;
                 }
@@ -587,8 +636,12 @@ impl Matrix {
 
         // Rule 3: the finder-like 1:1:3:1:1 pattern with a 4-module light run
         // (+40 each), in rows and columns.
-        let pat1 = [true, false, true, true, true, false, true, false, false, false, false];
-        let pat2 = [false, false, false, false, true, false, true, true, true, false, true];
+        let pat1 = [
+            true, false, true, true, true, false, true, false, false, false, false,
+        ];
+        let pat2 = [
+            false, false, false, false, true, false, true, true, true, false, true,
+        ];
         for y in 0..n {
             let row: Vec<bool> = (0..n).map(|x| at(x, y)).collect();
             score += 40 * count_subslice(&row, &pat1);
@@ -737,8 +790,17 @@ fn format_pos_a(i: usize) -> (usize, usize) {
     // Bits 0..=5 run down column 8 (rows 0..=5), bit 6 at (8,7), bit 7 at (8,8),
     // bit 8 at (7,8), bits 9..=14 along row 8 (columns 5..=0). Timing modules
     // (row/col 6) are skipped in the reserved set, so we walk explicit positions.
-    const ROW_COL8: [(usize, usize); 9] =
-        [(8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8), (7, 8)];
+    const ROW_COL8: [(usize, usize); 9] = [
+        (8, 0),
+        (8, 1),
+        (8, 2),
+        (8, 3),
+        (8, 4),
+        (8, 5),
+        (8, 7),
+        (8, 8),
+        (7, 8),
+    ];
     const ROW8: [(usize, usize); 6] = [(5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8)];
     if i < 9 {
         ROW_COL8[i]
@@ -783,13 +845,19 @@ mod tests {
         // 0xEC,0x11,0xEC,0x11,0xEC,0x11,0xEC,0x11] with 10 EC codewords yields a
         // specific remainder. We assert the EC length + determinism here and rely
         // on the structural matrix test for end-to-end correctness.
-        let data: Vec<u8> = vec![0x10, 0x20, 0x0C, 0x56, 0x61, 0x80, 0xEC, 0x11, 0xEC, 0x11, 0xEC, 0x11, 0xEC, 0x11, 0xEC, 0x11];
+        let data: Vec<u8> = vec![
+            0x10, 0x20, 0x0C, 0x56, 0x61, 0x80, 0xEC, 0x11, 0xEC, 0x11, 0xEC, 0x11, 0xEC, 0x11,
+            0xEC, 0x11,
+        ];
         let ec = reed_solomon(&data, 10);
         assert_eq!(ec.len(), 10);
         // Determinism: same input → same EC.
         assert_eq!(ec, reed_solomon(&data, 10));
         // The published v1-M EC for this block (Thonky/ISO worked example).
-        assert_eq!(ec, vec![0xA5, 0x24, 0xD4, 0xC1, 0xED, 0x36, 0xC7, 0x87, 0x2C, 0x55]);
+        assert_eq!(
+            ec,
+            vec![0xA5, 0x24, 0xD4, 0xC1, 0xED, 0x36, 0xC7, 0x87, 0x2C, 0x55]
+        );
     }
 
     #[test]

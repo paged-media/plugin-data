@@ -51,6 +51,7 @@ const L_CODE: [[u8; 7]; 10] = [
 /// The left-half parity pattern selected by the first digit (ISO/IEC 15420):
 /// `false` = L (odd), `true` = G (even). The first digit is carried HERE, not as
 /// drawn bars. Row 0 (`00000`) is all-L — that is the UPC-A pattern.
+#[rustfmt::skip]
 const PARITY: [[bool; 6]; 10] = [
     [false, false, false, false, false, false], // 0
     [false, false, true, false, true, true],     // 1
@@ -87,9 +88,7 @@ fn digits(data: &str, expected: usize) -> Result<Vec<u8>, BarcodeError> {
     }
     let mut out = Vec::with_capacity(data.len());
     for c in data.chars() {
-        let d = c
-            .to_digit(10)
-            .ok_or(BarcodeError::NonDigit(c))? as u8;
+        let d = c.to_digit(10).ok_or(BarcodeError::NonDigit(c))? as u8;
         out.push(d);
     }
     if out.len() != expected {
@@ -129,7 +128,7 @@ pub fn encode_ean13(data: &str) -> Result<BarcodeGeometry, BarcodeError> {
 /// the 12-digit UPC canonical string.
 pub fn encode_upca(data: &str) -> Result<BarcodeGeometry, BarcodeError> {
     let d = numeric_with_optional_check(data, 11)?; // 11 data + 1 check = 12 (UPC)
-    // EAN-13 view: a leading 0 in front of the 12 UPC digits.
+                                                    // EAN-13 view: a leading 0 in front of the 12 UPC digits.
     let mut ean: Vec<u8> = Vec::with_capacity(13);
     ean.push(0);
     ean.extend_from_slice(&d);
@@ -142,10 +141,7 @@ pub fn encode_upca(data: &str) -> Result<BarcodeGeometry, BarcodeError> {
 /// Parse `data` as `data_len` data digits + an optional supplied check digit.
 /// `data_len` data digits → compute the check; `data_len + 1` digits → verify
 /// the last as the check. Returns the FULL digit vector (data + check).
-fn numeric_with_optional_check(
-    data: &str,
-    data_len: usize,
-) -> Result<Vec<u8>, BarcodeError> {
+fn numeric_with_optional_check(data: &str, data_len: usize) -> Result<Vec<u8>, BarcodeError> {
     if data.is_empty() {
         return Err(BarcodeError::Empty);
     }
@@ -225,17 +221,26 @@ mod tests {
     fn data_barcode_ean13_checksum_known_vector() {
         // 590123412345_? → the published example checks to 7. Data digits are the
         // first 12 of "5901234123457".
-        let body: Vec<u8> = "590123412345".chars().map(|c| c.to_digit(10).unwrap() as u8).collect();
+        let body: Vec<u8> = "590123412345"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap() as u8)
+            .collect();
         assert_eq!(checksum(&body), 7);
         // The Wikipedia EAN-13 worked example: 400638133393_1.
-        let body2: Vec<u8> = "400638133393".chars().map(|c| c.to_digit(10).unwrap() as u8).collect();
+        let body2: Vec<u8> = "400638133393"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap() as u8)
+            .collect();
         assert_eq!(checksum(&body2), 1);
     }
 
     #[test]
     fn data_barcode_upca_checksum_known_vector() {
         // UPC-A worked example 03600029145_2: 11 data digits, check 2.
-        let body: Vec<u8> = "03600029145".chars().map(|c| c.to_digit(10).unwrap() as u8).collect();
+        let body: Vec<u8> = "03600029145"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap() as u8)
+            .collect();
         assert_eq!(checksum(&body), 2);
     }
 
@@ -250,7 +255,10 @@ mod tests {
         // 13 digits with a WRONG check → an error, not a silent re-checksum.
         assert!(matches!(
             encode_ean13("4006381333932"),
-            Err(BarcodeError::CheckDigit { expected: 1, got: 2 })
+            Err(BarcodeError::CheckDigit {
+                expected: 1,
+                got: 2
+            })
         ));
     }
 
@@ -278,7 +286,10 @@ mod tests {
 
     #[test]
     fn data_barcode_ean13_rejects_non_digits_and_bad_length() {
-        assert!(matches!(encode_ean13("40063813339A"), Err(BarcodeError::NonDigit('A'))));
+        assert!(matches!(
+            encode_ean13("40063813339A"),
+            Err(BarcodeError::NonDigit('A'))
+        ));
         assert!(matches!(
             encode_ean13("123"),
             Err(BarcodeError::WrongLength { .. })

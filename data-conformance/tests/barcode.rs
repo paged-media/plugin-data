@@ -107,7 +107,10 @@ fn data_barcode_encode_qr_byte_mode() {
     assert!(g.text.is_empty());
     assert!(g.rect_count() > 0);
     // Determinism: same payload → identical geometry (bit-stable, §12.4).
-    assert_eq!(g.rects, encode(Symbology::Qr, "https://paged.media").unwrap().rects);
+    assert_eq!(
+        g.rects,
+        encode(Symbology::Qr, "https://paged.media").unwrap().rects
+    );
     // An oversized payload (past the v10 byte ceiling) is a typed error.
     let big = "x".repeat(10_000);
     assert!(matches!(
