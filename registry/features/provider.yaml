@@ -13,6 +13,7 @@
   provenance:
     [
       "engine-side payload ready for host.dataProviders.register; stabilized order + content-etag revision (permutation-invariant refresh token); exposes data, never the ability to drive paged.data's queries/sources (§7.1 security note)",
+      "transport is Arrow-aligned-by-SHAPE, not arrow-rs IPC (ADR-014): the publication carries the Schema descriptor (Arrow-aligned FieldType vocabulary) + the stabilized columnar RecordSet (Vec<Vec<Value>>), materialised from DuckDB-WASM's Arrow via recordset.ts and serde-decoded — JSON over the wasm boundary, not an arrow-rs byte buffer. The Schema already IS the Arrow descriptor on both RecordSet + ProviderPublication (no additive descriptor missing); a true arrow-rs IPC encode is a deferred v3 perf item ADR-014 explicitly declines, not a sweep change",
     ]
   tests:
     rust: ["data-conformance/tests/provider.rs::data_provider_publish"]

@@ -10,6 +10,7 @@
   provenance:
     [
       "session locale threads engine -> EvalCtx -> the format kernels; de = '.' grouping / ',' decimal / '€' trailing / DD.MM.YYYY; canonical value form stays locale-free",
+      "breadth follow-up (NOT a sweep add): locale data is a hardcoded match on the FROZEN data-core Locale enum (decimal_sep/group_sep/currency/date_pattern), not a registry table — adding a locale is a variant + 4 arms + a payload-serde-affecting frozen-type amendment via the orchestrator. The clean shape table-ifies the per-variant match into a locale registry FIRST (locales become additive rows like the fn table), THEN adds fr/es/it; deferred to a locale wave, base-idea §9.1",
     ]
   tests:
     rust: ["data-conformance/tests/locale.rs::data_i18n_locale"]
