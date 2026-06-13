@@ -1,0 +1,87 @@
+# paged.data feature registry — barcode / QR symbology rendering (spec §9.7,
+# the EasyCatalog catalog-publishing staple). A `barcode` binding's expression
+# resolves to a string; the engine generates the symbology geometry (clean-room
+# from the public ISO/IEC specs, never a GPL library); the bundle lowers it as
+# filled-rect VECTOR modules scaled to the bound frame's content box (the VECTOR
+# lane — resolution-independent, no asset-store door; raster is BLOCKED because
+# placeImage needs a resolvable uri). EAN-13/UPC-A + Code-128 + QR landed;
+# richer QR modes (numeric/alphanumeric/Kanji/ECI, v11+) are a scoped follow-on
+# (a density optimization, never a correctness gap — byte mode encodes all).
+
+- id: data.barcode.ean13
+  title: EAN-13 / UPC-A encoder (digit module pattern + mod-10 checksum)
+  spec: plugin-data data-barcode/src/ean.rs (base-idea §9.7, ISO/IEC 15420)
+  status: implemented
+  provenance:
+    [
+      "clean-room from the public ISO/IEC 15420 spec: the L-code table is the single literal, R = complement, G = L reversed; the parity pattern selected by the first digit carries it (not drawn as bars); mod-10 check computed or verified; UPC-A is EAN-13 with an implicit leading 0; NO GPL library copied (§3 license boundary)",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/barcode.rs::data_barcode_encode_ean13_golden",
+        "data-conformance/tests/barcode.rs::data_barcode_encode_upca_golden",
+        "data-conformance/tests/properties.rs::data_prop_barcode_ean13_checksum_round_trips",
+      ]
+
+- id: data.barcode.code128
+  title: Code-128 encoder (auto B/C code-set switching + weighted mod-103 check)
+  spec: plugin-data data-barcode/src/code128.rs (base-idea §9.7, ISO/IEC 15417)
+  status: implemented
+  provenance:
+    [
+      "clean-room from ISO/IEC 15417: the 107-pattern value table is the single literal source of truth; code sets B (full ASCII) + C (digit pairs, ×2 density) with greedy auto-switching; the weighted mod-103 check verified against the published 'Wikipedia' golden vector (88); code set A (control chars) is out of scope for catalog data (a non-Latin-1 char is a typed Unencodable error, never a panic)",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/barcode.rs::data_barcode_encode_code128_general",
+        "data-conformance/tests/properties.rs::data_prop_barcode_code128_total_on_printable",
+      ]
+
+- id: data.barcode.qr
+  title: QR encoder (byte mode, level M, v1–v10 — GF(256) Reed–Solomon + masking)
+  spec: plugin-data data-barcode/src/qr.rs (base-idea §9.7, ISO/IEC 18004)
+  status: implemented
+  provenance:
+    [
+      "clean-room from ISO/IEC 18004: the GF(256) Reed–Solomon coder (primitive 0x11D) verified against the spec's v1-M worked-example EC block; the BCH(15,5) format info verified against the Annex C golden (level M + mask 0 → 101010000010010); finder/timing/alignment/dark-module placement, the zig-zag data fill, the 8 data masks with full §8.8.2 penalty scoring; byte mode covers all payloads — numeric/alphanumeric/Kanji/ECI + v11+ are a scoped density follow-on (an over-capacity payload is a typed TooLong, never a panic); NO QR library linked (§3)",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/barcode.rs::data_barcode_encode_qr_byte_mode",
+        "data-conformance/tests/properties.rs::data_prop_barcode_qr_total_and_deterministic",
+      ]
+
+- id: data.barcode.bind
+  title: Barcode binding — { symbology, expr, quietZone?, missing } resolving to a value
+  spec: plugin-data data-core/src/binding.rs (Binding::Barcode) + data-bind/src/lib.rs (resolve_barcode) (base-idea §9.7)
+  status: implemented
+  provenance:
+    [
+      "the frozen Binding::Barcode kind (target frame + query + symbology + expr + options); data-bind resolves the expression to a value string and applies the missing policy (Skip/Flag) WITHOUT pulling in the encoders (the symbology encode happens in lowering); a number/date field formats to its digit string through the DSL display so a numeric EAN field works",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/barcode.rs::data_barcode_bind_resolves_field_value",
+        "data-conformance/tests/barcode.rs::data_barcode_bind_missing_policy",
+      ]
+
+- id: data.barcode.lower
+  title: Barcode lowering — unit-box modules scaled to the frame content box (VECTOR lane)
+  spec: plugin-data data-lower/src/lib.rs (lower_barcode) + data-js/src/core.rs (encode_barcode) + packages/data-host-model/src/barcode.ts (base-idea §9.7, §9.6)
+  status: implemented
+  provenance:
+    [
+      "the engine encodes (data-barcode) then scales the unit-box module grid to the bound frame's content box as content-space filled rects (§9.6 — frame transforms honored for free); the host-model barcodeToMutations turns each module into a closed 4-anchor insertPath filled rect (the VECTOR lane — no asset-store door; raster BLOCKED since placeImage needs a resolvable uri); an empty/absent value lowers to zero modules (missing policy), never a fake symbol",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/barcode.rs::data_barcode_lower_scales_to_content_box",
+        "data-conformance/tests/barcode.rs::data_barcode_lower_qr_modules_are_square_cells",
+      ]
+    vitest:
+      ["packages/data-host-model/src/__tests__/barcode.test.ts"]

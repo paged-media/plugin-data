@@ -17,6 +17,7 @@ import {
   FIELD_PLUGIN,
   setFieldValueMutation,
   type IdmlFit,
+  type LoweredBarcode,
   type PlaceholderField,
   type RuleResult,
   type RuleTarget,
@@ -25,6 +26,7 @@ import {
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
 import {
+  commitLoweredBarcode,
   commitLoweredImage,
   commitLoweredTable,
   commitLoweredVariable,
@@ -115,6 +117,10 @@ export interface ColumnSpec {
   header: string;
   expr: string;
 }
+
+/** The barcode symbologies a barcode binding can render (§9.7) — mirrors the
+ *  Rust `BarcodeSymbology` wire enum. */
+export type BarcodeSymbology = "ean13" | "upca" | "code128" | "qr";
 
 /** How a §10 batch run partitions a dataset into generation units: one document
  *  per record, per group, or one paginated catalog. */
@@ -232,6 +238,21 @@ export interface DataSourceSession {
     expr: string,
     options?: { fit?: IdmlFit; missing?: "skip" | "flag" | "fallback" },
   ): void;
+  /** §9.7: define a barcode binding bound to a frame (`target`, the rectangle the
+   *  symbol fills). `symbology` is the symbology to render; `expr` resolves to the
+   *  value to encode (an EAN/UPC number, or arbitrary text for Code-128/QR). The
+   *  engine encodes (clean-room, in Rust) + scales the module grid to the frame's
+   *  content box; lowering emits native `insertPath` filled-rect VECTOR modules.
+   *  `quietZone` widens the symbology default margin; `missing` governs an empty
+   *  value (skip/flag). */
+  addBarcodeBinding(
+    id: string,
+    target: string,
+    query: string,
+    symbology: BarcodeSymbology,
+    expr: string,
+    options?: { quietZone?: number; missing?: "skip" | "flag" },
+  ): void;
   /** D-13: define a data-driven formatting rule (`when → apply` a document
    *  style) over a scope, bound to a host TARGET (story range / table column).
    *  `query` names the records the `when` condition evaluates against. */
@@ -338,10 +359,16 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // The kind of each defined binding, so lowerBinding/refresh dispatch without
   // re-resolving (a variable field re-resolves through placeholders(), an image
   // re-places, a table re-lowers).
-  const bindingKinds = new Map<string, "variable" | "table" | "image" | "rule" | "recordFlow">();
+  const bindingKinds = new Map<
+    string,
+    "variable" | "table" | "image" | "rule" | "recordFlow" | "barcode"
+  >();
   // D-14: the bound RECTANGLE (+ optional explicit fit) an image binding places
   // onto. Caller (the bindings panel) supplies the target frame.
   const imageTargets = new Map<string, { elementId: string; fit?: IdmlFit }>();
+  // §9.7: the bound rectangle a barcode binding draws its VECTOR modules onto
+  // (its page-coordinate top-left is the modules' origin). Caller-supplied.
+  const barcodeTargets = new Map<string, { elementId: string }>();
   // D-01: where each variable binding's placeholder field landed
   // (`{storyId, offset}`), so a re-lower does not double-insert. The refresh
   // loop re-enumerates placeholders() fresh, so this is the placed-once guard.
@@ -598,6 +625,24 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       if (!bindingIds.includes(id)) bindingIds.push(id);
     },
 
+    addBarcodeBinding(id, target, query, symbology, expr, options) {
+      void engine?.define_binding({
+        id,
+        kind: "barcode",
+        target,
+        query,
+        symbology,
+        expr,
+        options: {
+          quiet_zone: options?.quietZone ?? 0,
+          missing: options?.missing ?? "skip",
+        },
+      });
+      bindingKinds.set(id, "barcode");
+      barcodeTargets.set(id, { elementId: target });
+      if (!bindingIds.includes(id)) bindingIds.push(id);
+    },
+
     addRuleBinding(id, scope, query, when, apply, target) {
       void engine?.define_binding({ id, kind: "rule", scope, when, apply });
       bindingKinds.set(id, "rule");
@@ -631,6 +676,31 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           await this.applyRule(id);
           state.status = "ready";
           state.message = `Applied rule "${id}".`;
+          return;
+        }
+        // §9.7: a barcode is encoded + scaled to the bound frame's content box,
+        // then drawn as native VECTOR modules (insertPath). It is NOT a
+        // resolve_lowered kind — it needs the frame box, like record flow needs a
+        // chain — so route it through lower_barcode(id, w, h).
+        if (bindingKinds.get(id) === "barcode") {
+          const tgt = barcodeTargets.get(id);
+          let boxW = 72;
+          let boxH = 72;
+          if (tgt) {
+            const geom = await host.document.elementGeometry([
+              { kind: "rectangle", id: tgt.elementId } as ElementId,
+            ]);
+            const bounds = geom[0]?.bounds as [number, number, number, number] | undefined;
+            if (bounds) {
+              const [top, left, bottom, right] = bounds;
+              boxW = Math.max(1, right - left);
+              boxH = Math.max(1, bottom - top);
+            }
+          }
+          const bc = e.lower_barcode(id, boxW, boxH) as LoweredBarcode | null;
+          if (bc) await commitLoweredBarcode(host, bc, tgt?.elementId ?? null);
+          state.status = "ready";
+          state.message = `Resolved + lowered barcode "${id}".`;
           return;
         }
         const lowered = e.resolve_lowered(id) as { kind?: string } | null;

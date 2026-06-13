@@ -10,7 +10,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 import type { IdmlFit } from "@paged-media/data-host-model";
 
-import type { DataSourceSession } from "../session";
+import type { BarcodeSymbology, DataSourceSession } from "../session";
 
 /** The IDML FittingOnEmptyFrame choices an image binding offers (D-14). */
 const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
@@ -19,6 +19,14 @@ const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
   { value: "FitContentToFrame", label: "Fit content to frame" },
   { value: "ContentAwareFit", label: "Content-aware" },
   { value: "", label: "None (no fitting)" },
+];
+
+/** The barcode symbologies the panel offers (§9.7). */
+const SYMBOLOGY_OPTIONS: { value: BarcodeSymbology; label: string }[] = [
+  { value: "ean13", label: "EAN-13 (retail)" },
+  { value: "upca", label: "UPC-A (retail)" },
+  { value: "code128", label: "Code-128 (general 1D)" },
+  { value: "qr", label: "QR (2D)" },
 ];
 
 const wrap: CSSProperties = {
@@ -45,6 +53,7 @@ export function makeBindingsPanel(
   return function BindingsPanel(): ReactElement {
     const [snapshot, setSnapshot] = useState(session.getState());
     const [fit, setFit] = useState<IdmlFit>("Proportionally");
+    const [symbology, setSymbology] = useState<BarcodeSymbology>("ean13");
     const refresh = () => setSnapshot(session.getState());
 
     function wireDemo(): void {
@@ -77,6 +86,24 @@ export function makeBindingsPanel(
       refresh();
     }
 
+    function wireBarcodeDemo(): void {
+      const source = session.getState().sources[0];
+      const target = host.selection.get().find((e) => e.kind === "rectangle");
+      if (!source || !target) {
+        host.log.warn(
+          "wireBarcodeDemo: import a source AND select a rectangle to render a barcode into",
+        );
+        return;
+      }
+      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
+      // The bound rectangle is the symbol's frame; `expr` is the field value to
+      // encode (the engine encodes the chosen symbology + draws VECTOR modules).
+      session.addBarcodeBinding("bc_demo", target.id as string, "q_all", symbology, "", {
+        missing: "skip",
+      });
+      refresh();
+    }
+
     return (
       <div style={wrap}>
         <strong>paged.data · bindings (v{host.manifest.version})</strong>
@@ -91,6 +118,28 @@ export function makeBindingsPanel(
             fit:{" "}
             <select value={fit} onChange={(e) => setFit(e.target.value as IdmlFit)}>
               {FIT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div style={row}>
+          <button
+            type="button"
+            onClick={wireBarcodeDemo}
+            title="Render a barcode/QR from the field value into the selected rectangle"
+          >
+            Bind barcode →
+          </button>
+          <label style={note}>
+            symbology:{" "}
+            <select
+              value={symbology}
+              onChange={(e) => setSymbology(e.target.value as BarcodeSymbology)}
+            >
+              {SYMBOLOGY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -139,7 +188,10 @@ export function makeBindingsPanel(
           the refresh loop (D-01); images place onto the bound rectangle with the
           chosen fit (D-14); data-driven rules apply a document style per fired
           cell (D-13); tables lower to a native table (D-02 retired); record flow
-          paginates over the live frame chain + reflow (D-12). Honest gap: a NEW
+          paginates over the live frame chain + reflow (D-12); barcodes/QR encode
+          the field value (clean-room, in Rust) and draw as native VECTOR modules
+          scaled to the bound rectangle (§9.7 — resolution-free, no asset-store
+          door; raster is BLOCKED since placeImage needs a uri). Honest gap: a NEW
           variable field lands at the story start, not the user&apos;s caret — no
           caret-read door for a bundle yet (D-01 caret residual).
         </p>

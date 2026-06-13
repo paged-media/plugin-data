@@ -16,6 +16,7 @@
 //! independence (deterministic ordering is permutation-invariant), and the
 //! self-diff identity.
 
+use data_barcode::{encode, BarcodeError, Symbology};
 use data_bind::diff;
 use data_conformance::{n, record_set, t};
 use data_core::{FieldType, Value};
@@ -112,5 +113,51 @@ proptest! {
             .collect();
         let expected: Vec<String> = records.iter().take(flow.placed).map(|r| r.cells[0].clone()).collect();
         prop_assert_eq!(placed_cells, expected);
+    }
+
+    /// EAN-13 (§9.7): encoding 12 data digits computes the check, and re-encoding
+    /// the resulting 13-digit canonical text accepts it (the supplied check
+    /// verifies) and yields the SAME bars — the checksum round-trips.
+    #[test]
+    fn data_prop_barcode_ean13_checksum_round_trips(
+        digits in prop::collection::vec(0u8..10, 12),
+    ) {
+        let s: String = digits.iter().map(|d| (b'0' + d) as char).collect();
+        let g12 = encode(Symbology::Ean13, &s).unwrap();
+        prop_assert_eq!(g12.text.len(), 13);
+        // Re-encode the 13-digit canonical form: the embedded check must verify
+        // and produce identical bars (no re-checksum drift).
+        let g13 = encode(Symbology::Ean13, &g12.text).unwrap();
+        prop_assert_eq!(&g12.rects, &g13.rects);
+    }
+
+    /// Code-128 (§9.7): encoding ANY non-empty Latin-1-printable string never
+    /// panics, always yields a non-empty 1D symbol, and is deterministic.
+    #[test]
+    fn data_prop_barcode_code128_total_on_printable(s in "[ -~]{1,32}") {
+        let a = encode(Symbology::Code128, &s).unwrap();
+        prop_assert_eq!(a.modules_y, 1);
+        prop_assert!(a.rect_count() > 0);
+        prop_assert_eq!(a.text, s.clone());
+        // Determinism.
+        let b = encode(Symbology::Code128, &s).unwrap();
+        prop_assert_eq!(a.rects, b.rects);
+    }
+
+    /// QR (§9.7): byte-mode encoding is total + deterministic for any payload
+    /// that fits the v1–v10 ceiling, and a square matrix; an over-capacity
+    /// payload is a typed `TooLong`, never a panic.
+    #[test]
+    fn data_prop_barcode_qr_total_and_deterministic(s in "[ -~]{1,120}") {
+        match encode(Symbology::Qr, &s) {
+            Ok(a) => {
+                prop_assert_eq!(a.modules_x, a.modules_y);
+                prop_assert!(a.rect_count() > 0);
+                let b = encode(Symbology::Qr, &s).unwrap();
+                prop_assert_eq!(a.rects, b.rects);
+            }
+            Err(BarcodeError::TooLong { .. }) => { /* capacity ceiling — acceptable */ }
+            Err(e) => prop_assert!(false, "unexpected QR error: {e}"),
+        }
     }
 }

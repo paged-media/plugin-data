@@ -7,6 +7,7 @@ export type {
   GridRule,
   ImageReference,
   ImageStatus,
+  LoweredBarcode,
   LoweredColumn,
   LoweredImage,
   LoweredOutput,
@@ -14,6 +15,13 @@ export type {
   LoweredTable,
   LoweredVariable,
 } from "./lowered";
+
+export {
+  barcodeToMutations,
+  barcodeModuleCount,
+  type BarcodeModule,
+  type BarcodePlacement,
+} from "./barcode";
 
 export {
   BINDING_KEY,

@@ -31,6 +31,10 @@ export interface DataEngineLike {
    *  frame chain (`FrameCapacity[]`, `heightPt`) — returns the `PaginatedFlow`
    *  IR. The chain is the host frame-chain topology (D-12), read live. */
   lower_record_flow(binding: string, chain: unknown, opts: unknown): unknown;
+  /** §9.7: resolve a barcode binding and lower it scaled to the bound frame's
+   *  content box (`boxWPt` × `boxHPt`, pt) — returns the `LoweredBarcode` IR
+   *  (content-space filled-rect modules the bundle draws as native insertPath). */
+  lower_barcode(binding: string, boxWPt: number, boxHPt: number): unknown;
   /** M1 remote slice: the content-hash invalidation key for a defined remote
    *  source over bundle-fetched bytes. Optional: a wasm artifact built before
    *  the M1 slice lacks it (the session degrades honestly). */

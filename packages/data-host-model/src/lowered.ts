@@ -78,5 +78,19 @@ export interface LoweredImage {
   status: ImageStatus;
 }
 
+/** A lowered barcode (§9.7) — the symbology's dark modules as content-space
+ *  filled rects scaled to the bound frame's content box (the VECTOR lane). The
+ *  full shape lives in `barcode.ts`; re-exported through the union here. */
+export interface LoweredBarcode {
+  kind: "barcode";
+  target: string;
+  symbology: string;
+  modules: { xPt: number; yPt: number; wPt: number; hPt: number }[];
+  modulesX: number;
+  modulesY: number;
+  bounds: ContentBox;
+  text: string;
+}
+
 /** The tagged union the engine returns from `resolve_lowered`. */
-export type LoweredOutput = LoweredVariable | LoweredTable | LoweredImage;
+export type LoweredOutput = LoweredVariable | LoweredTable | LoweredImage | LoweredBarcode;

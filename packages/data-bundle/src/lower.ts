@@ -7,6 +7,7 @@
 
 import type { BundleHost, ElementId, Mutation, PageId } from "@paged-media/plugin-api";
 import {
+  barcodeToMutations,
   bindingMetadata,
   createRuleCellStyle,
   defaultPlacement,
@@ -20,8 +21,10 @@ import {
   tableInsertMutation,
   tableInsertSpec,
   toRuleApplication,
+  type BarcodePlacement,
   type IdmlFit,
   type ImageReference,
+  type LoweredBarcode,
   type LoweredImage,
   type LoweredTable,
   type LoweredVariable,
@@ -284,6 +287,69 @@ export async function commitLoweredImage(
   }
   host.log.info(`image "${image.target}" placed on ${elementId} (uri ${uri}, fit ${fit})`);
   return true;
+}
+
+/** Commit a lowered barcode to the page as native VECTOR modules (spec §9.7).
+ *  The engine has already encoded the symbology and scaled its module grid into
+ *  the bound frame's content box; this drives one `insertPath` closed filled
+ *  rect per dark module (the VECTOR lane — resolution-independent, no
+ *  asset-store door; raster is BLOCKED because placeImage needs a resolvable
+ *  uri). `elementId` (when given) is the bound rectangle's Self id — its
+ *  page-coordinate top-left is read so the modules land inside it; without one,
+ *  the symbol lands at a default page inset. The whole symbol is ONE undoable
+ *  batch with the binding envelope. Returns the number of modules drawn (0 when
+ *  the value was empty — the missing policy, never a fake symbol). */
+export async function commitLoweredBarcode(
+  host: BundleHost,
+  barcode: LoweredBarcode,
+  elementId?: string | null,
+): Promise<number> {
+  if (barcode.modules.length === 0) {
+    host.log.info(
+      `barcode "${barcode.target}" resolved to no value (missing policy) — nothing drawn`,
+    );
+    return 0;
+  }
+  const pageId = await activePageId(host);
+  if (!pageId) {
+    host.log.warn("barcode: no page to draw onto");
+    return 0;
+  }
+
+  // Page origin: the bound rectangle's top-left if one is given, else a default
+  // inset. The engine modules are content-space offsets from this origin (§9.6).
+  let topPt = 36;
+  let leftPt = 36;
+  if (elementId) {
+    const geom = await host.document.elementGeometry([
+      { kind: "rectangle", id: elementId } as ElementId,
+    ]);
+    const bounds = geom[0]?.bounds as [number, number, number, number] | undefined;
+    if (bounds) {
+      [topPt, leftPt] = bounds;
+    }
+  }
+
+  const placement: BarcodePlacement = { pageId, topPt, leftPt };
+  const envelope = makeEnvelope({
+    kind: "barcode",
+    target: barcode.target,
+    symbology: barcode.symbology,
+  });
+  const ops = barcodeToMutations(barcode, placement, envelope);
+  if (ops.length === 0) return 0;
+
+  const outcome = await host.document.mutate({ op: "batch", args: { ops } });
+  if (!outcome.applied) {
+    host.log.warn(`barcode "${barcode.target}": insertPath batch rejected`);
+    return 0;
+  }
+  host.log.info(
+    `barcode "${barcode.target}" (${barcode.symbology}) drawn as ${barcode.modules.length} ` +
+      "vector modules" +
+      (barcode.text ? ` (HRI "${barcode.text}")` : ""),
+  );
+  return barcode.modules.length;
 }
 
 /** Apply a data-driven formatting rule to the document (D-13, spec §9.5). The
