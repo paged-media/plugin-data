@@ -12,6 +12,7 @@ members = [
     "data-query",
     "data-bind",
     "data-lower",
+    "data-barcode",
     "data-automation",
     "data-js",
     "data-cli",

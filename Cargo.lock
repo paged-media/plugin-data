@@ -299,6 +299,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-barcode"
+version = "0.0.0"
+dependencies = [
+ "data-core",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "data-bind"
 version = "0.0.0"
 dependencies = [
@@ -326,6 +335,7 @@ name = "data-conformance"
 version = "0.0.0"
 dependencies = [
  "data-automation",
+ "data-barcode",
  "data-bind",
  "data-core",
  "data-expr",
@@ -368,6 +378,7 @@ version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
  "data-automation",
+ "data-barcode",
  "data-bind",
  "data-core",
  "data-lower",
@@ -384,6 +395,7 @@ dependencies = [
 name = "data-lower"
 version = "0.0.0"
 dependencies = [
+ "data-barcode",
  "data-core",
  "serde",
 ]
