@@ -168,6 +168,33 @@ pub enum RefreshPolicy {
     Never,
 }
 
+impl RefreshPolicy {
+    /// Whether the **interactive editor** can honor this policy WITHOUT a
+    /// background timer in a document. A document never runs a wall-clock
+    /// scheduler (§11 — a document carries data, not a daemon); the interactive
+    /// editor acts on `Manual` (explicit user refresh), `OnOpen` (re-resolve once
+    /// on open, behind the §11 consent gate — never a silent auto-fetch), and
+    /// `Never` (trivially — a frozen snapshot). `Interval` is the ONE policy the
+    /// interactive editor does NOT drive itself: an interval re-resolve is the
+    /// **batch/automation lane**'s job (`data-automation`, the napi/headless
+    /// track — see `run_record_flow_batch`), where a host loop owns the clock.
+    /// The field round-trips on every source so the recipe survives; this method
+    /// is the honest "who acts on it" predicate, not a scheduler.
+    pub fn honored_interactively(self) -> bool {
+        !matches!(self, RefreshPolicy::Interval { .. })
+    }
+
+    /// The re-resolve interval in seconds, iff this is an `Interval` policy — the
+    /// value the **automation lane** reads to drive its own loop (the interactive
+    /// editor never reads it; see [`honored_interactively`](Self::honored_interactively)).
+    pub fn interval_secs(self) -> Option<u64> {
+        match self {
+            RefreshPolicy::Interval { secs } => Some(secs),
+            _ => None,
+        }
+    }
+}
+
 /// A typed query parameter declaration (bound at resolve time, §5.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamDecl {

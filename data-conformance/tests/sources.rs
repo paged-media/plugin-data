@@ -312,3 +312,61 @@ fn data_source_remote_engine_key_round_trip() {
             if url == "https://old.test/d.csv" && params.is_empty()
     ));
 }
+
+/// The refresh-policy SHAPE round-trips on every source variant, and the honest
+/// "who acts on it" predicate holds: the interactive editor honors Manual /
+/// OnOpen / Never without a background timer; `Interval` is deferred to the
+/// batch/automation lane (the document never runs a wall-clock scheduler, §11).
+/// This is the policy shape only — no live scheduler is built here (recorded
+/// follow-up); the field is stored + persisted so the recipe survives.
+#[test]
+fn data_source_refresh_policy_roundtrip() {
+    use data_js::core::DataSession;
+
+    // The interactive editor acts on these WITHOUT a background timer.
+    assert!(RefreshPolicy::Manual.honored_interactively());
+    assert!(RefreshPolicy::OnOpen.honored_interactively());
+    assert!(RefreshPolicy::Never.honored_interactively());
+    // Interval is the one the editor does NOT drive — it's the automation lane's.
+    assert!(!RefreshPolicy::Interval { secs: 3600 }.honored_interactively());
+    assert_eq!(
+        RefreshPolicy::Interval { secs: 3600 }.interval_secs(),
+        Some(3600)
+    );
+    assert_eq!(RefreshPolicy::Manual.interval_secs(), None);
+
+    // Each policy round-trips through a saved document, on its own source.
+    let policies = [
+        RefreshPolicy::Manual,
+        RefreshPolicy::OnOpen,
+        RefreshPolicy::Interval { secs: 900 },
+        RefreshPolicy::Never,
+    ];
+    let mut session = DataSession::new(0);
+    for (i, policy) in policies.iter().enumerate() {
+        session.define_source(DataSource {
+            id: SourceId::from(format!("s{i}")),
+            kind: SourceKind::InlineSeed {
+                table: format!("t{i}"),
+            },
+            capability: CapabilityRef::from("inline"),
+            refresh: *policy,
+        });
+    }
+    let reopened = DataSession::from_payload(session.payload(), 0);
+    let mut sources = reopened.payload().sources;
+    sources.sort_by(|a, b| a.id.to_string().cmp(&b.id.to_string()));
+    assert_eq!(sources.len(), 4);
+    for (src, expected) in sources.iter().zip(policies.iter()) {
+        assert_eq!(
+            &src.refresh, expected,
+            "refresh policy must survive save/load"
+        );
+    }
+    // The interval value specifically survives (the automation lane reads it).
+    let interval = sources
+        .iter()
+        .find_map(|s| s.refresh.interval_secs())
+        .expect("an Interval policy must round-trip its secs");
+    assert_eq!(interval, 900);
+}

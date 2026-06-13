@@ -59,6 +59,16 @@
   tests:
     rust: ["data-conformance/tests/sources.rs::data_source_duckdb_engine_purpose"]
 
+- id: data.source.refresh-policy
+  title: Source refresh-policy shape — Manual | OnOpen | Interval | Never (round-trips; honest interactive-vs-automation split, §5.1/§11)
+  spec: plugin-data data-core/src/model.rs (RefreshPolicy) (base-idea §5.1, §11)
+  status: implemented
+  provenance:
+    - "RefreshPolicy { Manual(default) | OnOpen | Interval{secs} | Never } is a field on every DataSource; serde round-trips so the recipe survives save/load (added fields default — pre-policy payloads still decode)"
+    - "POLICY SHAPE ONLY (not a live scheduler): a document never runs a wall-clock timer (§11 — carries data, not a daemon). honored_interactively() encodes the split — the interactive editor acts on Manual (explicit refresh), OnOpen (re-resolve once on open behind the §11 consent gate, never a silent auto-fetch) and Never (frozen snapshot); Interval is DEFERRED to the batch/automation lane (data-automation, the napi/headless track that owns the clock), which reads interval_secs(). The live interval scheduler is the recorded follow-up — no background-timer code lives in the document realm"
+  tests:
+    rust: ["data-conformance/tests/sources.rs::data_source_refresh_policy_roundtrip"]
+
 - id: data.source.governed-extract
   title: Governed extract (governed tables + optional metadata sidecar, §7)
   spec: plugin-data data-sources (base-idea §7)
