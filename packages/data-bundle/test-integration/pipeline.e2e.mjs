@@ -329,9 +329,118 @@ async function partC() {
   console.log(`  ✓ batch run: per-group → 2 docs, footer "${footer.cells[0]}" through real wasm`);
 }
 
+// ── Part D — the v43 consumer lanes through the real wasm serde boundary ─────
+// Proves the engine surface the four campaign-Phase-4 consumers drive crosses
+// serde-wasm-bindgen with the shapes the bundle's host-model translates:
+//   D-01 variable  → resolve_lowered → LoweredVariable {kind, target, text, hidden}
+//   D-14 image     → resolve_lowered → LoweredImage {kind, reference, fit, status}
+//   D-13 rule      → evaluate_rule   → RuleResult {scope, fires, apply{action,name}, total}
+//   D-12 flow live → lower_record_flow over a (live-shaped) FrameCapacity chain
+async function partD() {
+  console.log("\nPart D — v43 consumer lanes (variable / image / rule / live flow):");
+  const engine = await bootEngine();
+  engine.define_query({ id: "q1", sql: "x", params: [], shape: { shape: "recordStream" } });
+  engine.ingest_result("q1", {
+    schema: {
+      fields: [
+        { name: "sku", ty: "text", nullable: true },
+        { name: "price", ty: "float", nullable: true },
+        { name: "stock", ty: "float", nullable: true },
+        { name: "photo", ty: "text", nullable: true },
+        { name: "region", ty: "text", nullable: true },
+      ],
+    },
+    columns: [
+      [{ t: "text", v: "A-1" }, { t: "text", v: "B-2" }, { t: "text", v: "C-3" }],
+      [{ t: "number", v: 9.99 }, { t: "number", v: 19.99 }, { t: "number", v: 4.5 }],
+      [{ t: "number", v: 2 }, { t: "number", v: 10 }, { t: "number", v: 0 }],
+      [{ t: "text", v: "https://x/a.png" }, { t: "text", v: "" }, { t: "text", v: "img/c.jpg" }],
+      [{ t: "text", v: "east" }, { t: "text", v: "west" }, { t: "text", v: "east" }],
+    ],
+    row_count: 3,
+  });
+
+  // D-01 — a variable binding lowers to a LoweredVariable (the field value the
+  // host places via insertField + re-resolves via setFieldValue).
+  engine.define_binding({
+    id: "v_price",
+    kind: "variable",
+    target: "ph_price",
+    query: "q1",
+    expr: "CURRENCY(price)",
+    missing: { missing: "blank" },
+  });
+  const v = engine.resolve_lowered("v_price");
+  eq(v.kind, "variable", "Part D: variable lowered kind");
+  eq(v.text, "$9.99", "Part D: variable resolved display (en CURRENCY) through real wasm");
+  assert.equal(v.hidden, false, "Part D: variable not hidden (Blank policy, value present)");
+  console.log(`  ✓ D-01 variable → LoweredVariable text "${v.text}" (host inserts a field, refresh re-resolves)`);
+
+  // D-14 — an image binding classifies the reference + applies the fit/missing
+  // policy; the host places it via placeImage onto the bound rectangle.
+  engine.define_binding({
+    id: "img1",
+    kind: "image",
+    target: "urect",
+    query: "q1",
+    expr: "photo",
+    policy: { fit: "fill", missing: "skip" },
+  });
+  const img = engine.resolve_lowered("img1");
+  eq(img.kind, "image", "Part D: image lowered kind");
+  eq(img.status, "present", "Part D: image status present (A-1 has a uri)");
+  eq(img.reference.ref, "uri", "Part D: image reference classified as uri");
+  eq(img.reference.uri, "https://x/a.png", "Part D: image uri crossed the boundary");
+  eq(img.fit, "fill", "Part D: image fit (ImgFit camelCase) crossed");
+  console.log(`  ✓ D-14 image → LoweredImage uri "${img.reference.uri}" fit "${img.fit}" (host placeImage)`);
+
+  // D-13 — a rule's `when` fires over stabilized records; the engine returns the
+  // fired indices + the document-style action (the host applies appliedCellStyle).
+  engine.define_binding({
+    id: "r_low",
+    kind: "rule",
+    scope: "table-region",
+    when: "stock < 5",
+    apply: { action: "tableStyle", name: "low-stock" },
+  });
+  const rule = engine.evaluate_rule("r_low", "q1");
+  eq(rule.scope, "table-region", "Part D: rule scope crossed");
+  eq(rule.total, 3, "Part D: rule evaluated all 3 records");
+  // sku A-1 stock 2, B-2 stock 10, C-3 stock 0 → fires < 5 on A-1, C-3 (idx 0, 2).
+  assert.deepEqual(rule.fires, [0, 2], "Part D: rule fired on the low-stock rows (stabilized idx)");
+  eq(rule.apply.action, "tableStyle", "Part D: rule apply action (tagged camelCase) crossed");
+  eq(rule.apply.name, "low-stock", "Part D: rule apply style name crossed");
+  console.log(`  ✓ D-13 rule → RuleResult fires [${rule.fires}] apply "${rule.apply.name}" (host appliedCellStyle)`);
+
+  // D-12 — a record flow paginates over a LIVE-shaped chain (FrameCapacity with
+  // `heightPt`, the exact shape readLiveChain builds from frameChain + geometry).
+  engine.define_template({ id: "tmpl", fields: [{ label: "", expr: "sku" }], lineHeightPt: 10 });
+  engine.define_binding({
+    id: "rf",
+    kind: "recordFlow",
+    chain: "chain",
+    query: "q1",
+    template: "tmpl",
+    options: { groupBy: [], repeatHeader: true, continuedMarker: true },
+  });
+  // Two short frames (live content-box heights) — the records spill across them.
+  const liveChain = [
+    { frame: "f0", page: "p1", heightPt: 25 },
+    { frame: "f1", page: "p2", heightPt: 25 },
+  ];
+  const flow = engine.lower_record_flow("rf", liveChain, undefined);
+  assert.ok(flow.frames.length >= 1, "Part D: record flow paginated over the live chain");
+  eq(flow.total, 3, "Part D: record flow total record count crossed");
+  // Every placed record landed in a frame whose id came from the live chain.
+  const frameIds = new Set(flow.frames.map((f) => f.frame));
+  assert.ok([...frameIds].every((id) => id === "f0" || id === "f1"), "Part D: flow used the live frame ids");
+  console.log(`  ✓ D-12 live flow → ${flow.placed}/${flow.total} records over ${flow.frames.length} live frame(s)`);
+}
+
 const expected = await partA();
 const duckOk = await partB(expected);
 await partC();
+await partD();
 console.log(
-  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)`,
+  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)  Part D ✓ (v43 lanes)`,
 );

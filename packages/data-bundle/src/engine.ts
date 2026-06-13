@@ -23,6 +23,14 @@ export interface DataEngineLike {
   governed_catalog(query: string, metadata: unknown): unknown;
   plan_batch(query: string, mode: unknown): unknown;
   run_record_flow_batch(binding: string, mode: unknown, chain: unknown, opts: unknown): unknown;
+  /** D-13: evaluate a data-driven formatting rule over a query's records —
+   *  returns `{scope, fires, apply, total}` (the firing decision; the host
+   *  applies the named document style). */
+  evaluate_rule(rule: string, query: string): unknown;
+  /** D-12: resolve a record-flow binding and paginate it over a caller-supplied
+   *  frame chain (`FrameCapacity[]`, `heightPt`) — returns the `PaginatedFlow`
+   *  IR. The chain is the host frame-chain topology (D-12), read live. */
+  lower_record_flow(binding: string, chain: unknown, opts: unknown): unknown;
   /** M1 remote slice: the content-hash invalidation key for a defined remote
    *  source over bundle-fetched bytes. Optional: a wasm artifact built before
    *  the M1 slice lacks it (the session degrades honestly). */

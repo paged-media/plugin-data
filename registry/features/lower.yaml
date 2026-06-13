@@ -51,6 +51,59 @@
     vitest: ["packages/data-host-model/src/__tests__/lower.test.ts"]
 
 - id: data.lower.rule
-  title: Data-driven formatting rules (when -> document style, §9.5)
-  spec: plugin-data data-lower (base-idea §9.5, D-13)
-  status: planned
+  title: Data-driven formatting rules (when -> document style, §9.5) — applied via host mutations (D-13)
+  spec: plugin-data data-bind/src/lib.rs (evaluate_rule) + packages/data-host-model/src/fields.ts (ruleMutations) (base-idea §9.5, D-13)
+  status: implemented
+  provenance:
+    [
+      "the engine's evaluate_rule decides WHICH stabilized records fire WHICH document style (data-driven half, bit-stable); the host-model ruleMutations turns a fired RuleResult into real mutations — applyStyle for paragraph/character scopes, per-cell appliedCellStyle (setElementProperty NodeId::TableCell) over the fired rows for a table style; always a document-style reference, never a literal (§9.5); composes from create*Style + setElementProperty (S-04 verdict, no new wire)",
+    ]
+  tests:
+    rust: ["data-conformance/tests/rule.rs::data_bind_rule"]
+    vitest:
+      [
+        "packages/data-host-model/src/__tests__/fields.test.ts",
+        "packages/data-bundle/src/__tests__/lanes-v43.test.ts",
+      ]
+
+- id: data.lower.variable-field
+  title: In-text variable placeholders — insertField + the setFieldValue refresh loop (D-01)
+  spec: plugin-data packages/data-host-model/src/fields.ts + packages/data-bundle/src/{lower,session}.ts (base-idea §9.1, D-01)
+  status: implemented
+  provenance:
+    [
+      "v43 placeholder field model (FieldKind placeholder): the host-model insertFieldMutation places a tagged run keyed by the binding id carrying the engine-resolved display; diffFields + setFieldValueMutation drive the minimal refresh; the session refresh loop re-enumerates host.document.placeholders() (fresh-read addresses) and setFieldValues only CHANGED values, relinking the sync state; CARET-POSITION GAP (honest): no caret/selection-offset read door for a bundle, so a NEW field lands at story start (offset 0), not the user's caret — tracked as the D-01 caret residual",
+    ]
+  tests:
+    vitest:
+      [
+        "packages/data-host-model/src/__tests__/fields.test.ts",
+        "packages/data-bundle/src/__tests__/lanes-v43.test.ts",
+      ]
+
+- id: data.lower.image-place
+  title: Image bindings — placeImage onto the bound rectangle + fit (D-14)
+  spec: plugin-data packages/data-host-model/src/fields.ts + packages/data-bundle/src/{lower,session}.ts (base-idea §9.2, D-14)
+  status: implemented
+  provenance:
+    [
+      "v43 placeImage op: the engine classifies the reference (uri/path/assetId/bytes) + applies the missing policy; the host-model placeImageMutation drives placeImage onto the bound RECTANGLE through the core asset mechanism (never plugin-image, §2.1); idmlFit maps ImgFit -> the IDML FittingOnEmptyFrame vocabulary (Proportionally/FillProportionally/FitContentToFrame), with an explicit panel override; a non-URI reference (inline bytes/assetId) or an absent reference is an honest skip, never a fake placement",
+    ]
+  tests:
+    vitest:
+      [
+        "packages/data-host-model/src/__tests__/fields.test.ts",
+        "packages/data-bundle/src/__tests__/lanes-v43.test.ts",
+      ]
+
+- id: data.lower.recordflow-live
+  title: Live record-flow pagination over the host frame chain + reflow (D-12)
+  spec: plugin-data packages/data-bundle/src/session.ts (readLiveChain) + data-lower/src/lib.rs (paginate_flow) (base-idea §9.4, D-12)
+  status: implemented
+  provenance:
+    [
+      "the paginator (data-lower paginate_flow) now runs over the LIVE host frame chain: readLiveChain reads host.document.frameChain(storyId) + each frame's content-box height (elementGeometry bottom-top) into the FrameCapacity shape the engine paginates over; subscribeChainReflow re-paginates on DocumentChangeEvent.reflow (resize-only, §8.5) and ignores transform-only changes — the C-2/S-05 reflow contract, replacing the caller-supplied chain (like sheet S-05 lowerPaginatedToChain)",
+    ]
+  tests:
+    rust: ["data-conformance/tests/recordflow.rs::data_lower_paginate"]
+    vitest: ["packages/data-bundle/src/__tests__/lanes-v43.test.ts"]

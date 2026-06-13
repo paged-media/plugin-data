@@ -9,12 +9,27 @@ import type {
   BundleHost,
   DataProviderHandle,
   DataProviderRegistration,
+  ElementId,
   ProviderSchema,
 } from "@paged-media/plugin-api";
 
+import {
+  FIELD_PLUGIN,
+  setFieldValueMutation,
+  type IdmlFit,
+  type PlaceholderField,
+  type RuleResult,
+  type RuleTarget,
+} from "@paged-media/data-host-model";
+
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
-import { commitLoweredImage, commitLoweredTable, commitLoweredVariable } from "./lower";
+import {
+  commitLoweredImage,
+  commitLoweredTable,
+  commitLoweredVariable,
+  commitRule,
+} from "./lower";
 import {
   buildRemoteUrl,
   remoteOrigin,
@@ -24,6 +39,64 @@ import {
 } from "./remote";
 
 export type { RemoteFormat, RemoteSourceState } from "./remote";
+
+/** One frame in a live chain, the shape the engine paginates over
+ *  (`FrameCapacity`): `frame`/`page` ids + the content-box `heightPt`. The
+ *  engine deserializes camelCase (`heightPt`, verified by the e2e harness). */
+interface LiveFrameCapacity {
+  frame: string;
+  page: string;
+  heightPt: number;
+}
+
+/** Read the LIVE host frame chain for a story (D-12): the ordered frame thread
+ *  (`host.document.frameChain`) + each frame's content-box height
+ *  (`elementGeometry` bounds → bottom−top). Replaces the caller-supplied chain
+ *  the paginator was built ahead of (like sheet S-05's `lowerPaginatedToChain`).
+ *  Returns `[]` when the story has no frame (the engine reports overflow). */
+async function readLiveChain(host: BundleHost, storyId: string): Promise<LiveFrameCapacity[]> {
+  let links: readonly { frameId: string; next: string | null; overflow: boolean }[] = [];
+  try {
+    links = await host.document.frameChain(storyId);
+  } catch {
+    return [];
+  }
+  if (links.length === 0) return [];
+  const ids = links.map((l) => ({ kind: "textFrame", id: l.frameId }) as ElementId);
+  let geom: { id: ElementId; pageId: string; bounds: [number, number, number, number] }[] = [];
+  try {
+    geom = (await host.document.elementGeometry(ids)) as never;
+  } catch {
+    geom = [];
+  }
+  const byId = new Map(geom.map((g) => [(g.id as { id: string }).id, g]));
+  return links.map((l) => {
+    const g = byId.get(l.frameId);
+    const [top, , bottom] = g?.bounds ?? [0, 0, 0, 0];
+    return {
+      frame: l.frameId,
+      page: g?.pageId ?? "",
+      heightPt: Math.max(0, bottom - top),
+    };
+  });
+}
+
+/** Map an explicit IDML FittingOnEmptyFrame choice back to the engine's coarse
+ *  `ImgFit` (fit/fill/crop) for the binding `policy`. The engine ImgFit is only
+ *  a default hint; the explicit IDML `fit` overrides at commit time. */
+function engineFit(fit?: IdmlFit): "fit" | "fill" | "crop" {
+  switch (fit) {
+    case "FillProportionally":
+      return "fill";
+    case "FitContentToFrame":
+    case "ContentAwareFit":
+      return "crop";
+    case "Proportionally":
+    case "":
+    case undefined:
+      return "fit";
+  }
+}
 
 /** A read-only snapshot for the panels. */
 export interface SessionState {
@@ -147,6 +220,29 @@ export interface DataSourceSession {
   addQuery(id: string, sql: string, shape: "recordStream" | "singleRecord" | "scalar"): void;
   addVariableBinding(id: string, target: string, query: string, expr: string): void;
   addTableBinding(id: string, region: string, query: string, columns: ColumnSpec[]): void;
+  /** D-14: define an image binding bound to a RECTANGLE (`elementId`). `expr`
+   *  yields the image reference per record (the engine classifies uri/path/
+   *  assetId/bytes + applies the missing policy); `fit` is the IDML
+   *  FittingOnEmptyFrame value (the engine's `ImgFit` maps to a default when
+   *  omitted). `missing` governs an absent reference (skip/flag/fallback). */
+  addImageBinding(
+    id: string,
+    target: string,
+    query: string,
+    expr: string,
+    options?: { fit?: IdmlFit; missing?: "skip" | "flag" | "fallback" },
+  ): void;
+  /** D-13: define a data-driven formatting rule (`when → apply` a document
+   *  style) over a scope, bound to a host TARGET (story range / table column).
+   *  `query` names the records the `when` condition evaluates against. */
+  addRuleBinding(
+    id: string,
+    scope: string,
+    query: string,
+    when: string,
+    apply: { action: "characterStyle" | "paragraphStyle" | "tableStyle"; name: string },
+    target: RuleTarget,
+  ): void;
   /** Re-run every query through DuckDB and ingest the results (no document
    *  writes) — updates sync states. */
   refreshData(): Promise<void>;
@@ -154,6 +250,30 @@ export interface DataSourceSession {
   lowerBinding(id: string): Promise<void>;
   /** Refresh, then resolve + commit every binding. */
   lowerAll(): Promise<void>;
+  /** D-01 refresh loop: re-enumerate the document's placeholder FIELDS
+   *  (`host.document.placeholders()`, fresh-read addresses), resolve each
+   *  `{plugin:"media.paged.data", key}` against its binding's expression, and
+   *  `setFieldValue` the CHANGED values (minimal/idempotent). Sync states
+   *  (Linked/Stale) update. Returns the number of fields re-resolved. */
+  refreshFields(): Promise<number>;
+  /** D-13: evaluate a rule binding and apply its document-style action to the
+   *  fired content (per-cell on a lowered table, or over a story range).
+   *  Returns the count of applied style writes. */
+  applyRule(ruleId: string): Promise<number>;
+  /** D-12: paginate a record-flow binding over the LIVE host frame chain
+   *  (`host.document.frameChain(storyId)` + content-box capacities), re-splitting
+   *  when the chain reflows. Returns the paginated flow IR (the host renders it).
+   *  `storyId` is the flow region's story; the chain is read live (D-12), not
+   *  caller-supplied. */
+  paginateChain(bindingId: string, storyId: string): Promise<unknown>;
+  /** D-12: subscribe to content-box reflow so a catalog flow re-paginates when
+   *  its chain's frames resize. Returns a disposable; the callback fires with
+   *  the fresh paginated flow on each relevant reflow. */
+  subscribeChainReflow(
+    bindingId: string,
+    storyId: string,
+    onRepaginate: (flow: unknown) => void,
+  ): { dispose(): void };
   /** The §11 consent gate for remote/governed sources (D-03): review the
    *  data-source manifest (origins + purpose) and obtain per-origin consent
    *  through the host before any reach. Returns the granted origins. LIVE at
@@ -215,6 +335,20 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   const sourceNames: string[] = [];
   const queries = new Map<string, QueryDef>();
   const bindingIds: string[] = [];
+  // The kind of each defined binding, so lowerBinding/refresh dispatch without
+  // re-resolving (a variable field re-resolves through placeholders(), an image
+  // re-places, a table re-lowers).
+  const bindingKinds = new Map<string, "variable" | "table" | "image" | "rule" | "recordFlow">();
+  // D-14: the bound RECTANGLE (+ optional explicit fit) an image binding places
+  // onto. Caller (the bindings panel) supplies the target frame.
+  const imageTargets = new Map<string, { elementId: string; fit?: IdmlFit }>();
+  // D-01: where each variable binding's placeholder field landed
+  // (`{storyId, offset}`), so a re-lower does not double-insert. The refresh
+  // loop re-enumerates placeholders() fresh, so this is the placed-once guard.
+  const variableFields = new Map<string, { storyId: string; offset: number }>();
+  // D-13: the rule scope→query each rule binding evaluates against + its host
+  // target (story range / table column). Caller-supplied.
+  const ruleTargets = new Map<string, { query: string; target: RuleTarget }>();
   // D-09: live provider registrations, keyed by provider id, so a re-publish
   // bumps the existing registration's revision instead of double-registering.
   const providerHandles = new Map<string, DataProviderHandle>();
@@ -430,6 +564,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         expr,
         missing: { missing: "blank" },
       });
+      bindingKinds.set(id, "variable");
       if (!bindingIds.includes(id)) bindingIds.push(id);
     },
 
@@ -442,6 +577,31 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         columns: columns.map((c) => ({ header: c.header, expr: c.expr, style: null })),
         options: { header_row: true, group_by: [] },
       });
+      bindingKinds.set(id, "table");
+      if (!bindingIds.includes(id)) bindingIds.push(id);
+    },
+
+    addImageBinding(id, target, query, expr, options) {
+      void engine?.define_binding({
+        id,
+        kind: "image",
+        target,
+        query,
+        expr,
+        // ImgPolicy: { fit, missing } — the engine's ImgFit drives the default
+        // placement vocab; the explicit IDML `fit` (options.fit) overrides at
+        // commit time. Map the IDML choice back to the engine ImgFit when given.
+        policy: { fit: engineFit(options?.fit), missing: options?.missing ?? "skip" },
+      });
+      bindingKinds.set(id, "image");
+      imageTargets.set(id, { elementId: target, fit: options?.fit });
+      if (!bindingIds.includes(id)) bindingIds.push(id);
+    },
+
+    addRuleBinding(id, scope, query, when, apply, target) {
+      void engine?.define_binding({ id, kind: "rule", scope, when, apply });
+      bindingKinds.set(id, "rule");
+      ruleTargets.set(id, { query, target });
       if (!bindingIds.includes(id)) bindingIds.push(id);
     },
 
@@ -465,13 +625,37 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     async lowerBinding(id) {
       try {
         const e = await ensureEngine();
+        // A rule is not a resolvable lowering — it applies a style decision over
+        // a scope (D-13); route it through applyRule, not resolve_lowered.
+        if (bindingKinds.get(id) === "rule") {
+          await this.applyRule(id);
+          state.status = "ready";
+          state.message = `Applied rule "${id}".`;
+          return;
+        }
         const lowered = e.resolve_lowered(id) as { kind?: string } | null;
         if (lowered?.kind === "table") {
           await commitLoweredTable(host, lowered as never);
         } else if (lowered?.kind === "variable") {
-          await commitLoweredVariable(host, lowered as never);
+          // D-01: place the variable as a tagged placeholder field ONCE (keyed by
+          // the binding id), then re-resolve it through the placeholders() loop.
+          if (!variableFields.has(id)) {
+            const placed = await commitLoweredVariable(host, lowered as never, id);
+            if (placed) variableFields.set(id, placed);
+          } else {
+            // Already placed — a re-lower just re-resolves the live field.
+            await this.refreshFields();
+          }
         } else if (lowered?.kind === "image") {
-          await commitLoweredImage(host, lowered as never);
+          // D-14: place onto the bound rectangle (caller-supplied target).
+          const tgt = imageTargets.get(id);
+          if (tgt) {
+            await commitLoweredImage(host, lowered as never, tgt.elementId, tgt.fit);
+          } else {
+            host.log.info(
+              `image binding "${id}" has no bound rectangle target — define it via addImageBinding`,
+            );
+          }
         }
         state.status = "ready";
         state.message = `Resolved + lowered "${id}".`;
@@ -487,6 +671,97 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       for (const id of [...bindingIds]) {
         await this.lowerBinding(id);
       }
+    },
+
+    async refreshFields() {
+      // D-01 refresh loop: re-enumerate OUR placeholder fields (fresh-read
+      // addresses — re-enumerate before each write pass), resolve each field's
+      // key (= binding id) against its binding, and setFieldValue the changed
+      // values. A field whose binding no longer resolves is left untouched.
+      if (!host.supports("document.placeholders@1")) return 0;
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch {
+        return 0;
+      }
+      let fields: readonly PlaceholderField[] = [];
+      try {
+        fields = (await host.document.placeholders()) as readonly PlaceholderField[];
+      } catch {
+        return 0;
+      }
+      let written = 0;
+      for (const f of fields) {
+        if (f.plugin !== FIELD_PLUGIN) continue; // our namespace only
+        if (bindingKinds.get(f.key) !== "variable") continue; // a known variable binding
+        // Resolve the binding live (the engine re-evaluates the expression over
+        // the freshly-ingested record).
+        let next: string | null = f.value;
+        try {
+          const lowered = e.resolve_lowered(f.key) as
+            | { kind?: string; text?: string; hidden?: boolean }
+            | null;
+          if (lowered?.kind === "variable") {
+            next = lowered.hidden ? null : (lowered.text ?? null);
+          }
+        } catch {
+          continue; // binding gone / unresolvable → leave the field untouched
+        }
+        if (next === f.value) continue; // minimal: only changed → a write
+        const out = await host.document.mutate(setFieldValueMutation(f.storyId, f.offset, next));
+        if (out.applied) {
+          written += 1;
+          // Sync state: a re-resolved field tracks its source again (Linked).
+          try {
+            e.relink(f.key);
+          } catch {
+            /* relink is best-effort; the engine owns the state machine */
+          }
+        }
+      }
+      state.status = "ready";
+      state.message = `Refreshed ${written} field(s) from the live data.`;
+      return written;
+    },
+
+    async applyRule(ruleId) {
+      const meta = ruleTargets.get(ruleId);
+      if (!meta) {
+        host.log.warn(`applyRule(${ruleId}): no rule target — define it via addRuleBinding`);
+        return 0;
+      }
+      const e = await ensureEngine();
+      const result = e.evaluate_rule(ruleId, meta.query) as RuleResult;
+      return commitRule(host, result, meta.target);
+    },
+
+    async paginateChain(bindingId, storyId) {
+      // D-12: read the LIVE host frame chain + content-box capacities, then
+      // paginate the record flow over it (the engine owns the layout). The chain
+      // topology is host-read (frameChain), not caller-supplied.
+      const e = await ensureEngine();
+      const chain = await readLiveChain(host, storyId);
+      return e.lower_record_flow(bindingId, chain, undefined);
+    },
+
+    subscribeChainReflow(bindingId, storyId, onRepaginate) {
+      // D-12: re-paginate when the chain's content boxes resize. A reflow event
+      // carries ONLY a resize (never a transform, §8.5), so a transform-only
+      // change is ignored — exactly the pagination consumer contract.
+      const sub = host.document.onDidChange((ev) => {
+        if (!ev.reflow) return; // resize-only; ignore pure transforms
+        void (async () => {
+          try {
+            const e = await ensureEngine();
+            const chain = await readLiveChain(host, storyId);
+            onRepaginate(e.lower_record_flow(bindingId, chain, undefined));
+          } catch (err) {
+            host.log.warn(`subscribeChainReflow(${bindingId}): ${String(err)}`);
+          }
+        })();
+      });
+      return { dispose: () => sub.dispose() };
     },
 
     async requestNetworkConsent(origins, purpose) {

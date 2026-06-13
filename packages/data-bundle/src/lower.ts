@@ -8,15 +8,25 @@
 import type { BundleHost, ElementId, Mutation, PageId } from "@paged-media/plugin-api";
 import {
   bindingMetadata,
+  createRuleCellStyle,
   defaultPlacement,
+  idmlFit,
+  insertFieldMutation,
   makeEnvelope,
+  placeImageMutation,
+  placeableUri,
+  ruleMutations,
   tableCellInserts,
   tableInsertMutation,
   tableInsertSpec,
+  toRuleApplication,
+  type IdmlFit,
   type ImageReference,
   type LoweredImage,
   type LoweredTable,
   type LoweredVariable,
+  type RuleResult,
+  type RuleTarget,
 } from "@paged-media/data-host-model";
 
 /** The frame center, page-local pt, from `[top, left, bottom, right]`. */
@@ -126,18 +136,100 @@ export async function commitLoweredTable(
   return frameId;
 }
 
-/** "Commit" a lowered variable. At M0 there is no tagged-placeholder content
- *  model (BREAKAGE D-01), so in-text replacement is not yet expressible — the
- *  value resolves (the panel shows it) but placement is honestly deferred,
- *  never faked. */
+/** Resolve a story to place a variable field into. Prefers the host SELECTION
+ *  (the bound text frame), else a fresh text frame on the active page whose
+ *  minted story becomes the anchor.
+ *
+ *  CARET-POSITION GAP (honest, D-01): the SDK exposes NO caret/selection-offset
+ *  read for a bundle — `placeholders()` gives run-start offsets but there is no
+ *  "the user's caret is at offset N" door. So a freshly-placed field always
+ *  lands at the STORY START (offset 0), not at an in-text caret. The field is a
+ *  real tagged run either way (it survives edits, re-resolves live); only WHERE
+ *  a NEW field is first inserted is coarse. Tracked as the D-01 caret residual:
+ *  a caret-read door (or an edit-context insertion point) closes it. */
+async function variableTargetStory(host: BundleHost): Promise<string | null> {
+  // Selection first: a selected text frame's story is the natural anchor.
+  let selected: readonly ElementId[] = [];
+  try {
+    selected = host.selection.get();
+  } catch {
+    selected = [];
+  }
+  for (const el of selected) {
+    if (el.kind === "textFrame") {
+      const hit = await frameStory(host, el.id as string);
+      if (hit) return hit;
+    }
+  }
+  // Else mint a fresh frame on the active page and use its story.
+  const pageId = await activePageId(host);
+  if (!pageId) return null;
+  const placement = defaultPlacement(pageId, { widthPt: 160, heightPt: 60 });
+  const frameOutcome = await host.document.mutate({
+    op: "insertTextFrame",
+    args: { pageId, bounds: placement.bounds },
+  });
+  if (!frameOutcome.applied || !frameOutcome.createdId) return null;
+  const frameId = frameIdOf(frameOutcome.createdId);
+  if (!frameId) return null;
+  return frameStory(host, frameId);
+}
+
+/** Resolve a frame's story id via the hitTest read door (the frame's center). */
+async function frameStory(host: BundleHost, frameId: string): Promise<string | null> {
+  const geom = await host.document.elementGeometry([
+    { kind: "textFrame", id: frameId } as ElementId,
+  ]);
+  const bounds = geom[0]?.bounds;
+  if (!bounds) return null;
+  const pageId = await activePageId(host);
+  if (!pageId) return null;
+  const [top, left, bottom, right] = bounds as [number, number, number, number];
+  const hit = await host.document.hitTest(pageId, [(left + right) / 2, (top + bottom) / 2]);
+  return hit?.storyId ?? null;
+}
+
+/** Place a lowered variable as a tagged placeholder FIELD (D-01, protocol v43).
+ *  Inserts an `insertField` with the `placeholder` FieldKind keyed by the
+ *  BINDING id (so the refresh loop resolves `{plugin, key}` back to the binding)
+ *  carrying the engine-resolved display as the initial value. Returns the
+ *  `{storyId, offset}` the field landed at, or null on any failure
+ *  (mutate-never-throws). The refresh loop (`refreshFields` in the session)
+ *  re-enumerates `placeholders()` and `setFieldValue`s changed values.
+ *
+ *  `bindingKey` is the field key; `targetStoryId` (when supplied) is the
+ *  selected frame's story, else a fresh frame is minted (see
+ *  `variableTargetStory` for the caret gap). */
 export async function commitLoweredVariable(
   host: BundleHost,
   variable: LoweredVariable,
-): Promise<void> {
-  host.log.info(
-    `variable "${variable.target}" resolved to "${variable.text}"; in-text ` +
-      "placement awaits the tagged-placeholder content model (D-01)",
-  );
+  bindingKey: string,
+  targetStoryId?: string | null,
+): Promise<{ storyId: string; offset: number } | null> {
+  if (!host.supports("document.placeholders@1")) {
+    host.log.info(
+      `variable "${variable.target}" resolved to "${variable.text}"; the host ` +
+        "predates the placeholder field model (document.placeholders@1) — placement skipped",
+    );
+    return null;
+  }
+  const storyId = targetStoryId ?? (await variableTargetStory(host));
+  if (!storyId) {
+    host.log.warn(`variable "${variable.target}": no target story to place the field into`);
+    return null;
+  }
+  // CARET GAP: insert at story start (offset 0) — no caret-read door (see
+  // variableTargetStory). The HideParagraph missing policy resolves to a null
+  // value (the field shows its <key> token).
+  const offset = 0;
+  const value = variable.hidden ? null : variable.text;
+  const outcome = await host.document.mutate(insertFieldMutation(storyId, offset, bindingKey, value));
+  if (!outcome.applied) {
+    host.log.warn(`variable "${variable.target}": insertField rejected`);
+    return null;
+  }
+  host.log.info(`variable "${variable.target}" placed as field "${bindingKey}" in story ${storyId}`);
+  return { storyId, offset };
 }
 
 /** A short human description of a resolved image reference. */
@@ -156,23 +248,79 @@ function describeRef(r: ImageReference): string {
   }
 }
 
-/** "Commit" a lowered image (§9.2). The engine resolved + classified the
- *  reference and applied the missing policy; the actual placement into the
- *  target frame goes through the core asset mechanism — but there is no
- *  asset-placement Mutation yet (BREAKAGE D-14), so M0 records the binding
- *  honestly and defers placement (never faked, never routed through
- *  plugin-image, §2.1). */
+/** Place a lowered image onto its bound rectangle (D-14, protocol v43). The
+ *  engine resolved + classified the reference and applied the missing policy;
+ *  this drives the `placeImage` mutation through the core asset mechanism (never
+ *  `plugin-image`, §2.1). `elementId` is the bound RECTANGLE's raw Self id
+ *  (placeImage is Rectangle-only — the IDML `<FrameFittingOption>` nests there).
+ *  `fitOverride` lets the bindings panel pick an explicit IDML
+ *  `FittingOnEmptyFrame` value; absent, the engine `ImgFit` maps via `idmlFit`.
+ *  Returns true on a placed image, false on a skipped/missing/unplaceable
+ *  reference (honest — no fake placement, no grey-X). */
 export async function commitLoweredImage(
   host: BundleHost,
   image: LoweredImage,
-): Promise<void> {
+  elementId: string,
+  fitOverride?: IdmlFit,
+): Promise<boolean> {
   if (image.status !== "present") {
-    host.log.info(`image "${image.target}": ${image.status} (missing policy applied)`);
-    return;
+    host.log.info(`image "${image.target}": ${image.status} (missing policy applied — nothing placed)`);
+    return false;
+  }
+  const uri = placeableUri(image.reference);
+  if (!uri) {
+    host.log.info(
+      `image "${image.target}" resolved to ${describeRef(image.reference)} — ` +
+        "not a URI-addressable reference (inline bytes / assetId need the asset-store " +
+        "door); placement skipped, never faked",
+    );
+    return false;
+  }
+  const fit = fitOverride ?? idmlFit(image.fit);
+  const outcome = await host.document.mutate(placeImageMutation(elementId, uri, fit));
+  if (!outcome.applied) {
+    host.log.warn(`image "${image.target}": placeImage rejected on ${elementId}`);
+    return false;
+  }
+  host.log.info(`image "${image.target}" placed on ${elementId} (uri ${uri}, fit ${fit})`);
+  return true;
+}
+
+/** Apply a data-driven formatting rule to the document (D-13, spec §9.5). The
+ *  engine (`evaluate_rule`) already decided WHICH records fired WHICH style — the
+ *  data-driven half; this drives the host mutations that apply the named
+ *  DOCUMENT style (never a parallel styling system, never a literal). For a
+ *  table rule it mints the cell style once (idempotent) then writes one per-cell
+ *  `appliedCellStyle` over the fired rows of `target`; a paragraph/character rule
+ *  emits one `applyStyle` over the target story range. Returns the count of
+ *  applied style writes (0 when the rule fired on nothing or the target kind does
+ *  not match the action). */
+export async function commitRule(
+  host: BundleHost,
+  result: RuleResult,
+  target: RuleTarget,
+): Promise<number> {
+  const application = toRuleApplication(result);
+  // A table rule needs its named cell style to exist before the per-cell apply.
+  if (application.apply.kind === "table" && target.kind === "tableColumn") {
+    await host.document.mutate(createRuleCellStyle(application.apply.name));
+  }
+  const muts = ruleMutations(application, target);
+  if (muts.length === 0) {
+    host.log.info(
+      `rule (scope "${result.scope}") fired on ${result.fires.length}/${result.total} records ` +
+        "but produced no applicable mutations for the given target",
+    );
+    return 0;
+  }
+  const outcome = await host.document.mutate({ op: "batch", args: { ops: muts } });
+  if (!outcome.applied) {
+    host.log.warn(`rule (scope "${result.scope}"): style application batch rejected`);
+    return 0;
   }
   host.log.info(
-    `image "${image.target}" resolved to ${describeRef(image.reference)} ` +
-      `(fit: ${image.fit}); placement into the target frame awaits the ` +
-      "asset-placement op (D-14)",
+    `rule (scope "${result.scope}") applied style "${application.apply.name}" to ` +
+      `${muts.length} target(s) (${result.fires.length}/${result.total} records fired)`,
   );
+  return muts.length;
 }

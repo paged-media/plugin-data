@@ -34,3 +34,22 @@ export {
   type TableInsertSpec,
   type TableLowerResult,
 } from "./lower-to-mutations";
+
+export {
+  FIELD_PLUGIN,
+  insertFieldMutation,
+  setFieldValueMutation,
+  diffFields,
+  ownFields,
+  idmlFit,
+  placeableUri,
+  placeImageMutation,
+  ruleMutations,
+  createRuleCellStyle,
+  type PlaceholderField,
+  type FieldRefresh,
+  type IdmlFit,
+  type RuleTarget,
+} from "./fields";
+
+export { toRuleApplication, type RuleResult, type RuleApplication } from "./rule";
