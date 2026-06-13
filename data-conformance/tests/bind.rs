@@ -313,3 +313,64 @@ fn data_bind_invalidation_affected_cut() {
     );
     assert_eq!(e.sync_state(&id).unwrap().status, Status::Stale);
 }
+
+/// Incremental resolution is scoped to the dependency cut ACROSS queries: a
+/// change to one query's result invalidates only the bindings that read THAT
+/// query, never bindings that read a different, unchanged query. This is the
+/// "recompute only the affected cut" property (§8) at the cross-query
+/// granularity — the existing `_affected_cut` test proves same-vs-changed data
+/// for one query; this proves the cut does not bleed across queries (no
+/// whole-set recompute on any single-source change).
+#[test]
+fn data_bind_invalidation_cross_query_cut() {
+    let mut e = ResolutionEngine::new(today());
+    e.add_query(query("q1", ResultShape::SingleRecord));
+    e.add_query(query("q2", ResultShape::SingleRecord));
+    let b1 = BindingId::from("b1");
+    let b2 = BindingId::from("b2");
+    e.add_binding(
+        b1.clone(),
+        Binding::Variable {
+            target: PlaceholderRef::from("ph1"),
+            query: QueryId::from("q1"),
+            expr: "name".into(),
+            missing: MissingPolicy::Blank,
+        },
+    );
+    e.add_binding(
+        b2.clone(),
+        Binding::Variable {
+            target: PlaceholderRef::from("ph2"),
+            query: QueryId::from("q2"),
+            expr: "name".into(),
+            missing: MissingPolicy::Blank,
+        },
+    );
+
+    // Both queries deliver + both bindings resolve → both Linked.
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(&[("name", FieldType::Text)], vec![vec![t("a")]]),
+    );
+    e.set_result(
+        QueryId::from("q2"),
+        record_set(&[("name", FieldType::Text)], vec![vec![t("x")]]),
+    );
+    e.resolve(&b1).unwrap();
+    e.resolve(&b2).unwrap();
+    assert_eq!(e.sync_state(&b1).unwrap().status, Status::Linked);
+    assert_eq!(e.sync_state(&b2).unwrap().status, Status::Linked);
+
+    // Change ONLY q1's data: b1 (reads q1) goes Stale; b2 (reads the unchanged
+    // q2) stays Linked — the cut did not bleed across queries.
+    e.set_result(
+        QueryId::from("q1"),
+        record_set(&[("name", FieldType::Text)], vec![vec![t("b")]]),
+    );
+    assert_eq!(e.sync_state(&b1).unwrap().status, Status::Stale);
+    assert_eq!(
+        e.sync_state(&b2).unwrap().status,
+        Status::Linked,
+        "a change to q1 must NOT invalidate a binding reading q2 (no whole-set recompute)"
+    );
+}

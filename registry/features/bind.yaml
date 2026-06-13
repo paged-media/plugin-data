@@ -76,9 +76,14 @@
   title: ResolveStamp invalidation (only the affected cut goes stale)
   spec: plugin-data data-bind/src/lib.rs (base-idea §8)
   status: implemented
-  provenance: ["content-hash keyed; same data -> no invalidation"]
+  provenance:
+    [
+      "content-hash keyed; same data -> no invalidation; the cut is dependency-scoped per query (set_result marks only the bindings whose query() == the changed query) — a single-source change never triggers a whole-set recompute (cross-query cut proven)",
+    ]
   tests:
-    rust: ["data-conformance/tests/bind.rs::data_bind_invalidation"]
+    rust:
+      - "data-conformance/tests/bind.rs::data_bind_invalidation"
+      - "data-conformance/tests/bind.rs::data_bind_invalidation_cross_query_cut"
 
 - id: data.bind.recordflow
   title: Resolve a record flow — grouped template instances in stable order (§9.4)
