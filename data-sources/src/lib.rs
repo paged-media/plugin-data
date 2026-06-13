@@ -248,16 +248,36 @@ impl SourceAdapter for DbAttachAdapter {
         "dbAttach"
     }
     fn required_capability(&self, src: &DataSource) -> RequiredCapability {
-        let origin = match &src.kind {
-            SourceKind::DbAttach { dsn } => origin_of(dsn),
-            _ => None,
-        };
-        RequiredCapability::NetworkCredential { origin }
+        match &src.kind {
+            SourceKind::DbAttach {
+                db, target, dsn, ..
+            } => {
+                // SQLite attach is a FILE import (file/OPFS) — no network.
+                // Postgres/MySQL need network + credential handling; the
+                // origin is the non-secret `host:port` (from `target`, or
+                // the redacted legacy `dsn` if that is all we have).
+                if db.reachable_in_browser() {
+                    RequiredCapability::FileImport
+                } else {
+                    let origin = db_origin(target).or_else(|| dsn.as_deref().and_then(origin_of));
+                    RequiredCapability::NetworkCredential { origin }
+                }
+            }
+            _ => RequiredCapability::None,
+        }
     }
     fn manifest_target(&self, src: &DataSource) -> String {
         match &src.kind {
-            // Redact credentials: show only the host, never user:pass@.
-            SourceKind::DbAttach { dsn } => redact_dsn(dsn),
+            // Show only the non-secret locator: the file/OPFS name (SQLite)
+            // or host:port/db (Postgres/MySQL) — NEVER user:pass@. A legacy
+            // `dsn` is redacted to host-only.
+            SourceKind::DbAttach { target, dsn, .. } => {
+                if !target.is_empty() {
+                    target.clone()
+                } else {
+                    dsn.as_deref().map(redact_dsn).unwrap_or_default()
+                }
+            }
             _ => String::new(),
         }
     }
@@ -302,13 +322,108 @@ fn origin_of(url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
+// ── DB-attach host-injection seam (D-11) ────────────────────────────────────
+//
+// The plugin NEVER holds the secret. For a DbAttach source it knows only the
+// engine, the non-secret target, and the `credential_ref`. To attach, the
+// HOST resolves the ref (via `host.secrets`, host-side) and injects the live
+// connection string; the plugin hands the host an [`AttachPlan`] (what to
+// attach, under which alias, with which credential ref + the engine's secret
+// requirement), and the host produces the final `ATTACH` SQL on ITS side —
+// the secret is substituted where `{credential}` appears, never seen here.
+
+/// An attach error — the plan cannot be formed (the source is not a DbAttach,
+/// or a network engine has no credential ref while one is required).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AttachError {
+    #[error("source is not a DbAttach")]
+    NotDbAttach,
+    #[error("the {0} engine requires a credentialRef (host-resolved); none was set")]
+    MissingCredentialRef(&'static str),
+    #[error(
+        "the {0} engine's transport is not reachable in the browser — \
+         attach runs in the headless/napi + proxy lane (named deferral)"
+    )]
+    TransportNotInBrowser(&'static str),
+}
+
+/// What the host needs to attach a DbAttach source (D-11). The HOST resolves
+/// `credential_ref` (if any) via `host.secrets` and injects the live secret
+/// into the connection on its side — this struct carries NO secret, only the
+/// indirection the host needs. `in_browser` is the honest transport verdict:
+/// `false` for Postgres/MySQL (the headless/proxy lane).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachPlan {
+    /// The engine being attached.
+    pub engine: data_core::DbEngine,
+    /// The DuckDB alias the attached DB is exposed under (the source id).
+    pub alias: String,
+    /// The non-secret locator (file/OPFS name or host:port/db).
+    pub target: String,
+    /// The host-store ref the host resolves (`None` for an open SQLite file).
+    pub credential_ref: Option<String>,
+    /// Whether the live transport is reachable in the pure-web tier (SQLite
+    /// yes; Postgres/MySQL no — the headless/proxy lane).
+    pub in_browser: bool,
+}
+
+/// Build the [`AttachPlan`] for a DbAttach source (D-11). Pure: it derives
+/// WHAT the host must attach + WHICH credential ref it must resolve — it does
+/// NOT resolve the secret (that is host-side, by design). A network engine
+/// (Postgres/MySQL) MUST carry a `credential_ref`; a SQLite file may omit it.
+pub fn attach_plan(src: &DataSource) -> Result<AttachPlan, AttachError> {
+    let SourceKind::DbAttach {
+        db,
+        target,
+        credential_ref,
+        ..
+    } = &src.kind
+    else {
+        return Err(AttachError::NotDbAttach);
+    };
+    if !db.reachable_in_browser() && credential_ref.is_none() {
+        // A remote engine with no credential ref cannot be authenticated —
+        // refuse to form a plan rather than attach unauthenticated.
+        return Err(AttachError::MissingCredentialRef(engine_name(*db)));
+    }
+    Ok(AttachPlan {
+        engine: *db,
+        alias: src.id.to_string(),
+        target: target.clone(),
+        credential_ref: credential_ref.clone(),
+        in_browser: db.reachable_in_browser(),
+    })
+}
+
+/// The stable engine name (for diagnostics + the DuckDB attach idiom).
+fn engine_name(db: data_core::DbEngine) -> &'static str {
+    match db {
+        data_core::DbEngine::Sqlite => "sqlite",
+        data_core::DbEngine::Postgres => "postgres",
+        data_core::DbEngine::Mysql => "mysql",
+    }
+}
+
 /// Return a source kind with any embedded DB credentials stripped — the form
 /// safe to serialize into a document payload (§11; credentials are NEVER
 /// persisted into the saved file, BREAKAGE D-11). Non-DB kinds are unchanged.
+///
+/// For [`SourceKind::DbAttach`]: the `credential_ref` is a REFERENCE (no
+/// secret) and survives verbatim; only the legacy `dsn` field is redacted to
+/// host-only (its `user:pass@` stripped) so a pre-D-11 payload that carried a
+/// connection string still saves clean. New sources carry no `dsn` at all.
 pub fn redact_credentials(kind: &SourceKind) -> SourceKind {
     match kind {
-        SourceKind::DbAttach { dsn } => SourceKind::DbAttach {
-            dsn: redact_dsn(dsn),
+        SourceKind::DbAttach {
+            db,
+            target,
+            credential_ref,
+            dsn,
+        } => SourceKind::DbAttach {
+            db: *db,
+            target: target.clone(),
+            credential_ref: credential_ref.clone(),
+            dsn: dsn.as_deref().map(redact_dsn),
         },
         other => other.clone(),
     }
@@ -323,6 +438,21 @@ fn redact_dsn(dsn: &str) -> String {
         }
         None => dsn.to_string(),
     }
+}
+
+/// Extract `host[:port]/db` from a DB-attach `target` for the manifest origin.
+/// The target is already credential-free (a `host:port/db` locator); this
+/// normalizes it to a `scheme`-less origin string used in the consent manifest.
+/// Returns `None` for an empty target (a SQLite file has no network origin).
+fn db_origin(target: &str) -> Option<String> {
+    if target.is_empty() {
+        return None;
+    }
+    // A target like "warehouse:5432/sales" → origin "warehouse:5432".
+    let host = target.split('/').next().unwrap_or(target);
+    // Defensive: drop any stray user@ that should never be here.
+    let host = host.rsplit('@').next().unwrap_or(host);
+    Some(host.to_string())
 }
 
 #[cfg(test)]
@@ -402,10 +532,15 @@ mod tests {
 
     #[test]
     fn data_source_manifest_redacts_credentials() {
+        // Legacy `dsn` path: a pre-D-11 connection string is redacted to
+        // host-only in the manifest target (the user:pass@ stripped).
         let sources = vec![src(
             "db",
             SourceKind::DbAttach {
-                dsn: "postgres://user:secret@db.host:5432/sales".into(),
+                db: data_core::DbEngine::Postgres,
+                target: String::new(),
+                credential_ref: None,
+                dsn: Some("postgres://user:secret@db.host:5432/sales".into()),
             },
         )];
         let m = build_manifest(&sources);
@@ -413,5 +548,92 @@ mod tests {
         assert!(entry.credential_redacted);
         assert_eq!(entry.target, "postgres://db.host:5432/sales");
         assert!(!entry.target.contains("secret"));
+    }
+
+    #[test]
+    fn data_source_db_attach_credential_ref_only() {
+        // The D-11 shape: a structured DbAttach carries db + a non-secret
+        // target + a credentialRef STRING — never a connection string.
+        let sources = vec![src(
+            "warehouse",
+            SourceKind::DbAttach {
+                db: data_core::DbEngine::Postgres,
+                target: "db.host:5432/sales".into(),
+                credential_ref: Some("keychain:source-4".into()),
+                dsn: None,
+            },
+        )];
+        let m = build_manifest(&sources);
+        let entry = &m.entries[0];
+        assert_eq!(entry.kind, "dbAttach");
+        assert!(entry.credential_redacted);
+        // The manifest shows the non-secret host:port/db locator.
+        assert_eq!(entry.target, "db.host:5432/sales");
+        // A network engine requires network + credential handling, origin
+        // derived from the non-secret target.
+        assert_eq!(
+            entry.capability,
+            RequiredCapability::NetworkCredential {
+                origin: Some("db.host:5432".into())
+            }
+        );
+    }
+
+    #[test]
+    fn data_source_db_attach_sqlite_is_file_tier() {
+        // SQLite attach (file/OPFS) is a FILE import — no network, reachable
+        // in the pure-web tier; no credential ref required.
+        let s = src(
+            "local",
+            SourceKind::DbAttach {
+                db: data_core::DbEngine::Sqlite,
+                target: "books.sqlite".into(),
+                credential_ref: None,
+                dsn: None,
+            },
+        );
+        assert_eq!(
+            adapter_for(&s.kind).required_capability(&s),
+            RequiredCapability::FileImport
+        );
+        // The attach plan is in-browser-reachable.
+        let plan = attach_plan(&s).unwrap();
+        assert!(plan.in_browser);
+        assert_eq!(plan.alias, "local");
+        assert!(plan.credential_ref.is_none());
+    }
+
+    #[test]
+    fn data_source_db_attach_plan_scopes_network_engines() {
+        // Postgres/MySQL: a plan forms (credential indirection + host seam),
+        // but it is honestly NOT in-browser-reachable — the headless/proxy
+        // lane. A missing credentialRef refuses the plan (no unauthenticated
+        // remote attach).
+        let pg = src(
+            "wh",
+            SourceKind::DbAttach {
+                db: data_core::DbEngine::Postgres,
+                target: "db.host:5432/sales".into(),
+                credential_ref: Some("keychain:wh".into()),
+                dsn: None,
+            },
+        );
+        let plan = attach_plan(&pg).unwrap();
+        assert!(!plan.in_browser, "postgres is the headless/proxy lane");
+        assert_eq!(plan.credential_ref.as_deref(), Some("keychain:wh"));
+
+        let no_cred = src(
+            "wh2",
+            SourceKind::DbAttach {
+                db: data_core::DbEngine::Mysql,
+                target: "db.host:3306/app".into(),
+                credential_ref: None,
+                dsn: None,
+            },
+        );
+        assert_eq!(
+            attach_plan(&no_cred),
+            Err(AttachError::MissingCredentialRef("mysql"))
+        );
     }
 }

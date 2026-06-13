@@ -38,9 +38,26 @@
     vitest: ["packages/data-bundle/src/__tests__/remote.test.ts"]
 
 - id: data.source.db-attach
-  title: DB attach (SQLite/Postgres/MySQL) — network + credential handling
-  spec: plugin-data data-sources (base-idea §6.2, D-11)
-  status: planned
+  title: DB attach (SQLite/Postgres/MySQL) — credentialRef indirection + host-injection seam
+  spec: plugin-data data-sources/src/lib.rs (base-idea §6.2, D-11, rfc-credential-store)
+  status: implemented
+  provenance:
+    - "structured DbAttach { db, target, credentialRef } — NO connection string with secrets; the host resolves the ref + injects the live connection (pairs with the D-03 consent door)"
+    - "honest transport scoping: SQLite attach (file/OPFS) is pure-web-reachable; Postgres/MySQL over raw TCP is the headless/napi + proxy lane (a named deferral) — attach_plan().in_browser reports it; descriptor + ref indirection + host seam exist for all three"
+  tests:
+    rust:
+      - "data-sources/src/lib.rs::data_source_db_attach_credential_ref_only"
+      - "data-sources/src/lib.rs::data_source_db_attach_sqlite_is_file_tier"
+      - "data-sources/src/lib.rs::data_source_db_attach_plan_scopes_network_engines"
+
+- id: data.source.duckdb-engine
+  title: DuckDB-WASM loads first-class via the `engine` wasm purpose (64 MiB ceiling, D-07b)
+  spec: plugin-data packages/data-bundle/manifest.json + scripts/vendor-duckdb.sh (D-07b, D-11)
+  status: implemented
+  provenance:
+    - "the vendored MIT DuckDB-WASM (~36 MiB) is declared purpose:engine — it earns the governed 64 MiB per-artifact ceiling, NOT the 8 MiB compute/codec cap; the plugin-cli size-gate verifies it passes as engine and would REJECT it as compute"
+  tests:
+    rust: ["data-conformance/tests/sources.rs::data_source_duckdb_engine_purpose"]
 
 - id: data.source.governed-extract
   title: Governed extract (governed tables + optional metadata sidecar, §7)

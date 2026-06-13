@@ -7,6 +7,14 @@
 //
 // Loaded dynamically from the VENDORED dist (not an npm dependency — the engine
 // is a prebuilt artifact, spec §3/§4). Absent until vendored → DUCKDB_NOT_VENDORED.
+//
+// FIRST-CLASS engine load (D-07b / D-11): the manifest declares DuckDB as a
+// `purpose: "engine"` wasm artifact (bin/duckdb-engine.wasm, staged by
+// scripts/vendor-duckdb.sh), so it earns the governed 64 MiB per-artifact
+// ceiling — NOT the 8 MiB compute/codec cap. That declaration is the GOVERNANCE
+// anchor (the plugin-cli size-gate verifies it; data-conformance asserts the
+// purpose); the runtime still selects the optimal coi/eh/mvp variant from the
+// vendored dist below at boot.
 
 import { arrowToRecordSet, type ArrowLikeTable, type RecordSetJson } from "./recordset";
 

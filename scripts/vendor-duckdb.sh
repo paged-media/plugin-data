@@ -64,5 +64,23 @@ NOT linked into the MPL/PMEL Rust crates. The boundary is the Arrow-shaped
 DuckDB engine source is part of this repo's build.
 EOF
 
+# D-11 / D-07b — stage a representative DuckDB engine artifact into the
+# bundle's declared-only `bin/` so the manifest can declare it as a
+# first-class `purpose: "engine"` wasm (the governed 64 MiB ceiling, NOT the
+# 8 MiB compute cap). The runtime still selects the optimal variant from the
+# vendored dist at boot (selectBundle); this staged copy is the GOVERNANCE
+# anchor the manifest + plugin-cli size-gate verify. The EH bundle is the
+# broadly-compatible default (non-COI, exception-handling).
+BUNDLE_BIN=packages/data-bundle/bin
+mkdir -p "$BUNDLE_BIN"
+ENGINE_SRC="$DIST/duckdb-eh.wasm"
+if [ -f "$ENGINE_SRC" ]; then
+  cp "$ENGINE_SRC" "$BUNDLE_BIN/duckdb-engine.wasm"
+  ENGINE_SIZE=$(wc -c < "$BUNDLE_BIN/duckdb-engine.wasm" | tr -d ' ')
+  echo "vendor-duckdb: staged duckdb-engine.wasm ($ENGINE_SIZE bytes, purpose:engine, ≤64 MiB ceiling)"
+else
+  echo "warning: $ENGINE_SRC not present — duckdb-engine.wasm not staged" >&2
+fi
+
 echo "vendor-duckdb: done → $DIST"
 ls -1 "$DIST" | sed 's/^/  /'

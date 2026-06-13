@@ -71,9 +71,41 @@ pub enum SourceKind {
         #[serde(default)]
         credential_ref: Option<String>,
     },
-    /// An attached SQLite/Postgres/MySQL database. Capability: `network` +
-    /// credential handling (D-03/D-11). M2.
-    DbAttach { dsn: String },
+    /// An attached SQLite/Postgres/MySQL database (DuckDB `ATTACH`).
+    /// Capability: `network` + credential handling (D-03/D-11). The shape is
+    /// DELIBERATELY CREDENTIAL-FREE: `db` is the engine, `target` is the
+    /// non-secret locator (a file/OPFS name for SQLite, or `host:port/db`
+    /// for Postgres/MySQL — never `user:pass@`), and `credential_ref` names
+    /// a host-store secret (D-11, rfc-credential-store) the HOST resolves +
+    /// injects on its side of the attach; the secret never enters the
+    /// descriptor or the payload. The legacy `dsn` field is retained,
+    /// optional + deprecated, so an M0/pre-D-11 payload still decodes — it
+    /// is REDACTED to host-only on save (the user:pass@ is stripped); new
+    /// sources leave it `None` and carry `credential_ref` instead.
+    ///
+    /// Transport scoping (honest): SQLite attach (file/OPFS-backed) is
+    /// reachable in the pure-web tier; Postgres/MySQL over raw TCP is NOT
+    /// browser-reachable — the source kind + the credential indirection +
+    /// the host-injection seam exist for all three, but the actual
+    /// Postgres/MySQL transport is the headless/napi + proxy lane (a named
+    /// deferral, like interactive), never a fake in-browser TCP.
+    DbAttach {
+        /// The database engine to attach (drives the DuckDB attach idiom).
+        db: DbEngine,
+        /// The non-secret locator: a file/OPFS name (SQLite) or
+        /// `host:port/dbname` (Postgres/MySQL) — NEVER carries credentials.
+        target: String,
+        /// A reference into the host credential store (D-11) — a ref string
+        /// only (e.g. `keychain:source-4`); the host resolves + injects the
+        /// live connection. `None` for an unauthenticated SQLite file.
+        #[serde(default)]
+        credential_ref: Option<String>,
+        /// DEPRECATED M0 connection-string field, retained so a pre-D-11
+        /// payload still decodes. Redacted to host-only on save (never
+        /// carries a secret into a document). New sources leave it `None`.
+        #[serde(default)]
+        dsn: Option<String>,
+    },
     /// A governed warehouse/database table + optional column-metadata sidecar
     /// (§7). Read via the file/DB/remote adapter. M2.
     GovernedExtract {
@@ -95,6 +127,29 @@ pub enum FileFormat {
     Json,
     Parquet,
     Excel,
+}
+
+/// Database engines a [`SourceKind::DbAttach`] can attach via DuckDB (D-11).
+/// `Sqlite` (file/OPFS-backed) is reachable in the pure-web tier; `Postgres`
+/// / `Mysql` over raw TCP are NOT browser-reachable — their transport is the
+/// headless/napi + proxy lane (the descriptor + credential indirection + the
+/// host-injection seam exist for all three; only the live transport differs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DbEngine {
+    Sqlite,
+    Postgres,
+    Mysql,
+}
+
+impl DbEngine {
+    /// Whether this engine's transport is reachable in the pure-web tier
+    /// (SQLite yes — file/OPFS; Postgres/MySQL no — raw TCP, headless/proxy
+    /// lane only). The descriptor is constructible for all three regardless;
+    /// this gates only the LIVE attach transport (the honest scoping seam).
+    pub fn reachable_in_browser(self) -> bool {
+        matches!(self, DbEngine::Sqlite)
+    }
 }
 
 /// When a source re-resolves (spec §5.1). Default is `Manual` (the safe,

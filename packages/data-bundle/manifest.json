@@ -23,6 +23,12 @@
         "path": "bin/data_js_bg.wasm",
         "purpose": "compute",
         "maxBytes": 8388608
+      },
+      {
+        "name": "duckdb-engine",
+        "path": "bin/duckdb-engine.wasm",
+        "purpose": "engine",
+        "maxBytes": 50331648
       }
     ],
     "dataProviders": {

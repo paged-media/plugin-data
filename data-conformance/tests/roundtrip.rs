@@ -17,8 +17,9 @@
 //! absent from the saved form (§11).
 
 use data_core::{
-    Binding, BindingDef, BindingId, CapabilityRef, ColumnBind, DataSource, FrameRef, MissingPolicy,
-    PlaceholderRef, Query, QueryId, RefreshPolicy, ResultShape, SourceId, SourceKind, TableOpts,
+    Binding, BindingDef, BindingId, CapabilityRef, ColumnBind, DataSource, DbEngine, FrameRef,
+    MissingPolicy, PlaceholderRef, Query, QueryId, RefreshPolicy, ResultShape, SourceId,
+    SourceKind, TableOpts,
 };
 use data_js::core::{DataSession, DocumentPayload};
 
@@ -35,7 +36,10 @@ fn build() -> DataSession {
     s.define_source(DataSource {
         id: SourceId::from("db"),
         kind: SourceKind::DbAttach {
-            dsn: "postgres://user:hunter2@warehouse:5432/db".into(),
+            db: DbEngine::Postgres,
+            target: "warehouse:5432/db".into(),
+            credential_ref: Some("keychain:warehouse".into()),
+            dsn: None,
         },
         capability: CapabilityRef::from("net"),
         refresh: RefreshPolicy::Manual,
@@ -87,6 +91,14 @@ fn data_plugin_payload_roundtrip() {
     assert_eq!(rebuilt.queries.len(), 1);
     assert_eq!(rebuilt.bindings.len(), 2);
 
-    // Credentials are absent from the saved form (§11 hard gate).
+    // Credentials are absent from the saved form (§11 hard gate): the
+    // credentialRef string survives (a ref, not a secret); the non-secret
+    // host stays identifiable.
+    assert!(
+        json.contains("keychain:warehouse"),
+        "credentialRef must survive"
+    );
+    assert!(json.contains("warehouse"), "non-secret host stays: {json}");
     assert!(!json.contains("hunter2"), "credential leaked: {json}");
+    assert!(!json.contains("password"), "credential leaked: {json}");
 }

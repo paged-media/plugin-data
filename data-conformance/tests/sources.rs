@@ -18,10 +18,12 @@
 
 use std::collections::BTreeSet;
 
-use data_core::{CapabilityRef, DataSource, FileFormat, RefreshPolicy, SourceId, SourceKind};
+use data_core::{
+    CapabilityRef, DataSource, DbEngine, FileFormat, RefreshPolicy, SourceId, SourceKind,
+};
 use data_sources::{
-    adapter_for, authorize, build_manifest, remote_invalidation_key, validate_remote,
-    GrantedCapabilities, RemoteError, RequiredCapability,
+    adapter_for, attach_plan, authorize, build_manifest, remote_invalidation_key, validate_remote,
+    AttachError, GrantedCapabilities, RemoteError, RequiredCapability,
 };
 
 fn src(id: &str, kind: SourceKind) -> DataSource {
@@ -161,6 +163,118 @@ fn data_source_remote_invalidation_key_is_content_addressed() {
     assert_ne!(a, remote_invalidation_key(&other, bytes).unwrap());
     // An invalid descriptor has NO key.
     assert!(remote_invalidation_key(&remote_kind("ftp://x/y", &[]), bytes).is_err());
+}
+
+#[test]
+fn data_source_db_attach_credential_ref_indirection() {
+    // The D-11 DB-attach shape carries a credentialRef STRING + a non-secret
+    // locator — never a connection string. SQLite is the file tier; Postgres/
+    // MySQL are network+credential, honestly scoped to the headless/proxy lane
+    // via attach_plan().in_browser.
+    use data_js::core::DataSession;
+
+    let sqlite = src(
+        "books",
+        SourceKind::DbAttach {
+            db: DbEngine::Sqlite,
+            target: "books.sqlite".into(),
+            credential_ref: None,
+            dsn: None,
+        },
+    );
+    assert_eq!(adapter_for(&sqlite.kind).kind_name(), "dbAttach");
+    // SQLite attach is a file import (pure-web reachable).
+    assert_eq!(
+        adapter_for(&sqlite.kind).required_capability(&sqlite),
+        RequiredCapability::FileImport
+    );
+    assert!(attach_plan(&sqlite).unwrap().in_browser);
+
+    let pg = src(
+        "wh",
+        SourceKind::DbAttach {
+            db: DbEngine::Postgres,
+            target: "db.host:5432/sales".into(),
+            credential_ref: Some("keychain:wh".into()),
+            dsn: None,
+        },
+    );
+    // Network + credential handling; the plan is NOT in-browser (proxy lane).
+    assert!(matches!(
+        adapter_for(&pg.kind).required_capability(&pg),
+        RequiredCapability::NetworkCredential { .. }
+    ));
+    let plan = attach_plan(&pg).unwrap();
+    assert!(!plan.in_browser);
+    assert_eq!(plan.credential_ref.as_deref(), Some("keychain:wh"));
+    // A network engine with no credentialRef refuses to form a plan.
+    let bad = src(
+        "wh2",
+        SourceKind::DbAttach {
+            db: DbEngine::Mysql,
+            target: "db.host:3306/app".into(),
+            credential_ref: None,
+            dsn: None,
+        },
+    );
+    assert_eq!(
+        attach_plan(&bad),
+        Err(AttachError::MissingCredentialRef("mysql"))
+    );
+
+    // The recipe round-trips with the credentialRef intact and NO secret.
+    let mut session = DataSession::new(0);
+    session.define_source(pg);
+    let json = serde_json::to_string(&session.payload()).unwrap();
+    assert!(json.contains("keychain:wh"));
+    assert!(json.contains("db.host"));
+    assert!(!json.contains("password"));
+
+    // A pre-D-11 payload (the bare `{dsn}` M0 shape) still decodes — the new
+    // fields default (the versioned-amendment compat rule).
+    let m0_json = r#"{"sources":[{"id":"old","kind":{"kind":"dbAttach","db":"postgres","target":"h:5432/d","dsn":"postgres://u:p@h:5432/d"},"capability":"cap"}]}"#;
+    let payload: data_js::core::DocumentPayload = serde_json::from_str(m0_json).unwrap();
+    assert!(matches!(
+        &payload.sources[0].kind,
+        SourceKind::DbAttach {
+            db: DbEngine::Postgres,
+            credential_ref: None,
+            dsn: Some(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn data_source_duckdb_engine_purpose() {
+    // D-07b / D-11 — DuckDB-WASM loads first-class via the `engine` wasm purpose
+    // class (the governed 64 MiB ceiling), NOT the 8 MiB compute cap. Assert the
+    // bundle manifest declares it as purpose:"engine" so the plugin-cli size-gate
+    // admits the ~36 MiB artifact (it would REJECT it as compute).
+    let manifest_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../packages/data-bundle/manifest.json"
+    );
+    let text = std::fs::read_to_string(manifest_path).expect("bundle manifest readable");
+    let manifest: serde_json::Value = serde_json::from_str(&text).expect("manifest is valid JSON");
+    let wasm = manifest["capabilities"]["wasm"]
+        .as_array()
+        .expect("capabilities.wasm is an array");
+    let duckdb = wasm
+        .iter()
+        .find(|a| a["name"] == "duckdb-engine")
+        .expect("a duckdb-engine wasm artifact is declared");
+    assert_eq!(
+        duckdb["purpose"], "engine",
+        "DuckDB must be declared purpose:engine (the 64 MiB ceiling, D-07b) — \
+         NOT compute/codec (the 8 MiB cap)"
+    );
+    // Its self-imposed ceiling must stay within the 64 MiB engine ceiling.
+    let max_bytes = duckdb["maxBytes"].as_u64().expect("maxBytes present");
+    assert!(
+        max_bytes <= 64 * 1024 * 1024,
+        "duckdb-engine maxBytes within the engine ceiling"
+    );
 }
 
 #[test]

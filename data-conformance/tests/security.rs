@@ -18,7 +18,9 @@
 
 use std::collections::BTreeSet;
 
-use data_core::{CapabilityRef, DataSource, FileFormat, RefreshPolicy, SourceId, SourceKind};
+use data_core::{
+    CapabilityRef, DataSource, DbEngine, FileFormat, RefreshPolicy, SourceId, SourceKind,
+};
 use data_js::core::DataSession;
 use data_sources::{authorize, CapabilityError, GrantedCapabilities};
 
@@ -83,13 +85,49 @@ fn data_security_capability_gate() {
 #[test]
 fn data_security_credentials_absent_from_payload() {
     let mut session = DataSession::new(0);
+    // The D-11 shape: a structured DB-attach carries a credentialRef STRING
+    // (never a connection string with secrets). The save → inspect round-trip
+    // MUST show only the ref + the non-secret locator.
     session.define_source(src(
         "db",
         SourceKind::DbAttach {
-            dsn: "postgres://user:SuperSecret@db.host:5432/sales".into(),
+            db: DbEngine::Postgres,
+            target: "db.host:5432/sales".into(),
+            credential_ref: Some("keychain:source-4".into()),
+            dsn: None,
         },
     ));
-    // The payload (the serialized recipe) MUST NOT carry the credential.
+    let payload = session.payload();
+    let json = serde_json::to_string(&payload).unwrap();
+    // Only the ref string + the non-secret locator are present.
+    assert!(
+        json.contains("keychain:source-4"),
+        "credentialRef must survive"
+    );
+    assert!(
+        json.contains("db.host"),
+        "the non-secret host stays identifiable"
+    );
+    // No secret material of any kind.
+    assert!(!json.contains("password"), "no secret leaked: {json}");
+}
+
+#[test]
+fn data_security_credentials_absent_legacy_dsn_redacted() {
+    // A pre-D-11 payload that mistakenly carried a connection string in the
+    // legacy `dsn` field is REDACTED to host-only on save — the user:pass@ is
+    // stripped (the M0 credentials-absent invariant holds for legacy shapes
+    // too). New sources carry no dsn at all.
+    let mut session = DataSession::new(0);
+    session.define_source(src(
+        "db",
+        SourceKind::DbAttach {
+            db: DbEngine::Postgres,
+            target: String::new(),
+            credential_ref: None,
+            dsn: Some("postgres://user:SuperSecret@db.host:5432/sales".into()),
+        },
+    ));
     let payload = session.payload();
     let json = serde_json::to_string(&payload).unwrap();
     assert!(

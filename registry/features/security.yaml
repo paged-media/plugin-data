@@ -21,11 +21,15 @@
 
 - id: data.security.credentials-absent
   title: Credentials never serialized into the document payload (§11, D-11)
-  spec: plugin-data data-js + data-sources (base-idea §11)
+  spec: plugin-data data-js + data-sources (base-idea §11, rfc-credential-store)
   status: implemented
-  provenance: ["round-trip: save -> inspect -> assert absent; remote descriptors carry credentialRef strings only (rfc-credential-store)"]
+  provenance:
+    - "round-trip: save -> inspect -> assert NO secret bytes; remote + DB-attach descriptors carry credentialRef STRINGS only (e.g. keychain:source-4) — the host resolves the ref + injects the live connection, never the document (rfc-credential-store)"
+    - "legacy pre-D-11 `dsn` connection strings are redacted to host-only on save (user:pass@ stripped) — the invariant holds for legacy shapes too"
   tests:
-    rust: ["data-conformance/tests/security.rs::data_security_credentials_absent"]
+    rust:
+      - "data-conformance/tests/security.rs::data_security_credentials_absent"
+      - "data-conformance/tests/roundtrip.rs::data_plugin_payload_roundtrip"
 
 - id: data.security.network-consent
   title: Network consent gate (host.network door consumed; per-origin, no silent fetch)
