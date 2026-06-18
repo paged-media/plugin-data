@@ -49,12 +49,32 @@ export async function bootDuckDB(): Promise<DuckDBHandle> {
   }
   if (!duckdb) throw new Error(DUCKDB_NOT_VENDORED);
 
-  // Pick a bundle + spawn the worker from the vendored files (own-realm; the
-  // editor is already cross-origin isolated — BREAKAGE D-05). The exact bundle
-  // selection follows DuckDB-WASM's getJsDeliv/selectBundle convention, here
-  // pointed at the vendored dist.
-  const bundles = duckdb.getJsDelivrBundles ? duckdb.getJsDelivrBundles() : duckdb.getBundles?.();
-  const bundle = duckdb.selectBundle ? await duckdb.selectBundle(bundles) : bundles?.[0];
+  // Pick a bundle + spawn the worker from the VENDORED files, same-origin
+  // (own-realm; the editor is already cross-origin isolated — BREAKAGE D-05).
+  // NOT getJsDelivrBundles() — that points mainWorker at the jsDelivr CDN, and
+  // `new Worker(<cross-origin URL>)` is a SecurityError. The dist sits next to
+  // this module's `../../../../vendor/duckdb-wasm/dist/` import, so resolve the
+  // worker/wasm URLs relative to it; the bundle realm serves them same-origin.
+  const distBase = new URL("../../../../vendor/duckdb-wasm/dist/", import.meta.url);
+  const at = (file: string) => new URL(file, distBase).href;
+  const vendored = {
+    mvp: {
+      mainModule: at("duckdb-mvp.wasm"),
+      mainWorker: at("duckdb-browser-mvp.worker.js"),
+    },
+    eh: {
+      mainModule: at("duckdb-eh.wasm"),
+      mainWorker: at("duckdb-browser-eh.worker.js"),
+    },
+    coi: {
+      mainModule: at("duckdb-coi.wasm"),
+      mainWorker: at("duckdb-browser-coi.worker.js"),
+      pthreadWorker: at("duckdb-browser-coi.pthread.worker.js"),
+    },
+  };
+  const bundle = duckdb.selectBundle
+    ? await duckdb.selectBundle(vendored)
+    : vendored.eh;
   const worker = new Worker(bundle.mainWorker);
   const logger = new duckdb.ConsoleLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);

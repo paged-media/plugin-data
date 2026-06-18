@@ -22,11 +22,33 @@ SDK gap tracker: the cross-repo RFI `thoughts/docs/paged/plugin-platform/rfi-cor
 Rust crates (Cargo workspace, top level per spec §4): `data-core` (frozen
 types + Expr AST), `data-expr` (the binding DSL), `data-sources`, `data-query`,
 `data-bind` (resolution/sync engine), `data-lower`, `data-js` (wasm-bindgen
-surface), `data-conformance` (TEST-ONLY). Reserved T2: `data-automation`
-(batch/headless, §10). TS packages (pnpm `packages/*`): `data-host-model`
-(pure LoweredContent→Mutation translation) + `data-bundle` (manifest +
-`activate(host)` + panels + DuckDB-WASM query integration). Vendored MIT engine:
+surface), `data-conformance` (TEST-ONLY), plus the §10 automation lane —
+`data-automation` (batch plan/run), `data-cli` (headless native CLI), and
+`data-script` (sandboxed Boa surface). TS packages (pnpm `packages/*`):
+`data-host-model` (pure LoweredContent→Mutation translation) + `data-bundle`
+(manifest + `activate(host)` + three panels [sources/bindings/dataset] + five
+commands + DuckDB-WASM query integration). Vendored MIT engine:
 `vendor/duckdb-wasm/`.
+
+**State (verified; the live ledger is the state-repo registry, not this prose).**
+The M0 spine shipped and grew to ~M3-class across the 11 crates above:
+- The binding-expression DSL is SHIPPED — its own publishing grammar (not
+  Excel's), ~42 functions across format/logic/text/math/temporal, registry-
+  driven FnId-parity dispatch (no row → no dispatch → uncallable).
+- The binding + sync engine is SHIPPED (resolution graph + Linked/Pinned/
+  Overridden/Stale/Error states + record-identity diff); record flow /
+  pagination (multi-level nested grouping, per-group SUM/AVG/MIN/MAX footers,
+  parent path on spill) landed in the lowering lane.
+- Print automation is SHIPPED end-to-end (per-record / per-group / one-catalog
+  batch plan + RUN executor + the data-cli + the data-script Boa surface).
+- The D-09 data-provider contract is SHIPPED (register a provider, publish a
+  RecordSet to other consumers; never knows its consumers, §7.1); governed
+  extract (governed tables + column-metadata sidecar) is SHIPPED.
+- M1 DEFERRALS, kept honest in the manifest + UI (never faked): remote/DB
+  sources (the bundle is dormant at `network:false`; the D-03 consent contract
+  + host.network door exist editor-side but the bundle has no network:true
+  caller yet), the network-consent UI's first real consumer, DB-attach, OPFS
+  persistence, and worker-hosted DuckDB.
 
 ## Project State & Feature Matrix (paged-media/state)
 
