@@ -46,6 +46,19 @@ describe("data-host-model", () => {
     expect(parseEnvelope("not json")).toBeNull();
   });
 
+  it("emits the host metadata-envelope shape { v, data } (NOT payload)", () => {
+    // The host's setPluginMetadata door validates the envelope as
+    // { v: <int >= 1>, data: {…}, engine?: {…} }. A `{v, payload}` envelope is
+    // rejected and sinks the whole atomic batch (the barcode-lower regression).
+    const raw = JSON.parse(makeEnvelope({ kind: "barcode", target: "f1" })) as Record<
+      string,
+      unknown
+    >;
+    expect(raw.v as number).toBeGreaterThanOrEqual(1);
+    expect(raw.data).toEqual({ kind: "barcode", target: "f1" });
+    expect(raw).not.toHaveProperty("payload");
+  });
+
   it("default placement sizes to the content box", () => {
     const p = defaultPlacement("page-1" as never, { widthPt: 90, heightPt: 28 });
     const [top, left, bottom, right] = p.bounds;

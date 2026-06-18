@@ -7,15 +7,21 @@
 export const BINDING_KEY = "x-paged:media.paged.data";
 export const BINDING_VERSION = 1;
 
-/** A versioned wrapper around the binding recipe stored on an element. */
+/** A versioned wrapper around the binding recipe stored on an element. The
+ *  host's setPluginMetadata door VALIDATES the envelope shape: it must be
+ *  `{ v: <int >= 1>, data: {…}, engine?: {…} }`. The recipe therefore lives
+ *  under `data` (NOT `payload`) — a `{v, payload}` envelope is rejected by the
+ *  engine and sinks the whole atomic batch (the barcode-lower regression). */
 export interface BindingEnvelope {
   v: number;
-  payload: unknown;
+  data: unknown;
 }
 
-/** Serialise a payload into the envelope JSON the metadata door carries. */
+/** Serialise a recipe into the envelope JSON the metadata door carries. The
+ *  recipe is stored under `data` to satisfy the host's metadata-envelope
+ *  contract (`{ v, data, engine? }`). */
 export function makeEnvelope(payload: unknown): string {
-  return JSON.stringify({ v: BINDING_VERSION, payload } satisfies BindingEnvelope);
+  return JSON.stringify({ v: BINDING_VERSION, data: payload } satisfies BindingEnvelope);
 }
 
 /** Parse an envelope JSON, returning `null` on anything malformed (the panel
