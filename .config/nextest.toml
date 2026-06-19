@@ -1,0 +1,8 @@
+# cargo-nextest config. The `ci` profile emits a JUnit report so
+# paged-media/state can ingest cross-repo test evidence (publish-results
+# convention; mirrors core / plugin-sheets).
+[profile.ci]
+# Output path: store/<profile>/<junit.path> → target/nextest/ci/junit.xml.
+
+[profile.ci.junit]
+path = "junit.xml"
