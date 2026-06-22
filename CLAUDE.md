@@ -2,7 +2,7 @@
 
 Orientation for Claude sessions in **paged-media/plugin-data** — the
 paged.data external-data + automation subsystem, delivered as a Paged plugin
-(private repo, And The Next GmbH).
+(public; dual-licensed AGPL-3.0 OR PMEL, And The Next GmbH).
 
 ## What this is
 
