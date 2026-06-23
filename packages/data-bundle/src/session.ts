@@ -39,7 +39,7 @@ import {
   type PlaceholderField,
   type RuleResult,
   type RuleTarget,
-} from "@paged-media/data-host-model";
+} from "../../data-host-model/src";
 
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";

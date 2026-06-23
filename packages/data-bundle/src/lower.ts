@@ -48,7 +48,7 @@ import {
   type LoweredVariable,
   type RuleResult,
   type RuleTarget,
-} from "@paged-media/data-host-model";
+} from "../../data-host-model/src";
 
 /** The frame center, page-local pt, from `[top, left, bottom, right]`. */
 function center(bounds: [number, number, number, number]): [number, number] {

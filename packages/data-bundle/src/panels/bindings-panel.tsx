@@ -26,7 +26,7 @@
 
 import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
-import type { IdmlFit } from "@paged-media/data-host-model";
+import type { IdmlFit } from "../../../data-host-model/src";
 
 import type { BarcodeSymbology, ChangeReport, ColumnMapping, DataSourceSession } from "../session";
 
