@@ -49,5 +49,10 @@
       },
       "./manifest.json": "./manifest.json"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paged-media/plugin-data.git",
+    "directory": "packages/data-bundle"
   }
 }
