@@ -27,7 +27,13 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 
-import type { BatchMode, BatchPlan, DataSourceSession, GovernedCatalog } from "../session";
+import type {
+  BatchMode,
+  BatchPlan,
+  BatchRun,
+  DataSourceSession,
+  GovernedCatalog,
+} from "../session";
 
 const wrap: CSSProperties = {
   display: "flex",
@@ -62,6 +68,8 @@ export function makeDatasetPanel(
     const [query, setQuery] = useState<string>("");
     const [catalog, setCatalog] = useState<GovernedCatalog | null>(null);
     const [plan, setPlan] = useState<BatchPlan | null>(null);
+    const [planMode, setPlanMode] = useState<BatchMode | null>(null);
+    const [runs, setRuns] = useState<BatchRun[] | null>(null);
     const [providerNote, setProviderNote] = useState<string>("");
     const [error, setError] = useState<string>("");
     const [locale, setLocaleState] = useState<"en" | "de">(session.getLocale());
@@ -96,9 +104,35 @@ export function makeDatasetPanel(
               ? { mode: "perRecord", key: by }
               : { mode: "oneCatalog" };
         setPlan(await session.planBatch(selected, mode));
+        setPlanMode(mode);
+        setRuns(null);
       } catch (e) {
         setError(String(e));
         setPlan(null);
+        setPlanMode(null);
+      }
+    }
+
+    // §10 batch RUN — the in-app executor over the current plan. The chain is
+    // caller-supplied until the host frame-chain read (D-12): one nominal
+    // page-height frame, so pagination counts are REAL engine output while the
+    // readout says plainly that documents materialize via the automation lane.
+    async function runBatch(): Promise<void> {
+      if (!planMode) return;
+      const rf = session.listBindings().find((b) => b.kind === "recordFlow");
+      if (!rf) {
+        setError("no record-flow binding — define one in the Bindings panel first");
+        return;
+      }
+      setError("");
+      try {
+        const out = await session.runRecordFlowBatch(rf.id, planMode, [
+          { frame: "batch-frame", page: "batch-page", heightPt: 700 },
+        ]);
+        setRuns(out);
+      } catch (e) {
+        setError(String(e));
+        setRuns(null);
       }
     }
 
@@ -195,6 +229,37 @@ export function makeDatasetPanel(
               <div>
                 plan: {plan.mode} · {plan.units.length} unit(s) over {plan.totalRecords} record(s)
                 <span style={note}> — {plan.units.slice(0, 4).map((u) => u.label).join(", ")}</span>
+                <div style={{ marginTop: 4 }}>
+                  <button type="button" data-data-batch-run onClick={() => void runBatch()}>
+                    Run batch (§10 executor)
+                  </button>
+                </div>
+              </div>
+            )}
+            {runs && (
+              <div data-data-batch-runs={runs.length}>
+                ran {runs.length} output document(s):
+                <ul style={{ margin: "4px 0", paddingLeft: 16 }}>
+                  {runs.slice(0, 6).map((r, i) => {
+                    const flow = r.flow as { frames?: unknown[]; total?: number };
+                    return (
+                      <li key={i}>
+                        {r.label}
+                        <span style={note}>
+                          {" "}
+                          · {flow.frames?.length ?? "?"} frame(s) ·{" "}
+                          {flow.total ?? "?"} record(s)
+                        </span>
+                      </li>
+                    );
+                  })}
+                  {runs.length > 6 && <li style={note}>… {runs.length - 6} more</li>}
+                </ul>
+                <span style={note}>
+                  Real pagination over a nominal one-frame chain (the live
+                  frame-chain read is D-12); output documents materialize via
+                  the automation lane (data-cli / napi), not in this editor.
+                </span>
               </div>
             )}
 

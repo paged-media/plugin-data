@@ -382,6 +382,9 @@ export interface DataSourceSession {
    *  fired content (per-cell on a lowered table, or over a story range).
    *  Returns the count of applied style writes. */
   applyRule(ruleId: string): Promise<number>;
+  /** The defined bindings + their kinds — panel-facing read of session
+   *  state (the dataset panel's batch RUN needs the record-flow binding). */
+  listBindings(): { id: string; kind: string }[];
   /** D-12: paginate a record-flow binding over the LIVE host frame chain
    *  (`host.document.frameChain(storyId)` + content-box capacities), re-splitting
    *  when the chain reflows. Returns the paginated flow IR (the host renders it).
@@ -1185,6 +1188,10 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     getLocale() {
       return locale;
+    },
+
+    listBindings() {
+      return bindingIds.map((id) => ({ id, kind: bindingKinds.get(id) ?? "?" }));
     },
 
     async planBatch(queryId, mode) {
