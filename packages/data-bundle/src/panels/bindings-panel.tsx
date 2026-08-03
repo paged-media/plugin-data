@@ -72,6 +72,16 @@ export function makeBindingsPanel(
     const [snapshot, setSnapshot] = useState(session.getState());
     const [fit, setFit] = useState<IdmlFit>("Proportionally");
     const [symbology, setSymbology] = useState<BarcodeSymbology>("ean13");
+    // Binding AUTHORING (editor-ui-coverage M — promoted past the demo
+    // buttons): kind + source + field drive a real addBinding flow; the
+    // demo wirings remain reachable through it (field "anchor" over the
+    // first source is exactly what the old demo did).
+    const [bindKind, setBindKind] = useState<"variable" | "image" | "barcode">(
+      "variable",
+    );
+    const [bindField, setBindField] = useState("");
+    const [bindSeq, setBindSeq] = useState(1);
+    const [bindMsg, setBindMsg] = useState<string | null>(null);
     // §9 record-preview stepper: walk the demo query's records before a batch run.
     const [previewIndex, setPreviewIndex] = useState(0);
     const [recordTotal, setRecordTotal] = useState(0);
@@ -183,48 +193,113 @@ export function makeBindingsPanel(
       refresh();
     }
 
+    // The AUTHORING flow the demos grew into: pick a kind + field, the
+    // binding lands on the first source's record stream; image/barcode
+    // target the selected rectangle (honest warnings otherwise).
+    function addBinding(): void {
+      const source = session.getState().sources[0];
+      if (!source) {
+        setBindMsg("import a CSV source first (Sources panel)");
+        return;
+      }
+      const field = bindField.trim();
+      if (!field) {
+        setBindMsg("enter the field name to bind (a source column)");
+        return;
+      }
+      const q = "q_all";
+      session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+      const id = `${bindKind}_${field}_${bindSeq}`;
+      setBindSeq(bindSeq + 1);
+      if (bindKind === "variable") {
+        session.addVariableBinding(id, field, q, "");
+        setBindMsg(`variable binding ${id} — Resolve + lower places the field`);
+      } else {
+        const target = host.selection.get().find((e) => e.kind === "rectangle");
+        if (!target) {
+          setBindMsg(`select a rectangle to bind the ${bindKind} into`);
+          return;
+        }
+        if (bindKind === "image") {
+          session.addImageBinding(id, target.id as string, q, field, { fit });
+          setBindMsg(`image binding ${id} → the selected rectangle (${fit})`);
+        } else {
+          session.addBarcodeBinding(id, target.id as string, q, symbology, field, {
+            missing: "skip",
+          });
+          setBindMsg(`barcode binding ${id} → the selected rectangle (${symbology})`);
+        }
+      }
+      refresh();
+    }
+
     return (
       <div style={wrap}>
         <strong>paged.data · bindings (v{host.manifest.version})</strong>
+        <div style={row} data-data-bind-author>
+          <select
+            data-data-bind-kind
+            value={bindKind}
+            onChange={(e) => setBindKind(e.target.value as typeof bindKind)}
+          >
+            <option value="variable">variable field</option>
+            <option value="image">image</option>
+            <option value="barcode">barcode / QR</option>
+          </select>
+          <input
+            data-data-bind-field
+            type="text"
+            value={bindField}
+            onChange={(e) => setBindField(e.target.value)}
+            placeholder="field (column name)"
+            style={{ width: 130 }}
+          />
+          {bindKind === "image" && (
+            <label style={note}>
+              fit:{" "}
+              <select value={fit} onChange={(e) => setFit(e.target.value as IdmlFit)}>
+                {FIT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {bindKind === "barcode" && (
+            <label style={note}>
+              symbology:{" "}
+              <select
+                value={symbology}
+                onChange={(e) => setSymbology(e.target.value as BarcodeSymbology)}
+              >
+                {SYMBOLOGY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button type="button" data-data-bind-add onClick={addBinding}>
+            Add binding
+          </button>
+        </div>
+        {bindMsg && <p style={note} data-data-bind-msg>{bindMsg}</p>}
         <div style={row}>
-          <button type="button" onClick={wireDemo}>
+          <button type="button" onClick={wireDemo} title="The one-click table+variable demo wiring">
             Wire demo binding
           </button>
-          <button type="button" onClick={wireImageDemo} title="Bind an image to the selected rectangle">
+          <button type="button" onClick={wireImageDemo} title="Bind an image to the selected rectangle (demo)">
             Bind image →
           </button>
-          <label style={note}>
-            fit:{" "}
-            <select value={fit} onChange={(e) => setFit(e.target.value as IdmlFit)}>
-              {FIT_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div style={row}>
           <button
             type="button"
             onClick={wireBarcodeDemo}
-            title="Render a barcode/QR from the field value into the selected rectangle"
+            title="Render a barcode/QR from the field value into the selected rectangle (demo)"
           >
             Bind barcode →
           </button>
-          <label style={note}>
-            symbology:{" "}
-            <select
-              value={symbology}
-              onChange={(e) => setSymbology(e.target.value as BarcodeSymbology)}
-            >
-              {SYMBOLOGY_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
         <div style={row}>
           <button
