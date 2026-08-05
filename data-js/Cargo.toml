@@ -19,6 +19,7 @@ data-sources = { path = "../data-sources" }
 data-bind = { path = "../data-bind" }
 data-lower = { path = "../data-lower" }
 data-barcode = { path = "../data-barcode" }
+data-dataset = { path = "../data-dataset" }
 data-query = { path = "../data-query" }
 data-automation = { path = "../data-automation" }
 serde.workspace = true

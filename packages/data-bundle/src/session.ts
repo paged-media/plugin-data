@@ -33,22 +33,30 @@ import type {
 
 import {
   FIELD_PLUGIN,
+  dataSetPlan,
   setFieldValueMutation,
+  visibilityTarget,
+  type DataSetApply,
+  type DataSetTargets,
   type IdmlFit,
   type LoweredBarcode,
   type PlaceholderField,
   type RuleResult,
   type RuleTarget,
+  type VisibilityTargetKind,
 } from "../../data-host-model/src";
 
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
 import {
+  commitDataSet,
   commitLoweredBarcode,
   commitLoweredImage,
   commitLoweredTable,
   commitLoweredVariable,
+  commitLoweredVisibility,
   commitRule,
+  resolveElementId,
 } from "./lower";
 import {
   buildRemoteUrl,
@@ -255,6 +263,26 @@ export interface DataProviderPublication {
   records: unknown;
 }
 
+/** §9.9: one declared variable, as the palette shows it. `bound` is false for a
+ *  variable an imported library declares but nothing in this document binds —
+ *  the palette shows it greyed rather than pretending it will apply. */
+export interface VariableSummary {
+  name: string;
+  trait: "textcontent" | "filereference" | "visibility" | "graphdata";
+  bound: boolean;
+}
+
+/** §9.9: what a variable-library import brought in, and what will NOT apply. */
+export interface ImportReport {
+  setName: string;
+  variables: number;
+  dataSets: number;
+  /** Bindable variables with no binding defined here — skipped on apply. */
+  unbound: string[];
+  /** `graphdata` variables — carried and re-exported, never applied (RFI D-15). */
+  graphOnly: string[];
+}
+
 /** The session API the panels + commands drive. */
 export interface DataSourceSession {
   getState(): SessionState;
@@ -310,6 +338,26 @@ export interface DataSourceSession {
     expr: string,
     options?: { quietZone?: number; missing?: "skip" | "flag" },
   ): void;
+  /** §9.8: define a VISIBILITY binding — the Illustrator "visibility variable".
+   *  `target` is the bound element's raw Self id; `expr` resolves to the
+   *  shown/hidden decision per record. `invert` flips it (bind `discontinued`,
+   *  hide when true); `missing` governs a null value — `hide` (default), `show`,
+   *  or `leave` (write nothing at all, the non-destructive arm).
+   *
+   *  `kind` pins the element's `ElementId` kind when the caller knows it (the
+   *  panel binds from the selection); absent, it is resolved from the live scene
+   *  tree at commit time. */
+  addVisibilityBinding(
+    id: string,
+    target: string,
+    query: string,
+    expr: string,
+    options?: {
+      invert?: boolean;
+      missing?: "hide" | "show" | "leave";
+      kind?: VisibilityTargetKind;
+    },
+  ): void;
   /** D-13: define a data-driven formatting rule (`when → apply` a document
    *  style) over a scope, bound to a host TARGET (story range / table column).
    *  `query` names the records the `when` condition evaluates against. */
@@ -337,6 +385,45 @@ export interface DataSourceSession {
    *  baseline — call after the first lower, when the document already reflects
    *  the current data. */
   primeChangeBaseline(): Promise<void>;
+  // ── §9.9 variables + data sets (the Illustrator palette) ─────────────────
+
+  /** The declared variables — one per bindable binding, plus anything an
+   *  imported library brought in. Empty when the engine wasm predates the lane
+   *  (honest degrade, never a fabricated palette). */
+  variables(): Promise<VariableSummary[]>;
+  /** Capture the current resolved values as a named data set (§9.9 — "capture
+   *  current data set"), resolved against `record` (the preview index; 0 by
+   *  default). Capturing over an existing name replaces it. */
+  captureDataSet(name: string, record?: number): Promise<string[]>;
+  /** Capture ONE data set per record of a query — the whole palette straight
+   *  from the data, which is the point of doing this here rather than in a
+   *  drawing plugin. `nameColumn` titles each set from a result column.
+   *  Returns the captured names in record order. */
+  captureEveryRecord(
+    queryId: string,
+    options?: { prefix?: string; nameColumn?: string },
+  ): Promise<string[]>;
+  /** The named data sets, in palette order. */
+  listDataSets(): Promise<string[]>;
+  /** Delete a data set by name; `true` when one was removed. */
+  deleteDataSet(name: string): Promise<boolean>;
+  /** Apply a named data set to the document (§9.9 — "switch data set"). ONE
+   *  undoable batch regardless of how many variables move; returns the count
+   *  written plus the per-variable reasons for everything skipped, which the
+   *  caller must SHOW (a data set that half-applies in silence is the failure
+   *  this return shape exists to prevent). */
+  applyDataSet(name: string): Promise<{ applied: number; skipped: Record<string, string> }>;
+  /** Export the variable set as an Illustrator-compatible variable library
+   *  (XML). See `data-dataset/src/xml.rs` for the two declared deviations. */
+  exportVariableLibrary(): Promise<string>;
+  /** Import a variable library (XML), replacing the current variable set.
+   *  Returns what came in and what will NOT apply. Import never writes to the
+   *  document — applying a set is a separate, explicit action. */
+  importVariableLibrary(xml: string): Promise<ImportReport>;
+  /** The serialized byte size of the variable half of the document payload —
+   *  the D-08 64 KiB budget check before a bulk capture. */
+  dataSetPayloadBytes(): Promise<number>;
+
   /** Resolve a binding and commit its lowered content to the document. */
   lowerBinding(id: string): Promise<void>;
   /** Refresh, then resolve + commit every binding. */
@@ -465,7 +552,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // re-places, a table re-lowers).
   const bindingKinds = new Map<
     string,
-    "variable" | "table" | "image" | "rule" | "recordFlow" | "barcode"
+    "variable" | "table" | "image" | "rule" | "recordFlow" | "barcode" | "visibility"
+  >();
+  // §9.8: the bound element a visibility binding shows/hides. `kind` is the
+  // caller's (the panel binds from the selection, which carries it); absent, it
+  // is resolved from the live scene tree at commit time.
+  const visibilityTargets = new Map<
+    string,
+    { elementId: string; kind?: VisibilityTargetKind }
   >();
   // D-14: the bound RECTANGLE (+ optional explicit fit) an image binding places
   // onto. Caller (the bindings panel) supplies the target frame.
@@ -509,6 +603,59 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     } catch {
       return [];
     }
+  }
+
+  /** §9.9: resolve WHERE each applicable data-set row lands in the live
+   *  document. The engine decided the VALUES; only the host knows the addresses:
+   *
+   *  - text → the placeholder field's `{storyId, offset}`, read FRESH from
+   *    `placeholders()` (the host normalises to the run start, and an edit above
+   *    the field moves it — a cached offset would write into the wrong run);
+   *  - image → the bound rectangle's Self id (from the binding definition);
+   *  - visibility → the bound element's typed `ElementId` (the caller's kind, or
+   *    resolved from the scene tree).
+   *
+   *  An address that cannot be resolved is simply ABSENT from the result, which
+   *  makes `dataSetPlan` skip that row with a reason. Never invented. */
+  async function resolveDataSetTargets(
+    applies: readonly DataSetApply[],
+  ): Promise<DataSetTargets> {
+    const fields: Record<string, { storyId: string; offset: number }> = {};
+    const frames: Record<string, string> = {};
+    const elements: Record<string, ElementId> = {};
+
+    const wantsField = applies.some((a) => a.applicable && a.kind === "text");
+    if (wantsField && host.supports("document.placeholders@1")) {
+      try {
+        const placed = (await host.document.placeholders()) as PlaceholderField[];
+        for (const p of placed) {
+          if (p.plugin !== FIELD_PLUGIN) continue;
+          // First occurrence wins: a variable placed twice in a document is a
+          // real authoring case, and the refresh loop (refreshFields) updates
+          // EVERY copy — this apply path drives the first, then refreshFields
+          // brings the rest in line on the next resolve.
+          if (!(p.key in fields)) fields[p.key] = { storyId: p.storyId, offset: p.offset };
+        }
+      } catch (err) {
+        host.log.warn(`data set: placeholders() read failed — ${String(err)}`);
+      }
+    }
+
+    for (const a of applies) {
+      if (!a.applicable) continue;
+      if (a.kind === "image") {
+        const t = imageTargets.get(a.variable);
+        if (t) frames[a.variable] = t.elementId;
+      } else if (a.kind === "visibility") {
+        const t = visibilityTargets.get(a.variable);
+        if (!t) continue;
+        const el = t.kind
+          ? visibilityTarget(t.kind, t.elementId)
+          : await resolveElementId(host, t.elementId);
+        if (el) elements[a.variable] = el;
+      }
+    }
+    return { fields, frames, elements };
   }
 
   /** Recompute each remote source's consent posture from the live grant. */
@@ -747,11 +894,223 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       if (!bindingIds.includes(id)) bindingIds.push(id);
     },
 
+    addVisibilityBinding(id, target, query, expr, options) {
+      void engine?.define_binding({
+        id,
+        kind: "visibility",
+        target,
+        query,
+        expr,
+        options: { invert: options?.invert ?? false, missing: options?.missing ?? "hide" },
+      });
+      bindingKinds.set(id, "visibility");
+      visibilityTargets.set(id, { elementId: target, kind: options?.kind });
+      if (!bindingIds.includes(id)) bindingIds.push(id);
+    },
+
     addRuleBinding(id, scope, query, when, apply, target) {
       void engine?.define_binding({ id, kind: "rule", scope, when, apply });
       bindingKinds.set(id, "rule");
       ruleTargets.set(id, { query, target });
       if (!bindingIds.includes(id)) bindingIds.push(id);
+    },
+
+    // ── §9.9 variables + data sets ──────────────────────────────────────────
+
+    async variables() {
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch {
+        return [];
+      }
+      if (typeof e.variables !== "function") return [];
+      try {
+        const set = e.variables() as { variables?: VariableSummary[] } | null;
+        const decls = (set?.variables ?? []) as { name: string; trait: string }[];
+        return decls.map((d) => ({
+          name: d.name,
+          trait: d.trait as VariableSummary["trait"],
+          bound: bindingIds.includes(d.name),
+        }));
+      } catch (err) {
+        host.log.warn(`variables: ${String(err)}`);
+        return [];
+      }
+    },
+
+    async captureDataSet(name, record = 0) {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.capture_data_set !== "function") {
+          state.message =
+            "The engine wasm predates the variables lane — rebuild it (scripts/build-wasm.sh).";
+          return [];
+        }
+        e.capture_data_set(name, record);
+        const names = await this.listDataSets();
+        state.status = "ready";
+        state.message = `Captured data set "${name}" (record ${record + 1}).`;
+        return names;
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`captureDataSet(${name}): ${state.message}`);
+        return [];
+      }
+    },
+
+    async captureEveryRecord(queryId, options) {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.capture_every_record !== "function") {
+          state.message =
+            "The engine wasm predates the variables lane — rebuild it (scripts/build-wasm.sh).";
+          return [];
+        }
+        const names =
+          (e.capture_every_record(
+            queryId,
+            options?.prefix ?? "Data Set",
+            options?.nameColumn,
+          ) as string[] | null) ?? [];
+        // D-08: captured data sets are the only payload half that grows with the
+        // record count. Say so BEFORE the document cannot be saved, not after.
+        const bytes = await this.dataSetPayloadBytes();
+        const CAP = 64 * 1024;
+        state.status = "ready";
+        state.message =
+          `Captured ${names.length} data set(s) from "${queryId}".` +
+          (bytes > CAP * 0.8
+            ? ` WARNING: the variable payload is ${bytes} bytes of the ${CAP}-byte ` +
+              "document-metadata cap (D-08) — delete data sets or capture fewer records."
+            : "");
+        return names;
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`captureEveryRecord(${queryId}): ${state.message}`);
+        return [];
+      }
+    },
+
+    async listDataSets() {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.list_data_sets !== "function") return [];
+        return (e.list_data_sets() as string[] | null) ?? [];
+      } catch {
+        return [];
+      }
+    },
+
+    async deleteDataSet(name) {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.delete_data_set !== "function") return false;
+        return e.delete_data_set(name);
+      } catch {
+        return false;
+      }
+    },
+
+    async applyDataSet(name) {
+      const none = { applied: 0, skipped: {} as Record<string, string> };
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        return none;
+      }
+      if (typeof e.apply_data_set !== "function") {
+        state.message =
+          "The engine wasm predates the variables lane — rebuild it (scripts/build-wasm.sh).";
+        return none;
+      }
+      try {
+        const applies = (e.apply_data_set(name) as DataSetApply[] | null) ?? [];
+        // The engine decided WHAT; the host knows WHERE. Resolve each applicable
+        // row's address from the live document, then commit the lot as ONE batch.
+        const targets = await resolveDataSetTargets(applies);
+        const plan = dataSetPlan(applies, targets);
+        const result = await commitDataSet(host, plan);
+        state.status = "ready";
+        const skippedCount = Object.keys(result.skipped).length;
+        state.message =
+          `Applied data set "${name}": ${result.applied} variable(s) in one undo step` +
+          (skippedCount > 0 ? `, ${skippedCount} skipped.` : ".");
+        return result;
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`applyDataSet(${name}): ${state.message}`);
+        return none;
+      }
+    },
+
+    async exportVariableLibrary() {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.export_variable_library !== "function") return "";
+        return e.export_variable_library();
+      } catch (err) {
+        host.log.warn(`exportVariableLibrary: ${String(err)}`);
+        return "";
+      }
+    },
+
+    async importVariableLibrary(xml) {
+      const empty: ImportReport = {
+        setName: "",
+        variables: 0,
+        dataSets: 0,
+        unbound: [],
+        graphOnly: [],
+      };
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        return empty;
+      }
+      if (typeof e.import_variable_library !== "function") {
+        state.message =
+          "The engine wasm predates the variables lane — rebuild it (scripts/build-wasm.sh).";
+        return empty;
+      }
+      try {
+        const report = (e.import_variable_library(xml) as ImportReport | null) ?? empty;
+        state.status = "ready";
+        state.message =
+          `Imported "${report.setName}": ${report.variables} variable(s), ` +
+          `${report.dataSets} data set(s).` +
+          (report.unbound.length > 0
+            ? ` Not bound in this document (will be skipped): ${report.unbound.join(", ")}.`
+            : "") +
+          (report.graphOnly.length > 0
+            ? ` Graph-data variables are carried but never applied: ${report.graphOnly.join(", ")}.`
+            : "");
+        return report;
+      } catch (err) {
+        state.status = "error";
+        state.message = err instanceof Error ? err.message : String(err);
+        host.log.warn(`importVariableLibrary: ${state.message}`);
+        return empty;
+      }
+    },
+
+    async dataSetPayloadBytes() {
+      try {
+        const e = await ensureEngine();
+        if (typeof e.data_set_payload_bytes !== "function") return 0;
+        return e.data_set_payload_bytes();
+      } catch {
+        return 0;
+      }
     },
 
     async refreshData() {
@@ -862,6 +1221,11 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
               `image binding "${id}" has no bound rectangle target — define it via addImageBinding`,
             );
           }
+        } else if (lowered?.kind === "visibility") {
+          // §9.8: show/hide the bound element via its own elementVisible property.
+          const tgt = visibilityTargets.get(id);
+          const el = tgt?.kind ? visibilityTarget(tgt.kind, tgt.elementId) : null;
+          await commitLoweredVisibility(host, lowered as never, el);
         }
         state.status = "ready";
         state.message = `Resolved + lowered "${id}".`;

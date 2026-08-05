@@ -32,7 +32,20 @@ export type {
   LoweredRow,
   LoweredTable,
   LoweredVariable,
+  LoweredVisibility,
 } from "./lowered";
+
+export {
+  visibilityTarget,
+  visibilityMutation,
+  visibilityToMutations,
+  dataSetPlan,
+  dataSetBatch,
+  type VisibilityTargetKind,
+  type DataSetApply,
+  type DataSetTargets,
+  type DataSetPlan,
+} from "./variables";
 
 export {
   barcodeToMutations,

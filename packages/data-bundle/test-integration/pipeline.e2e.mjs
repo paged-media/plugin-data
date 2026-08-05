@@ -437,10 +437,116 @@ async function partD() {
   console.log(`  ✓ D-12 live flow → ${flow.placed}/${flow.total} records over ${flow.frames.length} live frame(s)`);
 }
 
+// Part E — §9.8/§9.9 variables + data sets through the REAL wasm. The unit
+// tests prove the Rust and the TS halves separately; this proves the shapes
+// actually cross serde-wasm-bindgen (camelCase renames, Option<bool> → null,
+// the XML as a plain string) — which is where every previous lane's surprises
+// have come from.
+async function partE() {
+  console.log("\nPart E — §9.8/§9.9 variables + data sets:");
+  const engine = await bootEngine();
+
+  engine.define_query({ id: "q1", sql: "", params: [], shape: { shape: "recordStream" } });
+  engine.ingest_result("q1", {
+    schema: {
+      fields: [
+        { name: "sku", ty: "text", nullable: false },
+        { name: "photo", ty: "text", nullable: true },
+        { name: "in_stock", ty: "text", nullable: true },
+      ],
+    },
+    columns: [
+      [
+        { t: "text", v: "A-1" },
+        { t: "text", v: "B-2" },
+      ],
+      [
+        { t: "text", v: "https://x/a.png" },
+        { t: "text", v: "https://x/b.png" },
+      ],
+      [
+        { t: "text", v: "true" },
+        { t: "text", v: "false" },
+      ],
+    ],
+    row_count: 2,
+  });
+
+  // §9.8 — the visibility variable, the one Illustrator trait that was NOT met.
+  engine.define_binding({
+    id: "Badge",
+    kind: "visibility",
+    target: "u77",
+    query: "q1",
+    expr: "in_stock",
+    options: { invert: false, missing: "hide" },
+  });
+  const vis = engine.resolve_lowered("Badge");
+  eq(vis.kind, "visibility", "Part E: visibility lowered kind crossed");
+  eq(vis.visible, true, "Part E: record 0 in_stock=true → shown");
+  console.log(`  ✓ §9.8 visibility → LoweredVisibility visible=${vis.visible} (host setElementProperty elementVisible)`);
+
+  // §9.9 — declarations project from the bindings (all three bindable traits).
+  engine.define_binding({
+    id: "Sku",
+    kind: "variable",
+    target: "ph",
+    query: "q1",
+    expr: "sku",
+    missing: { missing: "blank" },
+  });
+  engine.define_binding({
+    id: "Photo",
+    kind: "image",
+    target: "urect",
+    query: "q1",
+    expr: "photo",
+    policy: { fit: "fit", missing: "skip" },
+  });
+  const vars = engine.variables();
+  const traits = Object.fromEntries(vars.variables.map((v) => [v.name, v.trait]));
+  eq(traits, { Badge: "visibility", Sku: "textcontent", Photo: "filereference" },
+    "Part E: the three bindable traits project from the bindings");
+
+  // Capture ONE data set per record — the whole palette from the data.
+  const names = engine.capture_every_record("q1", "Data Set", "sku");
+  eq(names, ["A-1", "B-2"], "Part E: capture_every_record named the sets from a column");
+
+  // Apply — the typed writes the bundle turns into ONE batch.
+  const applies = engine.apply_data_set("B-2");
+  const byName = Object.fromEntries(applies.map((a) => [a.variable, a]));
+  eq(byName.Sku.text, "B-2", "Part E: text value crossed");
+  eq(byName.Photo.href, "https://x/b.png", "Part E: file reference crossed");
+  eq(byName.Badge.visible, false, "Part E: visibility value crossed (record 1 → hidden)");
+  assert.ok(applies.every((a) => a.applicable), "Part E: all three rows applicable");
+  console.log(`  ✓ §9.9 apply_data_set("B-2") → ${applies.length} typed writes (bundle commits ONE batch = one undo step)`);
+
+  // The applied bindings went Overridden — the shipped sync state, so the next
+  // refresh cannot clobber a data set the user switched to.
+  eq(engine.sync_state("Sku").status, "overridden", "Part E: apply marked the binding Overridden");
+
+  // The Illustrator variable library, round-tripped through the real wasm.
+  const xml = engine.export_variable_library();
+  assert.ok(xml.includes('trait="visibility"'), "Part E: exported XML declares the visibility trait");
+  assert.ok(xml.includes("http://ns.adobe.com/Variables/1.0/"), "Part E: exported XML resolves the Adobe namespaces");
+  assert.ok(!xml.includes("&ns_"), "Part E: exported XML declares no undefined DTD entities");
+  const report = engine.import_variable_library(xml);
+  eq(report.variables, 3, "Part E: re-import saw all three variables");
+  eq(report.dataSets, 2, "Part E: re-import saw both data sets (camelCase crossed)");
+  eq(engine.list_data_sets(), ["A-1", "B-2"], "Part E: data sets survived the XML round trip");
+  console.log(`  ✓ §9.9 variable library → ${xml.length} bytes of well-formed XML, re-imported losslessly`);
+
+  // D-08: the payload half that grows with the record count is MEASURED.
+  const bytes = engine.data_set_payload_bytes();
+  assert.ok(bytes > 0 && bytes < 64 * 1024, `Part E: variable payload ${bytes} bytes is under the 64 KiB cap`);
+  console.log(`  ✓ D-08 variable payload measured at ${bytes} bytes (cap 65536)`);
+}
+
 const expected = await partA();
 const duckOk = await partB(expected);
 await partC();
 await partD();
+await partE();
 console.log(
-  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)  Part D ✓ (v43 lanes)`,
+  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)  Part D ✓ (v43 lanes)  Part E ✓ (§9.8/§9.9 variables)`,
 );

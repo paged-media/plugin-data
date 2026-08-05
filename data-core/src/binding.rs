@@ -123,6 +123,52 @@ pub enum Binding {
         #[serde(default)]
         options: BarcodeOpts,
     },
+    /// A field value drives whether a bound page element is SHOWN or HIDDEN
+    /// (§9.8 — the Illustrator "visibility variable"). The `expr` resolves to a
+    /// truthy/falsy value; the engine decides `visible`; the host writes the
+    /// element's own `elementVisible` property (never a parallel visibility
+    /// system, never a delete). Additive variant — a payload written before this
+    /// amendment still deserializes (the `kind` tag is closed only over the
+    /// variants it knew).
+    Visibility {
+        /// The bound page element whose visibility the field drives.
+        target: FrameRef,
+        query: QueryId,
+        /// The binding expression (source) — resolves to the shown/hidden decision.
+        expr: String,
+        #[serde(default)]
+        options: VisibilityOpts,
+    },
+}
+
+/// Per-visibility-binding options (§9.8). `invert` flips the resolved decision
+/// (an author binds `discontinued` and wants the frame hidden when true);
+/// `missing` governs a null / absent value.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisibilityOpts {
+    /// Flip the resolved truthiness before it becomes the shown/hidden decision.
+    #[serde(default)]
+    pub invert: bool,
+    /// What to do when the resolved value is null / the record is absent.
+    #[serde(default)]
+    pub missing: VisibilityMissing,
+}
+
+/// What a visibility binding does when its value is absent/null (§9.8). The
+/// third arm is the honest one: `Leave` writes NOTHING, so an unresolvable
+/// binding can never silently blank a designer's artwork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VisibilityMissing {
+    /// Absent ⇒ hide the element (the catalog default: no data, no block).
+    #[default]
+    Hide,
+    /// Absent ⇒ show the element.
+    Show,
+    /// Absent ⇒ do not write the property at all (leave whatever the document
+    /// has). The only policy that is guaranteed non-destructive.
+    Leave,
 }
 
 impl Binding {
@@ -134,7 +180,8 @@ impl Binding {
             | Binding::Image { query, .. }
             | Binding::Table { query, .. }
             | Binding::RecordFlow { query, .. }
-            | Binding::Barcode { query, .. } => Some(query),
+            | Binding::Barcode { query, .. }
+            | Binding::Visibility { query, .. } => Some(query),
             Binding::Rule { .. } => None,
         }
     }
@@ -388,12 +435,48 @@ pub enum Status {
 /// A content fingerprint of the inputs that produced a resolved value (spec §8).
 /// Two stamps are equal iff source content + query + params match — the
 /// invalidation key for the resolution graph.
+/// The two hashes serialize as DECIMAL STRINGS, not numbers.
+///
+/// This is not cosmetic. They are 64-bit fingerprints, and a `u64` above
+/// `Number.MAX_SAFE_INTEGER` cannot be represented as a JS number — the
+/// wasm serializer ERRORS on it. Because `data-js`'s `sync_state` shim swallows
+/// that error (`unwrap_or(JsValue::NULL)`), the bundle silently received `null`
+/// for the sync state of every binding that had ever been resolved: the panel
+/// could not tell Linked from Overridden from Stale, and no test caught it
+/// because both Rust and the TS fakes bypass the wasm boundary. Found by the
+/// real-wasm e2e (Part E). A string is the correct JS representation of an
+/// opaque 64-bit id — and nothing computes with these, they are only compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ResolveStamp {
     /// Hash of the source content + query SQL/shape.
+    #[serde(with = "u64_as_string")]
     pub source_query_hash: u64,
     /// Hash of the bound parameter set.
+    #[serde(with = "u64_as_string")]
     pub param_hash: u64,
+}
+
+/// Serialize a `u64` as a decimal string; accept either a string or a number on
+/// the way back in (a hand-written fixture may well use a small number).
+mod u64_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&v.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Str(String),
+            Num(u64),
+        }
+        match Either::deserialize(d)? {
+            Either::Str(s) => s.parse().map_err(serde::de::Error::custom),
+            Either::Num(n) => Ok(n),
+        }
+    }
 }
 
 /// Per binding/target sync state (spec §5.1).

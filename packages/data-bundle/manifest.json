@@ -48,7 +48,9 @@
       "media.paged.data.command.defineBinding",
       "media.paged.data.command.resolveBindings",
       "media.paged.data.command.lowerBinding",
-      "media.paged.data.command.openDataset"
+      "media.paged.data.command.openDataset",
+      "media.paged.data.command.captureDataSet",
+      "media.paged.data.command.applyDataSet"
     ]
   }
 }

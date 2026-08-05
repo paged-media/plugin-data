@@ -1,0 +1,17 @@
+[package]
+name = "data-dataset"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data variables + data sets (spec §9.9): the named variable declarations (textContent/fileReference/visibility/graphData), captured data sets, and the Illustrator-compatible variable-library XML codec. Clean-room: the wire shape is derived from Adobe's PUBLISHED Variables namespace documentation, never from Illustrator code. Pure model <-> XML; depends ONLY on data-core."
+
+[lints]
+workspace = true
+
+[dependencies]
+data-core = { path = "../data-core" }
+serde.workspace = true
+thiserror.workspace = true
+quick-xml = { workspace = true }

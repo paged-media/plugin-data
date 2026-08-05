@@ -97,6 +97,22 @@ pub enum Resolved {
     Image(ResolvedImage),
     /// A resolved barcode: the symbology + the value string to encode (§9.7).
     Barcode(ResolvedBarcode),
+    /// A resolved visibility decision for a bound element (§9.8).
+    Visibility(ResolvedVisibility),
+}
+
+/// A resolved visibility binding (spec §9.8 — the Illustrator "visibility
+/// variable"). The expression's truthiness (after `invert`) decides `visible`;
+/// a null / absent value runs the [`data_core::VisibilityMissing`] policy, whose
+/// `Leave` arm yields `visible: None` — the honest "write nothing" outcome, so
+/// an unresolvable binding can never blank artwork.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedVisibility {
+    pub target: data_core::FrameRef,
+    /// `Some(true)` show, `Some(false)` hide, `None` leave the document alone.
+    pub visible: Option<bool>,
+    /// The raw value the expression produced (before truthiness/inversion).
+    pub value: Value,
 }
 
 /// A resolved barcode binding (spec §9.7). The binding expression resolved to a
@@ -339,11 +355,22 @@ impl ResolutionEngine {
         }
     }
 
-    /// Mark a binding overridden (a manual edit replaced the resolved value).
+    /// Mark a binding overridden (a manual edit, or an applied data set, replaced
+    /// the resolved value).
+    ///
+    /// Inserts a state when the binding has none yet — UNLIKE
+    /// [`pin`](Self::pin) / [`relink`](Self::relink), and deliberately. A
+    /// binding that was never resolved still HAS content in the document the
+    /// moment something writes to it (§9.9 "apply data set" does exactly that to
+    /// a freshly-defined binding), and a silent no-op here would leave that
+    /// content unprotected: the next refresh would clobber it and the sync
+    /// report would never have mentioned it. Pinning or relinking a binding that
+    /// has no resolution, by contrast, genuinely has nothing to act on.
     pub fn mark_overridden(&mut self, id: &BindingId) {
-        if let Some(st) = self.sync.get_mut(id) {
-            st.status = Status::Overridden;
-        }
+        self.sync
+            .entry(id.clone())
+            .or_insert_with(SyncState::linked)
+            .status = Status::Overridden;
     }
 
     /// Re-link a pinned/overridden binding so the next refresh tracks the
@@ -513,6 +540,21 @@ impl ResolutionEngine {
                 self.today,
                 self.locale,
             )),
+            Binding::Visibility {
+                target,
+                expr,
+                options,
+                ..
+            } => Resolved::Visibility(resolve_visibility(
+                target.clone(),
+                expr,
+                options,
+                records,
+                record,
+                &self.params,
+                self.today,
+                self.locale,
+            )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
         Ok(resolved)
@@ -637,6 +679,70 @@ fn resolve_variable(
         display: value.as_display(),
         value,
         hidden: false,
+    }
+}
+
+/// Resolve a visibility binding (spec §9.8). Evaluates the expression against
+/// the record, takes its truthiness, applies `invert`, and runs the missing
+/// policy when the value is null / the record is out of range. A value that is
+/// present but NOT coercible to a bool (`Value::Text("maybe")`, an error value)
+/// is treated as unresolved and takes the SAME missing policy — the engine never
+/// guesses a visibility, and `Leave` keeps the document untouched.
+///
+/// Pure model decision: no host contact, no element kind, no geometry. The host
+/// writes `elementVisible` from `visible`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_visibility(
+    target: data_core::FrameRef,
+    expr: &str,
+    options: &data_core::VisibilityOpts,
+    records: &RecordSet,
+    record: usize,
+    params: &HashMap<String, Value>,
+    today: i32,
+    locale: Locale,
+) -> ResolvedVisibility {
+    if record >= records.row_count {
+        return apply_visibility_missing(target, Value::Null, options);
+    }
+    let ctx = RowCtx {
+        records,
+        row: record,
+        params,
+    };
+    let ec = EvalCtx::new(&ctx, today).with_locale(locale);
+    let value = eval_str(expr, &ec);
+    match value.as_bool() {
+        Ok(_) if value.is_null() => apply_visibility_missing(target, value, options),
+        Ok(b) => ResolvedVisibility {
+            target,
+            visible: Some(b != options.invert),
+            value,
+        },
+        // Not coercible (uncoercible text / an error value) — the missing policy
+        // decides; never a guessed visibility.
+        Err(_) => apply_visibility_missing(target, value, options),
+    }
+}
+
+/// Apply the missing/null policy to a visibility binding whose value is absent
+/// or not coercible (§9.8). `invert` applies to the DATA decision only — a
+/// policy fallback is an explicit author choice and is taken literally.
+fn apply_visibility_missing(
+    target: data_core::FrameRef,
+    value: Value,
+    options: &data_core::VisibilityOpts,
+) -> ResolvedVisibility {
+    use data_core::VisibilityMissing;
+    let visible = match options.missing {
+        VisibilityMissing::Hide => Some(false),
+        VisibilityMissing::Show => Some(true),
+        VisibilityMissing::Leave => None,
+    };
+    ResolvedVisibility {
+        target,
+        visible,
+        value,
     }
 }
 

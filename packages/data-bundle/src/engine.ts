@@ -56,6 +56,33 @@ export interface DataEngineLike {
    *  on a wasm artifact built before the preview lane (the session falls back to
    *  the record-0 resolve, honestly). */
   resolve_lowered_at?(binding: string, record: number): unknown;
+  /** §9.9: the declared variables + captured data sets (`VariableSet`). Optional:
+   *  absent on a wasm artifact built before the variables lane (the session
+   *  degrades to an empty palette, honestly). */
+  variables?(): unknown;
+  /** §9.9: capture the current resolved values as a named data set, resolved
+   *  against a record index. Optional (see `variables`). */
+  capture_data_set?(name: string, record: number): unknown;
+  /** §9.9: capture ONE data set per record of a query. Returns the names in
+   *  record order. Optional (see `variables`). */
+  capture_every_record?(query: string, prefix: string, nameColumn?: string): unknown;
+  /** §9.9: the named data sets, in palette order. Optional (see `variables`). */
+  list_data_sets?(): unknown;
+  /** §9.9: delete a data set by name. Optional (see `variables`). */
+  delete_data_set?(name: string): boolean;
+  /** §9.9: plan a data-set application — one `DataSetApply` per captured
+   *  variable. The BUNDLE commits the applicable rows as ONE batch (one undo
+   *  step); this only decides values. Optional (see `variables`). */
+  apply_data_set?(name: string): unknown;
+  /** §9.9: export the variable set as Illustrator-compatible library XML.
+   *  Optional (see `variables`). */
+  export_variable_library?(): string;
+  /** §9.9: import a variable library, replacing the current set. Returns the
+   *  `ImportReport`. Optional (see `variables`). */
+  import_variable_library?(xml: string): unknown;
+  /** §9.9: the serialized byte size of the variable half of the payload — the
+   *  D-08 budget check. Optional (see `variables`). */
+  data_set_payload_bytes?(): number;
   publish_provider(query: string, providerId: string, category: string): unknown;
   governed_catalog(query: string, metadata: unknown): unknown;
   plan_batch(query: string, mode: unknown): unknown;

@@ -1,0 +1,183 @@
+# paged.data feature registry — variables + data sets (spec §9.8/§9.9,
+# data.variable.* / data.dataset.*). The Illustrator "Variables / data sets"
+# feature set, expressed over the SHIPPED binding model rather than as a second
+# data model: a variable IS a binding (the binding id is the name, the binding
+# kind is the trait).
+#
+# Trait coverage, stated once:
+#   textcontent   -> Binding::Variable   (ALREADY MET by D-01; row below pins it)
+#   filereference -> Binding::Image      (ALREADY MET by D-14; row below pins it)
+#   visibility    -> Binding::Visibility (NEW, §9.8)
+#   graphdata     -> nothing             (carried through the XML, never applied;
+#                                         needs a cross-plugin chart-data
+#                                         contract — RFI D-15, planned)
+
+- id: data.variable.text
+  title: Text-string variable (ALREADY MET — the D-01 tagged placeholder)
+  spec: plugin-data data-core/src/binding.rs Binding::Variable (base-idea §9.1, §9.9)
+  status: implemented
+  provenance:
+    [
+      "no new mechanism: the Illustrator `textcontent` trait IS the shipped D-01 placeholder field — the variables lane only PROJECTS it into the palette (data-dataset trait_for_binding_kind). Pinned as a test so 'already met' is verified, not asserted",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_trait_map_covers_the_three_bindable_illustrator_traits",
+        "data-conformance/tests/variables.rs::data_dataset_capture_snapshots_all_three_kinds_at_a_record",
+      ]
+
+- id: data.variable.filereference
+  title: Linked-file variable (ALREADY MET — the D-14 placeImage lane)
+  spec: plugin-data data-core/src/binding.rs Binding::Image (base-idea §9.2, §9.9)
+  status: implemented
+  provenance:
+    [
+      "the Illustrator `filereference` trait IS the shipped image binding placed through the core asset mechanism (placeImage, D-14) — never plugin-image (§2.1). Honest residual carried over from D-14: only URI-addressable references place; inline bytes / asset ids capture as no value rather than a fake path",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_capture_snapshots_all_three_kinds_at_a_record",
+      ]
+    vitest: ["packages/data-host-model/src/__tests__/variables.test.ts"]
+
+- id: data.variable.visibility
+  title: Visibility variable — a field value shows/hides a bound element (§9.8)
+  spec: plugin-data data-core/src/binding.rs Binding::Visibility + data-bind resolve_visibility + data-lower lower_visibility
+  status: implemented
+  provenance:
+    [
+      "writes core's OWN elementVisible property via setElementProperty (the same visibility the Layers panel toggles and the IDML Visible attribute carries) — never a parallel visibility system, never a delete-and-reinsert (which would destroy the element identity other bindings anchor to). No new core door was needed: elementVisible was already in the PropertyPath vocabulary",
+      "three missing policies: hide (default), show, and LEAVE — which writes nothing at all, so an unresolvable binding can never blank a designer's artwork. A value that is present but not coercible to a bool takes the same policy; the engine never guesses a visibility",
+      "the element KIND that setElementProperty needs is read from host.document.tree(), not guessed — an unresolvable element is skipped",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_bind_visibility_truthiness_decides_shown_or_hidden",
+        "data-conformance/tests/variables.rs::data_bind_visibility_invert_flips_the_data_decision",
+        "data-conformance/tests/variables.rs::data_bind_visibility_missing_policy_leave_writes_nothing",
+        "data-conformance/tests/variables.rs::data_bind_visibility_uncoercible_value_takes_the_missing_policy",
+        "data-conformance/tests/variables.rs::data_lower_visibility_is_a_pure_pass_through",
+      ]
+    vitest:
+      [
+        "packages/data-host-model/src/__tests__/variables.test.ts",
+        "packages/data-bundle/src/__tests__/variables.test.ts",
+      ]
+
+- id: data.variable.graphdata
+  title: Graph-data variable — carried through the library, never applied
+  spec: plugin-data data-dataset/src/lib.rs VarTrait::GraphData (RFI D-15)
+  status: planned
+  provenance:
+    [
+      "NOT implemented and deliberately so: paged.data has no chart surface, and the isolation contract (§2.1) forbids depending on the plugin that does. The honest half IS implemented — an imported Illustrator library keeps its graph variables and re-exports them losslessly, so nothing of the author's work is silently dropped; applying one reports why it cannot. Closing it needs a cross-plugin chart-data contract through the CORE SDK (RFI D-15), not a dependency",
+    ]
+
+- id: data.dataset.capture
+  title: Capture the current values as a named data set (§9.9)
+  spec: plugin-data data-js/src/core.rs DataSession::capture_data_set / capture_every_record
+  status: implemented
+  provenance:
+    [
+      "resolves each bindable variable at a chosen record index and snapshots the result; capturing over an existing name replaces it (Illustrator's behavior) without reordering the palette",
+      "capture_every_record turns a whole query result into one data set per record — the join that justifies siting variables HERE rather than in a drawing plugin, where an author builds every set by hand",
+      "a value the engine did not produce is never captured: the Leave visibility policy and a non-URI image reference capture as ABSENT rather than as a fabricated value",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_capture_snapshots_all_three_kinds_at_a_record",
+        "data-conformance/tests/variables.rs::data_dataset_capture_every_record_builds_the_whole_palette",
+        "data-conformance/tests/variables.rs::data_dataset_capture_skips_the_leave_policy_rather_than_inventing_a_value",
+      ]
+
+- id: data.dataset.apply
+  title: Switch between data sets — applied as ONE undo step (§9.9)
+  spec: plugin-data data-js/src/core.rs DataSession::apply_data_set + packages/data-host-model/src/variables.ts dataSetPlan/dataSetBatch
+  status: implemented
+  provenance:
+    [
+      "MEASURED undo cost: every applicable variable is written in a single `batch` mutation, so switching a data set that moves N variables costs the user ONE undo press, not N. Asserted as a mutate-CALL count through a capturing fake host, not merely as op shape",
+      "each trait routes to the door that already ships for it: setFieldValue (D-01), placeImage (D-14), setElementProperty elementVisible (§9.8)",
+      "placeholder offsets are read FRESH from placeholders() at apply time — a cached place-time offset would write into the wrong run after any edit above the field",
+      "an applied set marks its bindings Overridden (the shipped sync state), so the next refresh cannot clobber it and relink returns it to live data",
+      "rows that cannot be written are reported with a REASON, never half-applied in silence",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_apply_plans_one_typed_write_per_variable",
+        "data-conformance/tests/variables.rs::data_dataset_apply_marks_the_applied_bindings_overridden",
+        "data-conformance/tests/variables.rs::data_dataset_apply_protects_a_never_resolved_binding_too",
+        "data-conformance/tests/variables.rs::data_dataset_apply_reports_unapplicable_rows_instead_of_faking_them",
+      ]
+    vitest:
+      [
+        "packages/data-host-model/src/__tests__/variables.test.ts",
+        "packages/data-bundle/src/__tests__/variables.test.ts",
+      ]
+
+- id: data.dataset.xml
+  title: Illustrator-compatible variable-library XML (import + export, §9.9)
+  spec: plugin-data data-dataset/src/xml.rs
+  status: implemented
+  provenance:
+    [
+      "clean-room: the shape is derived from Adobe's PUBLISHED Variables-namespace documentation and from the structure of files the application emits — never from Illustrator source (§3)",
+      "TWO DECLARED DEVIATIONS. (1) We do not emit Adobe's DTD entity subset: Illustrator writes xmlns:v=\"&ns_vars;\" backed by an internal DTD, which no conforming parser but its own accepts. We WRITE the resolved namespace URIs (well-formed XML, same namespaces) and READ either form, because the reader matches LOCAL NAMES and never resolves an entity. Whether the Illustrator importer accepts a URI where it wrote an entity is UNVERIFIED here — no Illustrator was run. (2) graphdata bodies are opaque: round-tripped verbatim, never interpreted",
+      "refuses what it cannot import honestly: an unknown trait, a value for an undeclared variable, and a visibility value that is neither true nor false are typed errors, not coercions — importing them as the wrong kind would apply a text string to a visibility target",
+      "deterministic: the same model always serializes to the same bytes",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_xml_round_trips_all_four_traits",
+        "data-conformance/tests/variables.rs::data_dataset_xml_reads_the_illustrator_entity_reference_form",
+        "data-conformance/tests/variables.rs::data_dataset_xml_rejects_what_it_cannot_honestly_import",
+        "data-conformance/tests/variables.rs::data_dataset_xml_preserves_graph_data_across_a_full_import_export",
+      ]
+
+- id: data.dataset.persistence
+  title: Data sets persist in the document payload, within the D-08 budget (§9.9)
+  spec: plugin-data data-js/src/core.rs DocumentPayload::variables + data_set_payload_bytes
+  status: implemented
+  provenance:
+    [
+      "additive amendment: a payload written before the variables lane still loads (serde default), and the recipe round-trip stays EXACT — declarations are derived at READ time, never on load, or from_payload(payload(s)) would differ from s",
+      "captured data sets are the only payload half that grows with the RECORD COUNT, so the size is MEASURED (data_set_payload_bytes) against core's 64 KiB setPluginMetadata cap and the panel warns at 80% BEFORE a bulk capture makes the document unsaveable — not after",
+    ]
+  tests:
+    rust:
+      [
+        "data-conformance/tests/variables.rs::data_dataset_payload_round_trips_through_the_document",
+        "data-conformance/tests/variables.rs::data_dataset_payload_predates_the_amendment_and_still_loads",
+        "data-conformance/tests/variables.rs::data_dataset_payload_budget_is_measured_not_guessed",
+      ]
+    vitest: ["packages/data-bundle/src/__tests__/variables.test.ts"]
+
+- id: data.bind.syncstate-wire
+  title: Sync state survives the wasm boundary (ResolveStamp fingerprints as strings)
+  spec: plugin-data data-core/src/binding.rs ResolveStamp
+  status: implemented
+  provenance:
+    [
+      "REGRESSION FIX found by the real-wasm e2e (Part E). The two 64-bit fingerprints serialized as JS NUMBERS; above Number.MAX_SAFE_INTEGER the wasm serializer errors, and data-js's sync_state shim swallowed that as null — so the bundle saw NO sync state for any binding that had ever resolved, and could not tell Linked from Overridden from Stale. Neither the Rust tests nor the TS fakes caught it because both bypass the boundary. They now serialize as decimal strings (the correct JS form for an opaque 64-bit id; nothing computes with them) and still accept a number on read",
+    ]
+  tests:
+    rust: ["data-conformance/tests/variables.rs::data_bind_sync_state_survives_the_wasm_boundary"]
+
+- id: data.variable.caret-placement
+  title: A new variable field lands at the user's CARET when the host has C-9
+  spec: plugin-data packages/data-bundle/src/lower.ts variableInsertionPoint
+  status: implemented
+  provenance:
+    [
+      "the D-01 caret residual, half-closed and honestly so. The door EXISTS upstream (C-9, host.text.caret, plugin-sdk main fbe007d) but is in NO published @paged-media/plugin-api canary — the newest published version was cut from the commit immediately before it. So this consumes it through a structural declaration gated on supports('text.caret@1') PLUS a runtime typeof check: the caret path lights up with zero code change the day a canary carries it, and degrades to story start until then. Both branches tested, including a host that reports the capability but injects no reader",
+      "a caret in a DIFFERENT story than a caller-pinned one is ignored rather than used at face value",
+      "MEASURED: the caret and selection paths place a field in ONE mutate call; only the mint-a-frame fallback costs two, and bindCreated cannot collapse it (see RFI D-16)",
+    ]
+  tests:
+    vitest: ["packages/data-bundle/src/__tests__/variables.test.ts"]

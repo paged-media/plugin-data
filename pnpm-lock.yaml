@@ -18,11 +18,11 @@ importers:
   packages/data-bundle:
     dependencies:
       '@paged-media/plugin-api':
-        specifier: 0.2.25-canary.0
-        version: 0.2.25-canary.0
+        specifier: 0.2.27-canary.1
+        version: 0.2.27-canary.1
       '@paged-media/plugin-sdk':
-        specifier: 0.2.25-canary.0
-        version: 0.2.25-canary.0(react@18.3.1)
+        specifier: 0.2.27-canary.1
+        version: 0.2.27-canary.1(react@18.3.1)
     devDependencies:
       '@paged-media/data-host-model':
         specifier: workspace:*
@@ -371,8 +371,11 @@ packages:
   '@paged-media/plugin-api@0.2.25-canary.0':
     resolution: {integrity: sha512-yPB4aQ+/WWhipsSUdcCZt7Uzox4KG8r2c9WN0GXAUAhC2/+Oa8+li/adp9Ubx8pSdEtNBh13N0IiIPTBhc2eDQ==}
 
-  '@paged-media/plugin-sdk@0.2.25-canary.0':
-    resolution: {integrity: sha512-CAOG3q39foJCLJrowG//eKD5ORnufiAOmzT1sjOeHjtqHTkVe6MYc4ppFbdXMtPtrwfLddEx4g9YGWRmMclPLA==}
+  '@paged-media/plugin-api@0.2.27-canary.1':
+    resolution: {integrity: sha512-H+ob+nK6EGz7JXDMuPlZAdlpgZ64zHZgOoFFK1rmHCXyLodR4CZlYb0HxdaB7XOl1wZrpfJXv5cGr2UGi/w3ag==}
+
+  '@paged-media/plugin-sdk@0.2.27-canary.1':
+    resolution: {integrity: sha512-pQTYMQ7YohjvGCURYAkBxdSgp/g2TubwnxyxP/Lxo8+yZ8isHotq6n3YNblVijR4Aa+Ony2yugetXyCXcIY4hw==}
     peerDependencies:
       react: ^18.3.0
     peerDependenciesMeta:
@@ -1162,9 +1165,13 @@ snapshots:
     dependencies:
       '@types/react': 18.3.31
 
-  '@paged-media/plugin-sdk@0.2.25-canary.0(react@18.3.1)':
+  '@paged-media/plugin-api@0.2.27-canary.1':
     dependencies:
-      '@paged-media/plugin-api': 0.2.25-canary.0
+      '@types/react': 18.3.31
+
+  '@paged-media/plugin-sdk@0.2.27-canary.1(react@18.3.1)':
+    dependencies:
+      '@paged-media/plugin-api': 0.2.27-canary.1
     optionalDependencies:
       react: 18.3.1
 

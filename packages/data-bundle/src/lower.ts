@@ -28,6 +28,7 @@ import {
   barcodeToMutations,
   bindingMetadata,
   createRuleCellStyle,
+  dataSetBatch,
   defaultPlacement,
   idmlFit,
   insertFieldMutation,
@@ -39,13 +40,16 @@ import {
   tableInsertMutation,
   tableInsertSpec,
   toRuleApplication,
+  visibilityToMutations,
   type BarcodePlacement,
+  type DataSetPlan,
   type IdmlFit,
   type ImageReference,
   type LoweredBarcode,
   type LoweredImage,
   type LoweredTable,
   type LoweredVariable,
+  type LoweredVisibility,
   type RuleResult,
   type RuleTarget,
 } from "../../data-host-model/src";
@@ -157,19 +161,70 @@ export async function commitLoweredTable(
   return frameId;
 }
 
-/** Resolve a story to place a variable field into. Prefers the host SELECTION
- *  (the bound text frame), else a fresh text frame on the active page whose
- *  minted story becomes the anchor.
+/** The C-9 caret read door as this bundle consumes it.
  *
- *  CARET-POSITION GAP (honest, D-01): the SDK exposes NO caret/selection-offset
- *  read for a bundle — `placeholders()` gives run-start offsets but there is no
- *  "the user's caret is at offset N" door. So a freshly-placed field always
- *  lands at the STORY START (offset 0), not at an in-text caret. The field is a
- *  real tagged run either way (it survives edits, re-resolves live); only WHERE
- *  a NEW field is first inserted is coarse. Tracked as the D-01 caret residual:
- *  a caret-read door (or an edit-context insertion point) closes it. */
-async function variableTargetStory(host: BundleHost): Promise<string | null> {
-  // Selection first: a selected text frame's story is the natural anchor.
+ *  THE STATE OF THIS, PRECISELY (checked 2026-08-05, do not soften it): the door
+ *  is BUILT in `plugin-sdk` main — `host.text.caret(): {storyId, offset} | null`
+ *  behind `supports("text.caret@1")` (commit fbe007d) — but it is in NO
+ *  PUBLISHED `@paged-media/plugin-api` canary: the newest published version
+ *  (0.2.27-canary.1) was cut from the commit immediately BEFORE it, and eleven
+ *  contract commits have landed since without a bump. So the member is absent
+ *  from the types this package compiles against, and declaring it structurally
+ *  is the only way to consume it without pinning an unpublished contract.
+ *
+ *  This is therefore NOT a workaround for a missing door — it is a version
+ *  probe for a door that exists upstream. It is written so that the day a canary
+ *  carrying C-9 publishes, the caret path lights up with ZERO code change here:
+ *  we gate on the CAPABILITY (`supports`) plus a runtime `typeof` check, never
+ *  on a type. Both branches are tested. */
+interface CaretReader {
+  caret?(): { storyId: string; offset: number } | null;
+}
+
+/** Read the user's text caret, or null when the host has no caret door / no
+ *  active text caret. Never throws (an older host that answers `supports` true
+ *  but has no member, or a caret inside a table cell — which C-9 answers `null`
+ *  for on purpose so cell-local offsets never leak as story-local). */
+function readCaret(host: BundleHost): { storyId: string; offset: number } | null {
+  try {
+    if (!host.supports("text.caret@1")) return null;
+    // The whole `text` surface can be absent on an older/partial host — probe
+    // the surface before the member, or a `supports` that answers optimistically
+    // takes the placement path down with a TypeError.
+    const reader = (host.text as unknown as CaretReader | undefined) ?? undefined;
+    if (!reader || typeof reader.caret !== "function") return null;
+    return reader.caret() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the {story, offset} a NEW variable field is inserted at.
+ *
+ *  Precedence, best first:
+ *   1. **the user's caret** (C-9) — a real insertion point, which is what
+ *      "insert a variable here" has always meant. Requires a published contract
+ *      carrying the door; see [`CaretReader`] for exactly where that stands.
+ *   2. the SELECTED text frame's story, at offset 0.
+ *   3. a fresh text frame minted on the active page, at offset 0.
+ *
+ *  D-01 CARET RESIDUAL — the current status: still OPEN, and not because the
+ *  door is missing (it is not) but because it is unpublished. Levels 2/3 remain
+ *  the shipped behavior until a canary carries C-9. A field placed at story
+ *  start is a real tagged run either way — it survives edits and re-resolves
+ *  live; only WHERE a new field first lands is coarse. */
+async function variableInsertionPoint(
+  host: BundleHost,
+): Promise<{ storyId: string; offset: number } | null> {
+  const caret = readCaret(host);
+  if (caret) {
+    host.log.info(
+      `lower: inserting at the user's caret (story ${caret.storyId}, offset ${caret.offset})`,
+    );
+    return caret;
+  }
+
+  // Selection: a selected text frame's story is the natural anchor.
   let selected: readonly ElementId[] = [];
   try {
     selected = host.selection.get();
@@ -179,10 +234,22 @@ async function variableTargetStory(host: BundleHost): Promise<string | null> {
   for (const el of selected) {
     if (el.kind === "textFrame") {
       const hit = await frameStory(host, el.id as string);
-      if (hit) return hit;
+      if (hit) return { storyId: hit, offset: 0 };
     }
   }
+
   // Else mint a fresh frame on the active page and use its story.
+  //
+  // MEASURED UNDO COST — this path is TWO steps (insertTextFrame, then
+  // insertField), and `bindCreated` does NOT collapse it. `bindCreated` names a
+  // created ELEMENT id so a later op in the same batch can address it as
+  // `$h:<handle>`; but `insertField` addresses a STORY, and the story a new text
+  // frame mints is not an ElementId and has no handle spelling. There is also no
+  // read door that answers "the story of element X" without the element already
+  // existing (we resolve it by `hitTest` at the frame's centre, which needs the
+  // frame committed). So the split is structural, not sloppy. Filed as RFI D-16
+  // — created-story addressability. The selection and caret paths, which are the
+  // ones a user actually takes, are ONE step.
   const pageId = await activePageId(host);
   if (!pageId) return null;
   const placement = defaultPlacement(pageId, { widthPt: 160, heightPt: 60 });
@@ -193,7 +260,8 @@ async function variableTargetStory(host: BundleHost): Promise<string | null> {
   if (!frameOutcome.applied || !frameOutcome.createdId) return null;
   const frameId = frameIdOf(frameOutcome.createdId);
   if (!frameId) return null;
-  return frameStory(host, frameId);
+  const storyId = await frameStory(host, frameId);
+  return storyId ? { storyId, offset: 0 } : null;
 }
 
 /** Resolve a frame's story id via the hitTest read door (the frame's center). */
@@ -218,9 +286,10 @@ async function frameStory(host: BundleHost, frameId: string): Promise<string | n
  *  (mutate-never-throws). The refresh loop (`refreshFields` in the session)
  *  re-enumerates `placeholders()` and `setFieldValue`s changed values.
  *
- *  `bindingKey` is the field key; `targetStoryId` (when supplied) is the
- *  selected frame's story, else a fresh frame is minted (see
- *  `variableTargetStory` for the caret gap). */
+ *  `bindingKey` is the field key; `targetStoryId` (when supplied) pins the story
+ *  — the caret still supplies the OFFSET within it when the caret is in that
+ *  story (see `variableInsertionPoint` for the full precedence + the honest
+ *  status of the D-01 caret residual). */
 export async function commitLoweredVariable(
   host: BundleHost,
   variable: LoweredVariable,
@@ -234,15 +303,26 @@ export async function commitLoweredVariable(
     );
     return null;
   }
-  const storyId = targetStoryId ?? (await variableTargetStory(host));
-  if (!storyId) {
+  let point: { storyId: string; offset: number } | null;
+  if (targetStoryId) {
+    // A caller-pinned story still honors the caret's OFFSET, but only when the
+    // caret is actually inside that story — using a foreign story's offset would
+    // insert at an arbitrary point in the pinned one.
+    const caret = readCaret(host);
+    point = {
+      storyId: targetStoryId,
+      offset: caret && caret.storyId === targetStoryId ? caret.offset : 0,
+    };
+  } else {
+    point = await variableInsertionPoint(host);
+  }
+  if (!point) {
     host.log.warn(`variable "${variable.target}": no target story to place the field into`);
     return null;
   }
-  // CARET GAP: insert at story start (offset 0) — no caret-read door (see
-  // variableTargetStory). The HideParagraph missing policy resolves to a null
-  // value (the field shows its <key> token).
-  const offset = 0;
+  const { storyId, offset } = point;
+  // The HideParagraph missing policy resolves to a null value (the field shows
+  // its <key> token).
   const value = variable.hidden ? null : variable.text;
   const outcome = await host.document.mutate(insertFieldMutation(storyId, offset, bindingKey, value));
   if (!outcome.applied) {
@@ -251,6 +331,115 @@ export async function commitLoweredVariable(
   }
   host.log.info(`variable "${variable.target}" placed as field "${bindingKey}" in story ${storyId}`);
   return { storyId, offset };
+}
+
+/** Resolve a raw Self id to a typed `ElementId` by walking the live scene tree
+ *  (§9.8). `setElementProperty` carries a KIND, and a binding payload stores
+ *  only the id, so the kind has to come from the document. The scene tree is the
+ *  read door that answers it; when the host has none (or the element is gone —
+ *  deleted artwork), we return null and the caller SKIPS, never guessing
+ *  `rectangle` and writing a property at a wrong address. */
+export async function resolveElementId(
+  host: BundleHost,
+  rawId: string,
+): Promise<ElementId | null> {
+  let roots: SceneNode[] = [];
+  try {
+    roots = (await host.document.tree()) as SceneNode[];
+  } catch {
+    return null;
+  }
+  const stack: SceneNode[] = [...roots];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    const id = node.id;
+    if (id && typeof id.id === "string" && id.id === rawId) return id as ElementId;
+    if (node.children) stack.push(...node.children);
+  }
+  return null;
+}
+
+/** The shape of a scene-tree node this bundle reads (the SDK type, narrowed to
+ *  the two members we walk). */
+interface SceneNode {
+  id?: { kind: string; id: unknown } | null;
+  children?: SceneNode[];
+}
+
+/** Apply a lowered visibility decision to its bound element (§9.8 — the
+ *  Illustrator "visibility variable"). Writes core's OWN `elementVisible`
+ *  property, so the result is the same visibility the Layers panel toggles and
+ *  the IDML `Visible` attribute carries — never a parallel system, and never a
+ *  delete (which would destroy the element identity every other binding on that
+ *  frame is anchored to).
+ *
+ *  Returns true when a write was applied. `visible: null` (the `Leave` missing
+ *  policy) applies NOTHING and returns false — the honest arm.
+ *
+ *  `elementId` may be given by a caller that already knows the kind (the panel
+ *  binds from the selection); absent, it is resolved from the scene tree. */
+export async function commitLoweredVisibility(
+  host: BundleHost,
+  lowered: LoweredVisibility,
+  elementId?: ElementId | null,
+): Promise<boolean> {
+  if (lowered.visible === null) {
+    host.log.info(
+      `visibility "${lowered.target}": the missing policy is Leave — nothing written ` +
+        "(an unresolved binding never blanks artwork)",
+    );
+    return false;
+  }
+  const target = elementId ?? (await resolveElementId(host, lowered.target));
+  if (!target) {
+    host.log.warn(
+      `visibility "${lowered.target}": the bound element is not in the document ` +
+        "(deleted, or the host exposes no scene tree) — nothing written",
+    );
+    return false;
+  }
+  const muts = visibilityToMutations(lowered, target);
+  if (muts.length === 0) return false;
+  const outcome = await host.document.mutate(muts[0]);
+  if (!outcome.applied) {
+    host.log.warn(`visibility "${lowered.target}": setElementProperty rejected`);
+    return false;
+  }
+  host.log.info(
+    `visibility "${lowered.target}" set to ${lowered.visible ? "shown" : "hidden"}`,
+  );
+  return true;
+}
+
+/** Commit a planned data-set application as ONE undoable batch (§9.9).
+ *
+ *  This is the undo-shape decision, made in one place and measured in
+ *  `data-host-model/src/__tests__/variables.test.ts`: switching a data set moves
+ *  N variables but costs the user ONE ⌘Z, because every write goes in a single
+ *  `batch`. Returns `{applied, skipped}` — the count written and the per-variable
+ *  reasons for everything that was not, which the panel SHOWS. A data set that
+ *  half-applies in silence is the failure this reports its way out of. */
+export async function commitDataSet(
+  host: BundleHost,
+  plan: DataSetPlan,
+): Promise<{ applied: number; skipped: Record<string, string> }> {
+  const batch = dataSetBatch(plan);
+  if (!batch) {
+    host.log.info("data set: nothing applicable to write");
+    return { applied: 0, skipped: plan.skipped };
+  }
+  const outcome = await host.document.mutate(batch);
+  if (!outcome.applied) {
+    host.log.warn("data set: the apply batch was rejected — nothing changed");
+    return { applied: 0, skipped: plan.skipped };
+  }
+  host.log.info(
+    `data set applied: ${plan.ops.length} variable(s) in one undo step` +
+      (Object.keys(plan.skipped).length > 0
+        ? `; skipped ${Object.keys(plan.skipped).join(", ")}`
+        : ""),
+  );
+  return { applied: plan.ops.length, skipped: plan.skipped };
 }
 
 /** A short human description of a resolved image reference. */

@@ -221,6 +221,15 @@ pub fn resolved_fingerprint(resolved: &Resolved) -> String {
             s.push('\u{1f}');
             s.push_str(&image_ref_repr(&img.reference));
         }
+        Resolved::Visibility(v) => {
+            s.push_str("vis\u{1f}");
+            // shown / hidden / untouched are three distinct outcomes.
+            s.push_str(match v.visible {
+                Some(true) => "show",
+                Some(false) => "hide",
+                None => "leave",
+            });
+        }
         Resolved::Barcode(bc) => {
             s.push_str("bc\u{1f}");
             s.push_str(&format!("{:?}", bc.symbology));

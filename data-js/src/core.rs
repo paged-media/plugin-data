@@ -50,10 +50,13 @@ use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
     QueryId, RecordSet, Schema, Status, StyleAction, SyncState, Template, Value,
 };
+use data_dataset::{
+    trait_for_binding_kind, DataSet, DataSetValue, VarTrait, VariableDecl, VariableSet,
+};
 use data_lower::{
-    lower_barcode, lower_image, lower_table, lower_variable, paginate_flow, FlowGroup,
-    FlowLayoutOpts, FlowRecord, FrameCapacity, LowerOpts, LoweredBarcode, LoweredImage,
-    LoweredTable, LoweredVariable, PaginatedFlow,
+    lower_barcode, lower_image, lower_table, lower_variable, lower_visibility, paginate_flow,
+    FlowGroup, FlowLayoutOpts, FlowRecord, FrameCapacity, LowerOpts, LoweredBarcode, LoweredImage,
+    LoweredTable, LoweredVariable, LoweredVisibility, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
 use data_sources::{
@@ -79,6 +82,7 @@ pub enum LoweredOutput {
     Table(LoweredTable),
     Image(LoweredImage),
     Barcode(LoweredBarcode),
+    Visibility(LoweredVisibility),
 }
 
 /// The default square content box (pt) a barcode lowers into when the bound
@@ -202,6 +206,18 @@ pub struct DocumentPayload {
     pub templates: Vec<Template>,
     #[serde(default)]
     pub bindings: Vec<BindingDef>,
+    /// The §9.9 variable set — declarations + captured data sets. `default` so a
+    /// payload written before this amendment still round-trips (the additive
+    /// rule: old files load, new files load in old builds minus the variables).
+    ///
+    /// SIZE NOTE (D-08, the 64 KiB `setPluginMetadata` cap): captured data sets
+    /// are the only part of the payload that grows with the RECORD COUNT, so
+    /// this is the first field that can push a document past the cap. Callers
+    /// that capture per-record en masse must check
+    /// [`DataSession::data_set_payload_bytes`] — the honest measurement, not a
+    /// guess. `payload-budget.test.ts` pins the arithmetic.
+    #[serde(default)]
+    pub variables: VariableSet,
 }
 
 /// One source's authorization verdict (§11 data-source manifest review).
@@ -272,6 +288,9 @@ pub struct DataSession {
     /// then updates it; `None` until the first report (where every binding shows
     /// as `added` — the baseline).
     last_fingerprints: Option<HashMap<String, String>>,
+    /// The §9.9 variable set: declarations (derived from the bindable bindings,
+    /// plus any imported from a library) + the captured data sets.
+    variables: VariableSet,
 }
 
 impl DataSession {
@@ -285,6 +304,9 @@ impl DataSession {
             bindings: Vec::new(),
             today,
             last_fingerprints: None,
+            // Illustrator names a document's one variable set `binding1`; match
+            // it so an exported library drops into that workflow unremarkably.
+            variables: VariableSet::new("binding1"),
         }
     }
 
@@ -443,6 +465,9 @@ impl DataSession {
             Resolved::RecordFlow(_) => Err(SessionError::Decode(
                 "record flow: call lower_record_flow(id, chain)".to_string(),
             )),
+            Resolved::Visibility(v) => Ok(LoweredOutput::Visibility(lower_visibility(
+                v.target, v.visible,
+            ))),
         }
     }
 
@@ -764,6 +789,7 @@ impl DataSession {
             queries: self.queries.clone(),
             templates: self.templates.clone(),
             bindings: self.bindings.clone(),
+            variables: self.variables.clone(),
         }
     }
 
@@ -782,6 +808,11 @@ impl DataSession {
         for b in payload.bindings {
             s.define_binding(b);
         }
+        // Variables restore verbatim. Do NOT derive declarations here: derivation
+        // is a READ-time concern (`variables()` / capture / apply all sync), and
+        // deriving on load would make `from_payload(payload(s))` differ from `s`
+        // — the recipe round-trip must be exact (`roundtrip.rs` pins it).
+        s.variables = payload.variables;
         s
     }
 
@@ -794,6 +825,364 @@ impl DataSession {
             today: self.today,
         }
     }
+
+    // ── §9.9 variables + data sets ──────────────────────────────────────────
+    //
+    // A "variable" here is a PROJECTION of a binding, not a second data model:
+    // the binding id is the variable name and the binding kind is the trait
+    // (`variable`→textContent, `image`→fileReference, `visibility`→visibility).
+    // The table/recordFlow/rule/barcode kinds have no Illustrator variable
+    // counterpart and are deliberately NOT projected — a palette row you cannot
+    // capture is worse than an absent one.
+
+    /// Upsert a declaration for every bindable binding. Idempotent; never
+    /// removes an imported declaration whose binding does not exist yet (that is
+    /// the "library first, artwork second" workflow, and dropping it would lose
+    /// the author's import).
+    pub fn sync_variable_declarations(&mut self) {
+        for def in &self.bindings {
+            let kind = binding_kind_tag(&def.binding);
+            if let Some(var_trait) = trait_for_binding_kind(kind) {
+                self.variables.upsert_variable(VariableDecl {
+                    name: def.id.to_string(),
+                    var_trait,
+                });
+            }
+        }
+    }
+
+    /// The declared variables (§9.9), declarations refreshed from the bindings.
+    pub fn variables(&mut self) -> &VariableSet {
+        self.sync_variable_declarations();
+        &self.variables
+    }
+
+    /// Capture the CURRENT resolved values as a named data set (§9.9 — "capture
+    /// current data set"). `record` selects which record the capture resolves
+    /// against, so the natural authoring flow is "step the preview to record N,
+    /// capture" — and [`capture_every_record`](Self::capture_every_record)
+    /// automates the whole result.
+    ///
+    /// Only BINDABLE traits are captured. A declared `graphdata` variable is
+    /// skipped (it has no binding to resolve — [`VarTrait::GraphData`]); a
+    /// declared variable whose binding does not exist, or does not resolve right
+    /// now, is skipped rather than captured as empty — a data set must never
+    /// claim a value the engine did not produce.
+    ///
+    /// Capturing over an existing name REPLACES it (Illustrator's behavior).
+    pub fn capture_data_set(&mut self, name: &str, record: usize) -> DataSet {
+        self.sync_variable_declarations();
+        let decls: Vec<VariableDecl> = self.variables.variables.clone();
+        let mut set = DataSet {
+            name: name.to_string(),
+            values: Default::default(),
+        };
+        for decl in decls {
+            if !decl.var_trait.is_bindable() {
+                continue;
+            }
+            let id = BindingId::from(decl.name.as_str());
+            let Ok(lowered) = self.resolve_lowered_at(&id, record) else {
+                continue;
+            };
+            if let Some(value) = capture_value(decl.var_trait, &lowered) {
+                set.values.insert(decl.name.clone(), value);
+            }
+        }
+        self.variables.upsert_data_set(set.clone());
+        set
+    }
+
+    /// Capture ONE data set per record of `query` (§9.9). This is the join that
+    /// makes variables worth having here rather than in a drawing plugin: an
+    /// Illustrator author builds data sets by hand, one artboard state at a
+    /// time; a data source already HAS the rows, so the whole palette generates.
+    ///
+    /// `name_expr_column`, when given, names a result column whose value titles
+    /// each set (a SKU, a product name); otherwise sets are `"{prefix} {n}"`,
+    /// 1-based, matching Illustrator's "Data Set 1" convention.
+    ///
+    /// Returns the captured set names in record order.
+    pub fn capture_every_record(
+        &mut self,
+        query: &QueryId,
+        prefix: &str,
+        name_column: Option<&str>,
+    ) -> Vec<String> {
+        let count = self.query_record_count(query);
+        let mut names = Vec::with_capacity(count);
+        for record in 0..count {
+            let name = name_column
+                .and_then(|col| self.record_field_display(query, record, col))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| format!("{prefix} {}", record + 1));
+            // Two records with the same name would silently collapse (upsert by
+            // name) — disambiguate with the record index instead of losing one.
+            let name = if names.contains(&name) {
+                format!("{name} ({})", record + 1)
+            } else {
+                name
+            };
+            self.capture_data_set(&name, record);
+            names.push(name);
+        }
+        names
+    }
+
+    /// The display string of one field of one record — the naming input for
+    /// [`capture_every_record`](Self::capture_every_record). `None` when the
+    /// query has no result, the record is out of range, or the column is absent.
+    fn record_field_display(&self, query: &QueryId, record: usize, column: &str) -> Option<String> {
+        let records = self.engine.result(query)?;
+        if record >= records.row_count {
+            return None;
+        }
+        records.field(record, column).map(|v| v.as_display())
+    }
+
+    /// The named data sets, in palette order (§9.9).
+    pub fn list_data_sets(&self) -> Vec<String> {
+        self.variables
+            .data_sets
+            .iter()
+            .map(|d| d.name.clone())
+            .collect()
+    }
+
+    /// Delete a data set by name; `true` when one was removed.
+    pub fn delete_data_set(&mut self, name: &str) -> bool {
+        self.variables.remove_data_set(name)
+    }
+
+    /// Plan the application of a named data set (§9.9 — "switch between data
+    /// sets"). Returns ONE [`DataSetApply`] per declared variable: the typed
+    /// value the host must write, or an `applicable: false` row carrying the
+    /// reason it cannot be written. **The engine does not decide undo shape** —
+    /// the bundle commits the applicable rows as a single batch, so switching a
+    /// data set is ONE undo step regardless of how many variables it moves.
+    ///
+    /// SYNC SEMANTICS, stated once: an applied data set is a CAPTURED value
+    /// standing in front of the live resolution, so every applied binding is
+    /// marked `Overridden` — the shipped sync state for exactly this. It is
+    /// therefore protected from the next `refreshData`, and `relink(binding)`
+    /// puts it back on live data. A data set is not a pin and not a fork.
+    pub fn apply_data_set(&mut self, name: &str) -> Result<Vec<DataSetApply>, SessionError> {
+        self.sync_variable_declarations();
+        let set = self
+            .variables
+            .data_set(name)
+            .ok_or_else(|| SessionError::Decode(format!("no data set named '{name}'")))?
+            .clone();
+        let known: Vec<VariableDecl> = self.variables.variables.clone();
+        let defined: Vec<String> = self.bindings.iter().map(|b| b.id.to_string()).collect();
+
+        let mut out = Vec::with_capacity(known.len());
+        let mut to_override: Vec<BindingId> = Vec::new();
+        for decl in known {
+            let Some(value) = set.values.get(&decl.name) else {
+                continue;
+            };
+            let mut apply = DataSetApply::from_value(&decl.name, value);
+            if !decl.var_trait.is_bindable() {
+                apply.applicable = false;
+                apply.note = Some(
+                    "graph-data variables are carried through the library but have no \
+                     paged.data binding to apply — a chart surface lives in another \
+                     plugin and the isolation contract forbids reaching into it (RFI D-15)"
+                        .to_string(),
+                );
+            } else if !defined.contains(&decl.name) {
+                apply.applicable = false;
+                apply.note = Some(format!(
+                    "no binding '{}' is defined in this document — the library \
+                     declares the variable but nothing is bound to it yet",
+                    decl.name
+                ));
+            } else {
+                to_override.push(BindingId::from(decl.name.as_str()));
+            }
+            out.push(apply);
+        }
+        for id in to_override {
+            self.mark_overridden(&id);
+        }
+        Ok(out)
+    }
+
+    /// Export the variable set as an Illustrator-compatible variable library
+    /// (§9.9). See `data_dataset::xml` for the two declared deviations.
+    pub fn export_variable_library(&mut self) -> String {
+        self.sync_variable_declarations();
+        data_dataset::to_xml(&self.variables)
+    }
+
+    /// Import a variable library, REPLACING the current variable set (§9.9).
+    /// Declarations derived from the defined bindings are re-applied afterwards,
+    /// so importing never orphans a binding that already exists.
+    ///
+    /// Returns the honest report: what came in, and which variables will NOT
+    /// apply (no binding defined, or graph data). Import does NOT write to the
+    /// document — the caller applies a set explicitly.
+    pub fn import_variable_library(&mut self, xml: &str) -> Result<ImportReport, SessionError> {
+        let imported =
+            data_dataset::from_xml(xml).map_err(|e| SessionError::Decode(e.to_string()))?;
+        let inconsistencies = imported.inconsistencies();
+        if !inconsistencies.is_empty() {
+            return Err(SessionError::Decode(inconsistencies.join("; ")));
+        }
+        self.variables = imported;
+        self.sync_variable_declarations();
+
+        let defined: Vec<String> = self.bindings.iter().map(|b| b.id.to_string()).collect();
+        let unbound: Vec<String> = self
+            .variables
+            .variables
+            .iter()
+            .filter(|v| v.var_trait.is_bindable() && !defined.contains(&v.name))
+            .map(|v| v.name.clone())
+            .collect();
+        let graph_only: Vec<String> = self
+            .variables
+            .variables
+            .iter()
+            .filter(|v| !v.var_trait.is_bindable())
+            .map(|v| v.name.clone())
+            .collect();
+        Ok(ImportReport {
+            set_name: self.variables.name.clone(),
+            variables: self.variables.variables.len(),
+            data_sets: self.variables.data_sets.len(),
+            unbound,
+            graph_only,
+        })
+    }
+
+    /// The serialized byte size of the variable half of the document payload —
+    /// the D-08 budget check for per-record capture. Measured, never estimated:
+    /// this is the exact JSON the payload carries.
+    pub fn data_set_payload_bytes(&self) -> usize {
+        serde_json::to_string(&self.variables)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+}
+
+/// The `kind` serde tag of a binding — the join key between a binding and its
+/// §9.9 variable trait. Kept next to the projection so adding a binding kind
+/// without deciding its variable story is a visible omission, not a silent one.
+fn binding_kind_tag(binding: &Binding) -> &'static str {
+    match binding {
+        Binding::Variable { .. } => "variable",
+        Binding::Image { .. } => "image",
+        Binding::Table { .. } => "table",
+        Binding::RecordFlow { .. } => "recordFlow",
+        Binding::Rule { .. } => "rule",
+        Binding::Barcode { .. } => "barcode",
+        Binding::Visibility { .. } => "visibility",
+    }
+}
+
+/// Capture one lowered output as a data-set value, when its shape matches the
+/// declared trait. `None` when the lowering produced nothing capturable — an
+/// image that resolved to no placeable reference, or a lowering of the wrong
+/// kind for the declaration (which means the binding changed kind under the
+/// declaration; the next `sync_variable_declarations` re-types it).
+fn capture_value(var_trait: VarTrait, lowered: &LoweredOutput) -> Option<DataSetValue> {
+    match (var_trait, lowered) {
+        (VarTrait::TextContent, LoweredOutput::Variable(v)) => Some(DataSetValue::Text {
+            text: v.text.clone(),
+        }),
+        (VarTrait::FileReference, LoweredOutput::Image(img)) => {
+            image_href(&img.reference).map(|href| DataSetValue::FileRef { href })
+        }
+        (VarTrait::Visibility, LoweredOutput::Visibility(v)) => {
+            // `visible: None` is the `Leave` policy — "write nothing". There is
+            // no XML spelling for it and inventing one would turn a deliberate
+            // no-op into a hidden frame, so it is not captured.
+            v.visible.map(|visible| DataSetValue::Visible { visible })
+        }
+        _ => None,
+    }
+}
+
+/// The URI/path a resolved image reference captures as. Inline bytes and asset
+/// ids have no library-portable spelling (a variable library is a text file
+/// naming external artwork), so they capture as `None` rather than as a fake
+/// path.
+fn image_href(reference: &data_core::ImageReference) -> Option<String> {
+    match reference {
+        data_core::ImageReference::Uri { uri } => Some(uri.clone()),
+        data_core::ImageReference::Path { path } => Some(path.clone()),
+        data_core::ImageReference::AssetId { .. }
+        | data_core::ImageReference::Bytes { .. }
+        | data_core::ImageReference::None => None,
+    }
+}
+
+/// One variable's contribution to applying a data set (§9.9): the typed value
+/// the host writes, or an honest `applicable: false` with the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSetApply {
+    /// The variable name — which is the binding id.
+    pub variable: String,
+    /// `"text"` | `"image"` | `"visibility"` | `"graphData"`.
+    pub kind: String,
+    /// The captured display string (`text` rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The captured file reference (`image` rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    /// The captured visibility (`visibility` rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    /// Whether the host can write this row.
+    pub applicable: bool,
+    /// Why it cannot be written, when `applicable` is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl DataSetApply {
+    fn from_value(variable: &str, value: &DataSetValue) -> DataSetApply {
+        let mut a = DataSetApply {
+            variable: variable.to_string(),
+            kind: match value {
+                DataSetValue::Text { .. } => "text",
+                DataSetValue::FileRef { .. } => "image",
+                DataSetValue::Visible { .. } => "visibility",
+                DataSetValue::GraphData { .. } => "graphData",
+            }
+            .to_string(),
+            text: None,
+            href: None,
+            visible: None,
+            applicable: true,
+            note: None,
+        };
+        match value {
+            DataSetValue::Text { text } => a.text = Some(text.clone()),
+            DataSetValue::FileRef { href } => a.href = Some(href.clone()),
+            DataSetValue::Visible { visible } => a.visible = Some(*visible),
+            DataSetValue::GraphData { .. } => {}
+        }
+        a
+    }
+}
+
+/// What a variable-library import brought in, and what will NOT apply (§9.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub set_name: String,
+    pub variables: usize,
+    pub data_sets: usize,
+    /// Bindable variables with no binding defined in this document — they will
+    /// be skipped on apply until something is bound to them.
+    pub unbound: Vec<String>,
+    /// `graphdata` variables — carried and re-exported, never applied.
+    pub graph_only: Vec<String>,
 }
 
 /// Bridge a resolved record flow (data-bind) into the paginator's plain input

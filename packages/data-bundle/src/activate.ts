@@ -104,6 +104,47 @@ export function activate(host: BundleHost): BundleHandle {
     handler: () => host.shell.openPanel(DATASET_PANEL_ID),
   });
 
+  // §9.9 — the two data-set verbs as COMMANDS, not just panel buttons.
+  //
+  // This is deliberate and it is the whole of what "batch output through
+  // actions/scripts" (the catalog's clause) needs from THIS side. The editor's
+  // Actions recorder taps `CommandRegistry.invoke`, so a recorded action is a
+  // list of command steps replayed against the replay-time selection. Given
+  // that, batch output over data sets composes as:
+  //
+  //     for (const name of listDataSets())
+  //       invoke("media.paged.data.command.applyDataSet", { name });
+  //       replay(<the recorded action>);
+  //
+  // — a data set switch is one recordable, replayable, payload-carrying command
+  // whose effect is ONE undo step. The loop itself is HOST-side (the recorder
+  // lives in the editor and this bundle must not depend on it); all this plugin
+  // owes it is a command that takes the set name as a payload and applies
+  // atomically. That is what these two are. Nothing here reaches for the
+  // recorder, and nothing here assumes it exists.
+  host.contribute.command({
+    id: "media.paged.data.command.captureDataSet",
+    title: "Capture the current values as a data set",
+    category: "Data",
+    handler: (_paged, payload) => {
+      const p = (payload ?? {}) as { name?: string; record?: number };
+      return session.captureDataSet(p.name ?? "Data Set", p.record ?? 0);
+    },
+  });
+  host.contribute.command({
+    id: "media.paged.data.command.applyDataSet",
+    title: "Apply a data set to the document",
+    category: "Data",
+    handler: (_paged, payload) => {
+      const p = (payload ?? {}) as { name?: string };
+      if (!p.name) {
+        host.log.warn("applyDataSet: no data-set name in the command payload");
+        return { applied: 0, skipped: {} };
+      }
+      return session.applyDataSet(p.name);
+    },
+  });
+
   host.log.info(`activated (apiVersion ${manifest.apiVersion})`);
 
   return {

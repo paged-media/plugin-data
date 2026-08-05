@@ -64,7 +64,7 @@ pub use binding::{
     BarcodeMissing, BarcodeOpts, BarcodeSymbology, Binding, BindingDef, ColumnBind, FlowOpts,
     FooterAgg, GroupFooter, ImageReference, ImageStatus, ImgFit, ImgMissing, ImgPolicy,
     MissingPolicy, Placeholder, PlaceholderKind, ResolveStamp, Status, StyleAction, SyncState,
-    TableOpts, Template, TemplateField,
+    TableOpts, Template, TemplateField, VisibilityMissing, VisibilityOpts,
 };
 pub use expr::{BinOp, Expr, FnId, UnaryOp};
 pub use ids::{

@@ -22,6 +22,7 @@ data-query = { path = "../data-query" }
 data-bind = { path = "../data-bind" }
 data-lower = { path = "../data-lower" }
 data-barcode = { path = "../data-barcode" }
+data-dataset = { path = "../data-dataset" }
 data-automation = { path = "../data-automation" }
 data-js = { path = "../data-js" }
 serde.workspace = true

@@ -33,6 +33,7 @@ import type {
   BatchRun,
   DataSourceSession,
   GovernedCatalog,
+  VariableSummary,
 } from "../session";
 
 const wrap: CSSProperties = {
@@ -73,6 +74,13 @@ export function makeDatasetPanel(
     const [providerNote, setProviderNote] = useState<string>("");
     const [error, setError] = useState<string>("");
     const [locale, setLocaleState] = useState<"en" | "de">(session.getLocale());
+    // §9.9 — the Variables / data sets palette.
+    const [variables, setVariables] = useState<VariableSummary[]>([]);
+    const [dataSets, setDataSets] = useState<string[]>([]);
+    const [activeSet, setActiveSet] = useState<string>("");
+    const [setName, setSetName] = useState<string>("Data Set 1");
+    const [skips, setSkips] = useState<Record<string, string>>({});
+    const [exportedXml, setExportedXml] = useState<string>("");
 
     const queries = snapshot.queries;
     const selected = query || queries[0] || "";
@@ -147,6 +155,76 @@ export function makeDatasetPanel(
         setError(String(e));
         setProviderNote("");
       }
+    }
+
+    // ── §9.9 — Variables / data sets ─────────────────────────────────────────
+
+    async function refreshPalette(): Promise<void> {
+      setVariables(await session.variables());
+      setDataSets(await session.listDataSets());
+      setSnapshot(session.getState());
+    }
+
+    async function capture(): Promise<void> {
+      setError("");
+      await session.captureDataSet(setName || "Data Set", 0);
+      await refreshPalette();
+    }
+
+    async function captureAll(): Promise<void> {
+      setError("");
+      // One data set PER RECORD — the join a drawing plugin cannot make: an
+      // Illustrator author builds these by hand, one artboard state at a time.
+      await session.refreshData();
+      await session.captureEveryRecord(selected, {
+        nameColumn: catalog?.columns[0]?.name,
+      });
+      await refreshPalette();
+    }
+
+    async function switchTo(name: string): Promise<void> {
+      setError("");
+      setActiveSet(name);
+      const result = await session.applyDataSet(name);
+      setSkips(result.skipped);
+      setSnapshot(session.getState());
+    }
+
+    async function exportLibrary(): Promise<void> {
+      setError("");
+      setExportedXml("");
+      const xml = await session.exportVariableLibrary();
+      if (!xml) {
+        setError("nothing to export (no variables defined)");
+        return;
+      }
+      // Write the file through the host's own save door when it has one. K-10
+      // (`shell.saveFile`) is BUILT in plugin-sdk main but is not in any
+      // published contract yet, so the probe is structural and the fallback is
+      // real: show the XML for the user to copy, rather than reaching for a DOM
+      // download the bundle realm may not have — or pretending nothing happened.
+      const shell = host.shell as unknown as {
+        saveFile?(spec: { name: string; bytes: Uint8Array }): Promise<unknown>;
+      };
+      if (host.supports("shell.saveFile@1") && typeof shell.saveFile === "function") {
+        await shell.saveFile({ name: "variables.xml", bytes: new TextEncoder().encode(xml) });
+        return;
+      }
+      setExportedXml(xml);
+    }
+
+    async function importLibrary(): Promise<void> {
+      setError("");
+      if (!host.supports("shell.pickFile@1")) {
+        setError("this host exposes no file picker (shell.pickFile@1)");
+        return;
+      }
+      const picked = await host.shell.pickFile({ accept: [".xml"] });
+      const file = picked[0];
+      if (!file) return;
+      const xml = new TextDecoder().decode(file.bytes);
+      await session.importVariableLibrary(xml);
+      await refreshPalette();
     }
 
     const documented = catalog?.columns.filter((c) => c.documented).length ?? 0;
@@ -262,6 +340,103 @@ export function makeDatasetPanel(
                 </span>
               </div>
             )}
+
+            {/* §9.9 — Variables / data sets (the Illustrator palette, over
+                paged.data's own bindings). A variable IS a binding: the binding
+                id is the name and the binding kind is the trait. */}
+            <div data-data-variables>
+              <div style={row}>
+                variables (§9.9):
+                <button type="button" onClick={() => void refreshPalette()}>
+                  Refresh palette
+                </button>
+                <button type="button" onClick={() => void importLibrary()}>
+                  Import library (XML)
+                </button>
+                <button type="button" onClick={() => void exportLibrary()}>
+                  Export library (XML)
+                </button>
+              </div>
+              {variables.length === 0 ? (
+                <p style={note}>
+                  No variables yet. A text, image or visibility binding IS a variable —
+                  define one in the Bindings panel, then capture a data set here.
+                </p>
+              ) : (
+                <ul style={{ margin: "4px 0", paddingLeft: 16 }}>
+                  {variables.map((v) => (
+                    <li key={v.name} style={v.bound ? undefined : note}>
+                      {v.name} <span style={note}>· {v.trait}</span>
+                      {!v.bound && (
+                        <span style={note}>
+                          {" "}
+                          ·{" "}
+                          {v.trait === "graphdata"
+                            ? "graph data — carried through the library, never applied (RFI D-15)"
+                            : "not bound in this document — skipped on apply"}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div style={row}>
+                <input
+                  value={setName}
+                  onChange={(e) => setSetName(e.target.value)}
+                  aria-label="data set name"
+                  size={14}
+                />
+                <button type="button" onClick={() => void capture()}>
+                  Capture current
+                </button>
+                <button type="button" onClick={() => void captureAll()}>
+                  Capture every record
+                </button>
+              </div>
+
+              {dataSets.length > 0 && (
+                <div style={row}>
+                  data set:{" "}
+                  <select value={activeSet} onChange={(e) => void switchTo(e.target.value)}>
+                    <option value="">— pick a data set —</option>
+                    {dataSets.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={note}>
+                    {dataSets.length} set(s) · switching applies in ONE undo step
+                  </span>
+                </div>
+              )}
+              {exportedXml && (
+                <div>
+                  <span style={note}>
+                    No save-file door on this host (K-10 is built upstream but unpublished) —
+                    the library is below; copy it to a .xml file.
+                  </span>
+                  <textarea
+                    readOnly
+                    value={exportedXml}
+                    rows={8}
+                    style={{ width: "100%", font: "var(--font-mono, 11px ui-monospace, monospace)" }}
+                    data-data-variable-library
+                  />
+                </div>
+              )}
+              {Object.keys(skips).length > 0 && (
+                <ul style={{ ...note, margin: "4px 0", paddingLeft: 16 }} data-data-set-skips>
+                  {Object.entries(skips).map(([name, why]) => (
+                    <li key={name}>
+                      skipped {name}: {why}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             {providerNote && <div style={note}>{providerNote}</div>}
             {error && (

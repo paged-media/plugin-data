@@ -241,6 +241,7 @@ mod tests {
                     missing: data_core::MissingPolicy::Blank,
                 },
             }],
+            variables: Default::default(),
         };
         let mut results = HashMap::new();
         results.insert(

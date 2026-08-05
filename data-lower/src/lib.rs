@@ -96,6 +96,22 @@ pub fn lower_variable(target: PlaceholderRef, display: &str, hidden: bool) -> Lo
     }
 }
 
+/// A lowered visibility decision (spec §9.8): the bound element + whether it is
+/// shown. `visible: None` means the missing policy said `Leave` — the host must
+/// write NOTHING (the honest arm: an unresolvable binding never blanks artwork).
+/// Pure model→IR, like `lower_variable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoweredVisibility {
+    pub target: FrameRef,
+    pub visible: Option<bool>,
+}
+
+/// Lower a resolved visibility decision (§9.8).
+pub fn lower_visibility(target: FrameRef, visible: Option<bool>) -> LoweredVisibility {
+    LoweredVisibility { target, visible }
+}
+
 /// A lowered image placeholder (spec §9.2): the classified reference + fit +
 /// status to place into the target frame through the core asset mechanism. The
 /// host placement op is an SDK gap (BREAKAGE D-14); M0 carries the IR + records

@@ -110,5 +110,21 @@ export interface LoweredBarcode {
   text: string;
 }
 
+/** A lowered visibility decision (§9.8 — the Illustrator "visibility variable").
+ *  `visible: null` is the `Leave` missing policy: the host must write NOTHING.
+ *  That arm is why the field is nullable rather than a plain boolean — an
+ *  unresolvable binding must never be able to blank a designer's artwork. */
+export interface LoweredVisibility {
+  kind: "visibility";
+  /** The bound element's raw Self id. */
+  target: string;
+  visible: boolean | null;
+}
+
 /** The tagged union the engine returns from `resolve_lowered`. */
-export type LoweredOutput = LoweredVariable | LoweredTable | LoweredImage | LoweredBarcode;
+export type LoweredOutput =
+  | LoweredVariable
+  | LoweredTable
+  | LoweredImage
+  | LoweredBarcode
+  | LoweredVisibility;

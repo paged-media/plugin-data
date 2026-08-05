@@ -375,6 +375,70 @@ mod wasm {
         pub fn metadata(&self) -> JsValue {
             to_js(&self.session.metadata()).unwrap_or(JsValue::NULL)
         }
+
+        // ── §9.9 variables + data sets ──────────────────────────────────────
+
+        /// The declared variables + captured data sets (`VariableSet`).
+        pub fn variables(&mut self) -> JsValue {
+            to_js(self.session.variables()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Capture the current resolved values as a named data set, resolved
+        /// against `record` (the §9 preview index).
+        pub fn capture_data_set(&mut self, name: &str, record: usize) -> JsValue {
+            to_js(&self.session.capture_data_set(name, record)).unwrap_or(JsValue::NULL)
+        }
+
+        /// Capture ONE data set per record of a query — the whole palette from
+        /// the data. Returns the captured names in record order.
+        pub fn capture_every_record(
+            &mut self,
+            query: &str,
+            prefix: &str,
+            name_column: Option<String>,
+        ) -> JsValue {
+            let names = self.session.capture_every_record(
+                &QueryId::from(query),
+                prefix,
+                name_column.as_deref(),
+            );
+            to_js(&names).unwrap_or(JsValue::NULL)
+        }
+
+        /// The named data sets, in palette order.
+        pub fn list_data_sets(&self) -> JsValue {
+            to_js(&self.session.list_data_sets()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Delete a data set by name.
+        pub fn delete_data_set(&mut self, name: &str) -> bool {
+            self.session.delete_data_set(name)
+        }
+
+        /// Plan the application of a named data set — one `DataSetApply` per
+        /// captured variable. The BUNDLE commits the applicable rows as a single
+        /// batch (one undo step); this only decides the values.
+        pub fn apply_data_set(&mut self, name: &str) -> Result<JsValue, JsValue> {
+            to_js(&self.session.apply_data_set(name).map_err(map_err)?)
+        }
+
+        /// Export the variable set as an Illustrator-compatible variable
+        /// library (XML).
+        pub fn export_variable_library(&mut self) -> String {
+            self.session.export_variable_library()
+        }
+
+        /// Import a variable library (XML), replacing the current variable set.
+        /// Returns the `ImportReport` (what came in + what will not apply).
+        pub fn import_variable_library(&mut self, xml: &str) -> Result<JsValue, JsValue> {
+            to_js(&self.session.import_variable_library(xml).map_err(map_err)?)
+        }
+
+        /// The serialized byte size of the variable half of the payload — the
+        /// D-08 64 KiB budget check for per-record capture.
+        pub fn data_set_payload_bytes(&self) -> usize {
+            self.session.data_set_payload_bytes()
+        }
     }
 
     fn map_err(e: crate::core::SessionError) -> JsValue {
