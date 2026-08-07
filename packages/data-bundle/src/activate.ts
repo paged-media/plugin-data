@@ -145,6 +145,37 @@ export function activate(host: BundleHost): BundleHandle {
     },
   });
 
+  // ADR 024 — the dataBinding edit context.
+  //
+  // paged.data was the one content-bearing plugin with NO context at
+  // all, which the context-sensitivity audit caught: it stamps its
+  // `x-paged:media.paged.data` envelope onto the frames it creates
+  // (`lower-to-mutations`, `barcode`), so those frames ARE plugin
+  // content — but double-clicking one fell through to group descent and
+  // the Properties panel showed no owned-type row, not even the
+  // "double-click to edit in place" hint every other content type gives.
+  //
+  // What it edits was never actually open: a bound frame's content IS
+  // its binding, and the Bindings panel is the surface that edits it.
+  //
+  // NO CANVAS TOOL, declared empty. A binding is an expression over a
+  // data source, not geometry — a brush or a pen has nothing to act on.
+  // Empty is a statement here, distinct from omitting the field, which
+  // reads as "unrestricted" and would leave the whole rail lit.
+  if (host.supports("contribute.editContext@1")) {
+    host.contribute.editContext({
+      type: "dataBinding",
+      entry: "doubleClick",
+      // Claimed by OUR OWN metadata envelope — the host pre-resolves
+      // this plugin's namespace and never a foreign one, so this cannot
+      // claim another plugin's frame. Matching by KIND would claim every
+      // rectangle in the document.
+      matches: (c) => c.metadata !== null,
+      toolIds: [],
+      panelIds: [BINDINGS_PANEL_ID],
+    });
+  }
+
   host.log.info(`activated (apiVersion ${manifest.apiVersion})`);
 
   return {

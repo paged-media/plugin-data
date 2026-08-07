@@ -43,10 +43,23 @@ function fakeHost() {
     },
   });
   const openedPanels: string[] = [];
+  const editContexts: Array<Record<string, unknown>> = [];
   const host = {
     manifest: dataBundle.manifest,
     log: { debug() {}, info() {}, warn() {}, error() {} },
+    // ADR 024 — this fake had NO `supports`, which is why adding the
+    // first `host.supports(...)` call to `activate` broke six tests at
+    // once. That is the fake telling the truth about its own coverage:
+    // it modelled only the doors the bundle happened to use, so a new
+    // door had nowhere to land. Answering honestly (this host DOES wire
+    // the edit-context registry) is the fix; a blanket `() => true`
+    // would make the degradation path untestable.
+    supports: (f: string) => f === "contribute.editContext@1",
     contribute: {
+      editContext(c: Record<string, unknown>) {
+        editContexts.push(c);
+        return track();
+      },
       panel(c: PanelContribution): Disposable {
         panels.push(c);
         return track();
@@ -63,10 +76,50 @@ function fakeHost() {
       closePanel() {},
     },
   } as unknown as BundleHost;
-  return { host, panels, commands, openedPanels, disposedCount: () => disposed };
+  return {
+    host,
+    panels,
+    commands,
+    openedPanels,
+    editContexts,
+    disposedCount: () => disposed,
+  };
 }
 
 describe("data_plugin_bundle_activate", () => {
+  it("ADR 024 — registers the dataBinding edit context, claimed by its OWN metadata", () => {
+    // paged.data was the one content-bearing plugin with no context at
+    // all: it stamps `x-paged:media.paged.data` onto the frames it
+    // creates, so those frames ARE plugin content, but double-clicking
+    // one fell through to group descent with no owned-type hint.
+    const fake = fakeHost();
+    dataBundle.activate(fake.host);
+    expect(fake.editContexts).toHaveLength(1);
+    const ctx = fake.editContexts[0] as {
+      type: string;
+      entry: string;
+      toolIds?: string[];
+      panelIds?: string[];
+      matches?: (c: { metadata: unknown }) => boolean;
+    };
+
+    expect(ctx.type).toBe("dataBinding");
+    // K-13 — the one entry gesture for canvas content.
+    expect(ctx.entry).toBe("doubleClick");
+    // A bound frame's content IS its binding, and the Bindings panel is
+    // the surface that edits it.
+    expect(ctx.panelIds).toEqual(["media.paged.data.panel.bindings"]);
+    // NO canvas tool: a binding is an expression over a data source, not
+    // geometry. Declared empty, which is a statement — omitting the
+    // field reads as "unrestricted" and leaves the whole rail lit.
+    expect(ctx.toolIds, "toolIds is DECLARED").toBeDefined();
+    expect(ctx.toolIds).toEqual([]);
+    // Claimed by OUR OWN envelope, never by kind — matching on kind
+    // would claim every rectangle in the document.
+    expect(ctx.matches?.({ metadata: { v: 1, data: {} } })).toBe(true);
+    expect(ctx.matches?.({ metadata: null })).toBe(false);
+  });
+
   it("registers the sources + bindings panels under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);

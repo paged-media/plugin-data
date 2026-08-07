@@ -14,7 +14,7 @@
     ],
     "network": {
       "origins": "consent",
-      "purpose": "Fetch author-selected remote data sources (CSV/JSON/Parquet over HTTP(S)) at edit time, per-origin consented — never on document open."
+      "purpose": "Fetch author-selected remote data sources (CSV/JSON/Parquet over HTTP(S)) at edit time, per-origin consented \u2014 never on document open."
     },
     "clipboard": "none",
     "wasm": [
@@ -51,6 +51,12 @@
       "media.paged.data.command.openDataset",
       "media.paged.data.command.captureDataSet",
       "media.paged.data.command.applyDataSet"
+    ],
+    "editContexts": [
+      {
+        "type": "dataBinding",
+        "entry": "doubleClick"
+      }
     ]
   }
 }
