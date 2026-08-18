@@ -130,7 +130,9 @@ describe("data_plugin_bundle_activate", () => {
     ]);
     expect(fake.panels[0].title).toBe("Data sources");
     expect(fake.panels[1].title).toBe("Bindings");
-    expect(fake.panels[2].title).toBe("Dataset");
+    // "Dataset preview" (U12): distinct from the editor Window menu's
+    // Data / Data Source / Data sources / Datasets cluster.
+    expect(fake.panels[2].title).toBe("Dataset preview");
   });
 
   it("registers the seven commands under their declared ids", () => {

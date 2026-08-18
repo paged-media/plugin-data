@@ -52,14 +52,19 @@ const wrap: CSSProperties = {
   flexDirection: "column",
   gap: "var(--space-3, 12px)",
   padding: "var(--space-3, 12px)",
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontSize: "12px",
   color: "var(--pg-fg, #ddd)",
 };
 
 const note: CSSProperties = {
-  color: "var(--pg-fg-muted, #999)",
+  color: "var(--pg-muted-fg, #999)",
   fontSize: "11px",
   lineHeight: 1.5,
+};
+
+/** Values/ids stay mono; prose is the host's sans. */
+const mono: CSSProperties = {
+  font: "var(--font-mono, 12px ui-monospace, monospace)",
 };
 
 const row: CSSProperties = { display: "flex", gap: "var(--space-2, 8px)", flexWrap: "wrap" };
@@ -235,7 +240,6 @@ export function makeBindingsPanel(
 
     return (
       <div style={wrap}>
-        <strong>paged.data · bindings (v{host.manifest.version})</strong>
         <div style={row} data-data-bind-author>
           <select
             data-data-bind-kind
@@ -312,7 +316,7 @@ export function makeBindingsPanel(
           </button>
           <button
             type="button"
-            title="Refresh, then show what changed since the last sync (§8)"
+            title="Refresh, then show what changed since the last sync"
             onClick={() => {
               void refreshAndReport();
             }}
@@ -329,7 +333,9 @@ export function makeBindingsPanel(
           </button>
           <button
             type="button"
-            title="Re-resolve every placed variable field from the live data (D-01)"
+            // Technical detail (kept for developers): re-resolves every
+            // placed variable FIELD from the live data — the D-01 lane.
+            title="Bindings re-resolve when you refresh data."
             onClick={() => {
               void session.refreshFields().then(refresh);
             }}
@@ -341,7 +347,7 @@ export function makeBindingsPanel(
           <span style={note}>preview record:</span>
           <button
             type="button"
-            title="Show the document resolved against the previous record (§9)"
+            title="Show the document resolved against the previous record"
             disabled={recordTotal === 0 || previewIndex <= 0}
             onClick={() => {
               void stepTo(previewIndex - 1);
@@ -354,7 +360,7 @@ export function makeBindingsPanel(
           </span>
           <button
             type="button"
-            title="Show the document resolved against the next record (§9)"
+            title="Show the document resolved against the next record"
             disabled={recordTotal === 0 || previewIndex >= recordTotal - 1}
             onClick={() => {
               void stepTo(previewIndex + 1);
@@ -380,7 +386,7 @@ export function makeBindingsPanel(
         <div style={row} data-testid="field-mapping-wizard">
           <button
             type="button"
-            title="Map the source's columns to variable bindings (§9 field-mapping wizard)"
+            title="Map the source's columns to variable bindings"
             onClick={() => {
               void openWizard();
             }}
@@ -455,22 +461,23 @@ export function makeBindingsPanel(
           {snapshot.bindings.length === 0 ? (
             <span style={note}>none</span>
           ) : (
-            snapshot.bindings.join(", ")
+            <span style={mono}>{snapshot.bindings.join(", ")}</span>
           )}
         </div>
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
-        <p style={note}>
-          Live (v43): in-text variables place a tagged FIELD and re-resolve via
-          the refresh loop (D-01); images place onto the bound rectangle with the
-          chosen fit (D-14); data-driven rules apply a document style per fired
-          cell (D-13); tables lower to a native table (D-02 retired); record flow
-          paginates over the live frame chain + reflow (D-12); barcodes/QR encode
-          the field value (clean-room, in Rust) and draw as native VECTOR modules
-          scaled to the bound rectangle (§9.7 — resolution-free, no asset-store
-          door; raster is BLOCKED since placeImage needs a uri). Honest gap: a NEW
-          variable field lands at the story start, not the user&apos;s caret — no
-          caret-read door for a bundle yet (D-01 caret residual).
-        </p>
+        {/* Developer knowledge (was user-facing copy) — the live lanes as of
+            v43: in-text variables place a tagged FIELD and re-resolve via the
+            refresh loop (D-01); images place onto the bound rectangle with the
+            chosen fit (D-14); data-driven rules apply a document style per
+            fired cell (D-13); tables lower to a native table (D-02 retired);
+            record flow paginates over the live frame chain + reflow (D-12);
+            barcodes/QR encode the field value (clean-room, in Rust) and draw
+            as native VECTOR modules scaled to the bound rectangle (§9.7 —
+            resolution-free, no asset-store door; raster is BLOCKED since
+            placeImage needs a uri). Honest gap: a NEW variable field lands at
+            the story start, not the user's caret — no caret-read door for a
+            bundle yet (D-01 caret residual). */}
+        <p style={note}>Bindings re-resolve when you refresh data.</p>
       </div>
     );
   };

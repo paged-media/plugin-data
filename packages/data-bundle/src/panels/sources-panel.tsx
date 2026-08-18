@@ -17,14 +17,16 @@
  */
 
 // The Data sources panel — a React expert-leaf factory closing over the
-// BundleHost + the session. It owns the file input (D-11: no host file picker),
+// BundleHost + the session. It owns the CSV import (the platform picker via
+// shell.pickFile@1, with the raw file input kept as the harness-host fallback),
 // the source list, the remote-source lane (M1, D-03: per-source consent state,
 // request-consent + edit-time load — inert until granted), and the HONEST
 // status (engine/DuckDB availability, the "no OPFS persistence" notice —
 // rendered honestly, never faked).
 //
 // Built from host surfaces + React ONLY (no @paged-media/shell). Token-layer
-// styling (--pg-*, --space-*, --font-mono) reads native in both themes.
+// styling (--pg-*, --space-*) reads native in both themes; prose is sans,
+// mono is reserved for values/ids.
 
 import { useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
@@ -36,14 +38,19 @@ const wrap: CSSProperties = {
   flexDirection: "column",
   gap: "var(--space-3, 12px)",
   padding: "var(--space-3, 12px)",
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontSize: "12px",
   color: "var(--pg-fg, #ddd)",
 };
 
 const note: CSSProperties = {
-  color: "var(--pg-fg-muted, #999)",
+  color: "var(--pg-muted-fg, #999)",
   fontSize: "11px",
   lineHeight: 1.5,
+};
+
+/** Values/ids stay mono; prose is the host's sans. */
+const mono: CSSProperties = {
+  font: "var(--font-mono, 12px ui-monospace, monospace)",
 };
 
 export function makeSourcesPanel(
@@ -78,36 +85,64 @@ export function makeSourcesPanel(
       refresh();
     }
 
-    async function onFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      const text = await file.text();
+    async function importCsv(fileName: string, text: string): Promise<void> {
       const name =
-        file.name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_") || "data";
+        fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_") || "data";
       await session.registerCsvSource(name, text);
       refresh();
     }
 
+    // The platform picker (shell.pickFile@1) — same door + guard as
+    // plugin-doc's pickAndIngest. The raw <input type="file"> below stays
+    // ONLY as the fallback for hosts without the door (the SDK test
+    // harness), so the bundle's own tests keep driving the import.
+    async function onPick(): Promise<void> {
+      const picked = await host.shell.pickFile({ accept: [".csv", ".tsv"] });
+      const file = picked[0];
+      if (!file) return;
+      await importCsv(file.name, new TextDecoder().decode(file.bytes));
+    }
+
+    async function onFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      await importCsv(file.name, await file.text());
+    }
+
     return (
       <div style={wrap}>
-        <strong>paged.data · sources (v{host.manifest.version})</strong>
-        <label>
-          Import CSV{" "}
-          <input type="file" accept=".csv,.tsv" onChange={onFile} />
-        </label>
+        {host.supports("shell.pickFile@1") ? (
+          <button
+            type="button"
+            data-data-import-csv
+            onClick={() => void onPick()}
+            style={{ alignSelf: "flex-start", padding: "4px 10px" }}
+          >
+            Import CSV…
+          </button>
+        ) : (
+          <label>
+            Import CSV{" "}
+            <input type="file" accept=".csv,.tsv" onChange={onFile} />
+          </label>
+        )}
         <div>
           {snapshot.sources.length === 0 ? (
             <span style={note}>No sources yet.</span>
           ) : (
             <ul>
               {snapshot.sources.map((s) => (
-                <li key={s}>{s}</li>
+                <li key={s} style={mono}>{s}</li>
               ))}
             </ul>
           )}
         </div>
         <div>
-          <strong>Remote sources (consent-gated, D-03)</strong>
+          {/* Remote sources are consent-gated per the D-03 contract:
+              per-origin consent state, request-consent + edit-time load —
+              inert until granted, never fetched on document open. */}
+          <strong>Remote sources</strong>
+          <p style={note}>Remote data loads only after you allow it.</p>
           <div>
             <input
               type="url"
@@ -132,9 +167,14 @@ export function makeSourcesPanel(
             <ul>
               {snapshot.remote.map((r) => (
                 <li key={r.name} data-consent={r.consent} data-status={r.status}>
-                  {r.name} · {r.origin} · {r.format} ·{" "}
+                  <span style={mono}>{r.name}</span> · <span style={mono}>{r.origin}</span> ·{" "}
+                  {r.format} ·{" "}
                   {r.consent === "granted" ? "consented" : "consent required"} · {r.status}
-                  {r.contentKey ? ` · key ${r.contentKey}` : ""}
+                  {r.contentKey ? (
+                    <>
+                      {" "}· key <span style={mono}>{r.contentKey}</span>
+                    </>
+                  ) : null}
                   {r.consent === "required" ? (
                     <button onClick={() => void onRequestConsent(r.name)}>
                       Request consent
@@ -149,13 +189,19 @@ export function makeSourcesPanel(
           )}
         </div>
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
+        {/* Developer knowledge (was user-facing copy): the query engine is
+            the vendored DuckDB-WASM (run scripts/vendor-duckdb.sh); the
+            engine wasm is scripts/build-wasm.sh. Remote sources (M1) are
+            inert until per-origin consent (D-03) and fetch at edit time
+            only — never on document open. Imported data is in-memory only —
+            reload re-imports (no OPFS, D-04). */}
+        {(snapshot.status === "duckdb-missing" ||
+          snapshot.status === "engine-missing") && (
+          <p style={note}>The query engine isn&apos;t bundled in this build.</p>
+        )}
         <p style={note}>
-          The query engine is the vendored DuckDB-WASM (run{" "}
-          <code>scripts/vendor-duckdb.sh</code>); the engine wasm is{" "}
-          <code>scripts/build-wasm.sh</code>. Remote sources (M1) are inert until
-          per-origin consent (D-03) and fetch at edit time only — never on
-          document open. Imported data is in-memory only — reload re-imports (no
-          OPFS, D-04).
+          Imported data stays in memory only — reopening the document imports it
+          again.
         </p>
       </div>
     );

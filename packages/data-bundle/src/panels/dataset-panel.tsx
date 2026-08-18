@@ -41,14 +41,19 @@ const wrap: CSSProperties = {
   flexDirection: "column",
   gap: "var(--space-3, 12px)",
   padding: "var(--space-3, 12px)",
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontSize: "12px",
   color: "var(--pg-fg, #ddd)",
 };
 
 const note: CSSProperties = {
-  color: "var(--pg-fg-muted, #999)",
+  color: "var(--pg-muted-fg, #999)",
   fontSize: "11px",
   lineHeight: 1.5,
+};
+
+/** Values/ids stay mono; prose is the host's sans. */
+const mono: CSSProperties = {
+  font: "var(--font-mono, 12px ui-monospace, monospace)",
 };
 
 const row: CSSProperties = {
@@ -148,8 +153,11 @@ export function makeDatasetPanel(
       setError("");
       try {
         const pub = await session.publishProvider(selected, `${selected}-dataset`, "dataset");
+        // Technical detail (kept for developers): registration is DEFERRED —
+        // it awaits the host.dataProviders door (RFI D-09); the engine-side
+        // publication payload is real.
         setProviderNote(
-          `provider "${pub.id}" ready · rev ${pub.revision} · registration deferred (D-09)`,
+          `Provider "${pub.id}" (revision ${pub.revision}) is ready; this editor can't share it with other plugins yet.`,
         );
       } catch (e) {
         setError(String(e));
@@ -216,7 +224,8 @@ export function makeDatasetPanel(
     async function importLibrary(): Promise<void> {
       setError("");
       if (!host.supports("shell.pickFile@1")) {
-        setError("this host exposes no file picker (shell.pickFile@1)");
+        // Technical detail: the missing door is shell.pickFile@1.
+        setError("This host has no file picker.");
         return;
       }
       const picked = await host.shell.pickFile({ accept: [".xml"] });
@@ -232,10 +241,9 @@ export function makeDatasetPanel(
 
     return (
       <div style={wrap}>
-        <strong>paged.data · dataset (v{host.manifest.version})</strong>
-
+        {/* §9.1 localization — the session formatting locale. */}
         <label style={row}>
-          locale (§9.1):{" "}
+          Locale:{" "}
           <select
             value={locale}
             onChange={(e) => {
@@ -264,12 +272,14 @@ export function makeDatasetPanel(
               </select>
             </label>
 
+            {/* Catalog = the §7 governed catalog; provider = the §7.1
+                data-provider publish. */}
             <div style={row}>
               <button type="button" onClick={() => void showCatalog()}>
-                Refresh + catalog (§7)
+                Refresh + catalog
               </button>
               <button type="button" onClick={() => void publish()}>
-                Publish provider (§7.1)
+                Publish provider
               </button>
             </div>
 
@@ -291,8 +301,10 @@ export function makeDatasetPanel(
               </div>
             )}
 
+            {/* The §10 batch plan (per-record / per-group / one-catalog
+                generation units). */}
             <div style={row}>
-              build (§10):
+              Build:
               <button type="button" onClick={() => void showPlan("perRecord")}>
                 per record
               </button>
@@ -308,8 +320,9 @@ export function makeDatasetPanel(
                 plan: {plan.mode} · {plan.units.length} unit(s) over {plan.totalRecords} record(s)
                 <span style={note}> — {plan.units.slice(0, 4).map((u) => u.label).join(", ")}</span>
                 <div style={{ marginTop: 4 }}>
+                  {/* The §10 in-app batch executor. */}
                   <button type="button" data-data-batch-run onClick={() => void runBatch()}>
-                    Run batch (§10 executor)
+                    Run batch
                   </button>
                 </div>
               </div>
@@ -333,10 +346,14 @@ export function makeDatasetPanel(
                   })}
                   {runs.length > 6 && <li style={note}>… {runs.length - 6} more</li>}
                 </ul>
+                {/* Developer knowledge (was user-facing copy): real
+                    pagination over a nominal one-frame chain (the live
+                    frame-chain read is D-12); output documents materialize
+                    via the automation lane (data-cli / napi), not in this
+                    editor. */}
                 <span style={note}>
-                  Real pagination over a nominal one-frame chain (the live
-                  frame-chain read is D-12); output documents materialize via
-                  the automation lane (data-cli / napi), not in this editor.
+                  Output documents are produced by the batch automation tools,
+                  not inside this editor.
                 </span>
               </div>
             )}
@@ -346,7 +363,7 @@ export function makeDatasetPanel(
                 id is the name and the binding kind is the trait. */}
             <div data-data-variables>
               <div style={row}>
-                variables (§9.9):
+                Variables:
                 <button type="button" onClick={() => void refreshPalette()}>
                   Refresh palette
                 </button>
@@ -366,13 +383,16 @@ export function makeDatasetPanel(
                 <ul style={{ margin: "4px 0", paddingLeft: 16 }}>
                   {variables.map((v) => (
                     <li key={v.name} style={v.bound ? undefined : note}>
-                      {v.name} <span style={note}>· {v.trait}</span>
+                      <span style={mono}>{v.name}</span> <span style={note}>· {v.trait}</span>
                       {!v.bound && (
                         <span style={note}>
                           {" "}
                           ·{" "}
+                          {/* Technical detail (kept for developers): graph
+                              data is carried through the library verbatim but
+                              never applied — the apply lane is RFI D-15. */}
                           {v.trait === "graphdata"
-                            ? "graph data — carried through the library, never applied (RFI D-15)"
+                            ? "graph data — kept in the library, but not applied in this document"
                             : "not bound in this document — skipped on apply"}
                         </span>
                       )}
@@ -414,9 +434,12 @@ export function makeDatasetPanel(
               )}
               {exportedXml && (
                 <div>
+                  {/* Technical detail (kept for developers): the missing door
+                      is shell.saveFile — K-10, built upstream in plugin-sdk
+                      main but not in any published contract yet. */}
                   <span style={note}>
-                    No save-file door on this host (K-10 is built upstream but unpublished) —
-                    the library is below; copy it to a .xml file.
+                    This host can&apos;t save files directly — copy the library
+                    below into a .xml file.
                   </span>
                   <textarea
                     readOnly
@@ -447,11 +470,15 @@ export function makeDatasetPanel(
           </>
         )}
 
+        {/* Developer knowledge (was user-facing copy) — the honest gates:
+            the metadata sidecar is read from the source's metadata_sidecar
+            by the broader data.governed.extract path (file/URL/DB); provider
+            registration awaits the host.dataProviders door (D-09); native
+            server/CI batch awaits the napi-rs binding. The engine sides are
+            done. */}
         <p style={note}>
-          Honest gates: the metadata sidecar is read from the source&apos;s metadata_sidecar by the
-          broader data.governed.extract path (file/URL/DB); provider registration awaits the
-          host.dataProviders door (D-09); native server/CI batch awaits the napi-rs binding. The
-          engine sides are done.
+          Sharing datasets with other plugins and server-side batch runs
+          aren&apos;t available in this editor yet.
         </p>
       </div>
     );

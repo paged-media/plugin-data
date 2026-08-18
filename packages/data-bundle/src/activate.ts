@@ -67,7 +67,10 @@ export function activate(host: BundleHost): BundleHandle {
 
   contributePanel(host, {
     id: DATASET_PANEL_ID,
-    title: "Dataset",
+    // "Dataset preview", not "Dataset": the editor's Window menu already
+    // carries Data / Data Source / Data sources / Datasets — this title
+    // stays distinct from all of them.
+    title: "Dataset preview",
     icon: "panel-canvas",
     component: makeDatasetPanel(host, session),
     defaultDock: "right",
