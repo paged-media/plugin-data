@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Build the paged.data engine wasm (data-js) and land the wasm-bindgen
 # `--target web` output in packages/data-bundle/bin/ — the path the manifest
-# declares under capabilities.wasm[] (governance + the 8 MiB plugin-cli size
+# declares under capabilities.wasm[] (governance + the 100 MB plugin-cli size
 # gate). The bundle loads it via the wbindgen glue (the core/canvas-wasm
 # pattern), NOT via loadBundleWasm — BREAKAGE D-07. NOTE: the multi-MB
 # DuckDB-WASM artifact is SEPARATE (vendor/duckdb-wasm/, scripts/vendor-duckdb.sh)
-# and is NOT subject to this 8 MiB engine budget (D-07b).
+# and is NOT subject to this 100 MB app-wide budget (D-07b).
 #
 # wasm-opt: CI pins binaryen (old apt binaryen breaks wasm-bindgen externref
 # table grow — the "Table.grow failed" gotcha); locally it is applied when
@@ -14,7 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT=packages/data-bundle/bin
-BUDGET=$((8 * 1024 * 1024))
+# The budget is now 100 MB for the WHOLE APP including every plugin
+# (maintainer decision, 2026-08-19), enforced as a SUM by the editor's
+# scripts/wasm-budget.mjs. This per-artifact stop keeps a runaway build
+# from sailing through unnoticed here; the number that governs is the app
+# total. Mirrors plugin-sdk WASM_BUDGETS — change them together.
+BUDGET=$((100 * 1000 * 1000))
 
 cargo build --release --target wasm32-unknown-unknown -p data-js
 
@@ -39,6 +44,6 @@ fi
 SIZE=$(wc -c < "$OUT/data_js_bg.wasm" | tr -d ' ')
 echo "data_js_bg.wasm: $SIZE bytes (budget $BUDGET)"
 if [ "$SIZE" -gt "$BUDGET" ]; then
-  echo "error: wasm artifact exceeds the 8 MiB plugin budget" >&2
+  echo "error: wasm artifact exceeds the 100 MB app wasm budget" >&2
   exit 1
 fi

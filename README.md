@@ -51,7 +51,7 @@ cargo build --workspace && cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p data-conformance --bin coverage-gate    # the §12.2 gate
 
-# wasm artifact (8 MiB budget; lands in packages/data-bundle/bin/)
+# wasm artifact (100 MB app wasm budget; lands in packages/data-bundle/bin/)
 bash scripts/vendor-duckdb.sh   # acquire the MIT DuckDB-WASM artifact
 bash scripts/build-wasm.sh
 

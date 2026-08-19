@@ -166,7 +166,7 @@ cargo tree -p data-expr --edges normal | grep -E 'data-(sources|query|bind|lower
 cargo tree -p data-js --target wasm32-unknown-unknown | grep -E 'data-conformance|proptest' && echo LEAK
 cargo deny check
 
-# wasm artifact (8 MiB budget; lands in packages/data-bundle/bin/)
+# wasm artifact (100 MB app wasm budget; lands in packages/data-bundle/bin/)
 bash scripts/vendor-duckdb.sh   # acquire the MIT DuckDB-WASM artifact (once)
 bash scripts/build-wasm.sh
 

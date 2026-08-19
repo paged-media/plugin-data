@@ -67,7 +67,7 @@ EOF
 # D-11 / D-07b — stage a representative DuckDB engine artifact into the
 # bundle's declared-only `bin/` so the manifest can declare it as a
 # first-class `purpose: "engine"` wasm (the governed 64 MiB ceiling, NOT the
-# 8 MiB compute cap). The runtime still selects the optimal variant from the
+# 100 MB app-wide cap). The runtime still selects the optimal variant from the
 # vendored dist at boot (selectBundle); this staged copy is the GOVERNANCE
 # anchor the manifest + plugin-cli size-gate verify. The EH bundle is the
 # broadly-compatible default (non-COI, exception-handling).

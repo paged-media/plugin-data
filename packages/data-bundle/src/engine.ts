@@ -24,7 +24,7 @@
 // boundary (CLAUDE.md hard rule) — this file only constructs the handle.
 
 export const ENGINE_NOT_BUILT =
-  "data-js wasm not built — run `bash scripts/build-wasm.sh` (8 MiB budget, lands in packages/data-bundle/bin/)";
+  "data-js wasm not built — run `bash scripts/build-wasm.sh` (100 MB app wasm budget, lands in packages/data-bundle/bin/)";
 
 /** The wasm class surface (`data-js` `DataEngine`) the bundle consumes. The
  *  method names + JSON shapes match the Rust `#[wasm_bindgen]` impl exactly. */
