@@ -28,6 +28,7 @@
 // allocated OUTSIDE a facade-tracked registration, so dispose tears it down.
 
 import type { BundleHandle, BundleHost } from "@paged-media/plugin-api";
+import { contributeMenu } from "./menu";
 import { contributePanel } from "@paged-media/plugin-sdk";
 
 import manifest from "../manifest.json";
@@ -181,9 +182,14 @@ export function activate(host: BundleHost): BundleHandle {
 
   host.log.info(`activated (apiVersion ${manifest.apiVersion})`);
 
+  // F1 — the menu bar. Before plugin-api 0.2.33 there was no menu door,
+  // so every command in this bundle lived behind Cmd+K and nowhere else.
+  const menuSub = contributeMenu(host);
+
   return {
     dispose() {
       session.dispose();
+      menuSub.dispose();
     },
   };
 }
