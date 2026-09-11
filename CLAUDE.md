@@ -50,16 +50,30 @@ The M0 spine shipped and grew to ~M3-class across the 11 crates above:
   caller yet), the network-consent UI's first real consumer, DB-attach, OPFS
   persistence, and worker-hosted DuckDB.
 
-## Project State & Feature Matrix (paged-media/state)
+## Project State & Feature Matrix (cockpit)
 
-The canonical feature inventory + live status for ALL Paged repos live in
-`paged-media/state` (dashboard: https://state.paged.media). There is NO feature
-matrix in this repo; do not create one. NEW CAPABILITY → registry row; EVERY NEW
-TEST → feature linkage (naming convention `fn <feature_id_with_underscores>_…()`
-+ the row's `tests:` pointer); STATUS CHANGE → registry, not prose. The
-status-ledger row `state/registry/features/plugin-data.yaml` lives in the STATE
-repo (separate PR there). The local `registry/` here is the BUILD-CONSUMED half
-(see "Two-registry split" below).
+The feature inventory, test linkage and live status for ALL Paged repos are derived by
+[Cockpit](https://github.com/drietsch/cockpit) from `~/paged/cockpit/` (`cockpit.toml` with
+`root = ".."`; features in `cockpit/docs/features/<chapter>/<id>.md`). There is NO feature
+matrix in this repo; do not create one.
+
+Rules for every code change in this repo:
+
+1. NEW CAPABILITY → feature file. If your change adds or completes a feature, add or update
+   `cockpit/docs/features/<chapter>/<id>.md` (separate commit in `paged/cockpit`, referenced
+   from this one). Feature ids are immutable; rename with `superseded_by`.
+2. EVERY NEW TEST → feature link. Playwright: `{ tag: ['@feat:<id>'] }`. Rust: a test name
+   ending in `__feat__<id_with_underscores>` or containing `[<id>]`. Otherwise an entry in
+   `cockpit/test-map.yaml`.
+3. STATUS CHANGE → `claims:` in the feature file, never prose. "X is now shipped/partial" is a
+   claim edit; whether it *works* is computed from evidence and cannot be written.
+4. BEFORE claiming a feature done: `cockpit feature <id> --json` (or its page in
+   `cockpit serve`) — done means the linked tests are green and were produced after the
+   latest implementation commit.
+5. `cockpit validate --strict` is the gate (references resolve, required evidence present and
+   fresh). `cockpit pull` fetches the newest CI artifacts; `cockpit status` is the summary.
+6. FOUND A BUG while working? If a test exposes it, let it fail and push — the failure shows
+   up as attention on its feature. Never commit `.cockpit/`.
 
 ## Hard rules (this repo's constitution — spec §1/§2/§3/§11)
 
@@ -145,12 +159,12 @@ repo (separate PR there). The local `registry/` here is the BUILD-CONSUMED half
 
 ## Two-registry split
 
-- `paged-media/state` `registry/features/plugin-data.yaml` — the STATUS ledger
-  (stage `plugin.data`; planned/partial/shipped).
+- `~/paged/cockpit/docs/features/data/<id>.md` (Cockpit, chapter `data`) — the STATUS
+  ledger (component `plugin.data`; `claims:` planned/partial/shipped, health from evidence).
 - `plugin-data/registry/` (here) — build-consumed metadata: `functions/*.yaml`
   (one row per expression function: family, arity, provenance, test pointers —
   drives codegen) and `features/*.yaml` (source/query/bind/lower/security/...
-  rulings + test pointers). The ids mirror the state `data.*` ids so the
+  rulings + test pointers). The ids mirror the Cockpit `data.*` ids so the
   registries join by id.
 
 ## Commands
