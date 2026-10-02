@@ -8,8 +8,19 @@ queries, data-driven formatting, record flow across pages, and batch document
 generation. A publication becomes a *projection of governed data*, not a
 hand-assembled artifact.
 
-Spec (the authority): `thoughts/docs/paged/plugin-data/base-idea.md` (v0.4).
+Spec (the authority): [`docs/concept.md`](./docs/concept.md).
 SDK gap punch list: [`BREAKAGE_LOG.md`](./BREAKAGE_LOG.md) (the §2.2 resolution).
+
+## Documentation
+
+Everything about how the plugin is designed and built is in [`docs/`](./docs/README.md):
+
+- [`docs/concept.md`](./docs/concept.md): the specification, with notes on what was built.
+- [`docs/architecture.md`](./docs/architecture.md): crates, packages, the binding and lowering paths, host doors.
+- [`docs/status.md`](./docs/status.md): what ships today and what does not.
+- [`docs/adr/`](./docs/adr/README.md): the architecture decisions, one per file.
+
+`docs/status.md` is the current record of what ships; the sections below are older in places.
 
 ## Status — M0 / T0 spine
 

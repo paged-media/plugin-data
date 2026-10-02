@@ -39,7 +39,7 @@
 //! (x/y/w/h all in [0, 1]). The lowering ([`data_lower`]) scales the unit box
 //! to the bound frame's content box; the bundle emits one native `insertPath`
 //! filled-rect per module (the VECTOR lane — resolution-independent, no
-//! asset-store door). See `base-idea §9.7`.
+//! asset-store door). See `docs/concept.md §9.7`.
 //!
 //! ## Clean-room
 //!

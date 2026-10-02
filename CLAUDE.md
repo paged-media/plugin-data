@@ -16,7 +16,7 @@ plugin-sheet), so frame ops (scale/rotate/skew/crop/reposition) are honored for
 free. The **query/ingest engine is the MIT-licensed DuckDB-WASM artifact**
 (vendored, not compiled in-tree), kept swappable behind the Arrow seam.
 
-Spec (the authority): `thoughts/docs/paged/plugin-data/base-idea.md` (v0.4).
+Spec (the authority): [`docs/concept.md`](./docs/concept.md).
 SDK gap tracker: the cross-repo RFI `thoughts/docs/paged/plugin-platform/rfi-core-sdk-gaps.md` (D-NN ids in §6; per-plugin BREAKAGE_LOG retired 2026-06-12).
 
 Rust crates (Cargo workspace, top level per spec §4): `data-core` (frozen
