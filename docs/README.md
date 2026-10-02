@@ -1,0 +1,29 @@
+# Documentation
+
+What this folder holds.
+
+- [`concept.md`](concept.md): why the plugin exists, what it is for, and what it will never do.
+- [`architecture.md`](architecture.md): how it is built. The thirteen Rust crates and two
+  TypeScript packages, the path of one binding from a source file to document content, where
+  data is stored, the host doors used, and how it is built and tested.
+- [`status.md`](status.md): what ships today, the limits of what ships, and what is not built.
+- [`adr/`](adr/README.md): the decision records of this repository, 014, 015 and 550–557.
+
+## Decisions in other repositories that bind this one
+
+These records live in other public paged-media repositories. The code here rests on each of
+them. The last column says what the decision means for this plugin.
+
+| ADR | Repository | Decision | What it means here |
+|---|---|---|---|
+| [010](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/010-raw-mutate-gate-capability-enforcement.md) | plugin-sdk | The raw-mutate gate and the capability enforcement line | The plugin writes with raw `document.mutate` operations under `document.write: "scoped"`. Its metadata writes use its own key, `x-paged:media.paged.data`, and the envelope shape the host validates, `{ v, data }` (`packages/data-host-model/src/binding.ts`). |
+| [305](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/305-doors-always-present.md) | plugin-sdk | Every door is always present; `supports()` reports a missing backend | Seven optional doors are probed with `host.supports(...)`, each with a fallback: no edit context; a variable that is resolved but not placed when the host has no placeholder fields; the selected frame instead of the caret; a logged note instead of a consent prompt or a provider registration; a plain file input for CSV import instead of the file picker; the exported XML shown as text instead of saved. |
+| [307](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/307-contract-as-peer-dependency.md) | plugin-sdk | Bundles take the contract packages as peer dependencies | `@paged-media/plugin-api` and `@paged-media/plugin-sdk` are peer dependencies of `@paged-media/data` (`packages/data-bundle/package.json`). |
+| [308](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/308-plugin-wasm.md) | plugin-sdk | Plugin wasm is a declared capability, loaded by the bundle, under one size budget | The manifest declares two wasm files: the engine, `bin/data_js_bg.wasm`, and DuckDB, `bin/duckdb-engine.wasm`. `packages/data-bundle/src/engine.ts` loads the first through its own glue, and `scripts/build-wasm.sh` fails above 100 MB. DuckDB is loaded from the vendored files, not from the declared path; see [ADR 015](adr/015-duckdb-wasm-vendored.md). |
+| [310](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/310-one-write-door.md) | plugin-sdk | One write door: `document.mutate`, engine-owned history, failures as outcomes | Every write goes through `host.document.mutate`, and the code tests `outcome.applied` instead of catching errors. Undo is left to the host: a barcode and a data-set switch are one `batch` each, so one undo step. |
+| [311](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/311-plugin-state-under-own-id.md) | plugin-sdk | Plugin state lives only under the plugin's own id | Table frames and barcode paths carry metadata under `x-paged:media.paged.data`, and placeholder fields are tagged with the plugin id `media.paged.data` (`packages/data-host-model/src/fields.ts`). A refresh touches only fields with that tag. |
+| [314](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/314-plugin-shape.md) | plugin-sdk | The plugin shape: semantics in Rust behind one wasm module, a logic-free shim, one published package | `data-js` is the one wasm module, with `DataEngine` forwarding to `DataSession`; `packages/data-host-model` is the private translation package; `@paged-media/data` is the one published package. Two things sit outside the shape: DuckDB, a second wasm started from TypeScript, and the conversion of its results in `packages/data-bundle/src/query/recordset.ts`. |
+| [315](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/315-isolation-contract.md) | plugin-sdk | The isolation contract: a plugin depends only on the published contract | `scripts/check-contract-imports.mjs` runs before the tests and in CI; `deny.toml` denies unknown registries and git sources. A consequence in the code: graph-data variables are carried and never resolved, because the chart surface belongs to another plugin (`data-dataset/src/lib.rs`). |
+| [316](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/316-native-content-and-baking.md) | plugin-sdk | Plugin content is stored as valid native document content; baking is the fallback | Everything a binding writes is native content: fields, tables, placed images, paths, element visibility, styles. The plugin contributes no object type, so there is nothing to bake. See [ADR 551](adr/551-compiled-to-native-content.md). |
+| [317](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/317-registry-driven-dispatch.md) | plugin-sdk | Function and kernel dispatch is generated from a registry, with a coverage gate | `registry/functions/*.yaml` drives `data-core/build.rs` and `data-expr/build.rs`; a function with no row cannot be parsed. `data-conformance/src/bin/coverage_gate.rs` fails when an implemented row names no existing test, and CI runs it. |
+| [024](https://github.com/paged-media/editor/blob/main/docs/adr/024-context-sensitivity-is-a-core-concept.md) | editor | Context-sensitivity is a core concept | The `dataBinding` edit context claims elements that carry this plugin's metadata, declares an empty tool set and names the Bindings panel (`packages/data-bundle/src/activate.ts`). |
