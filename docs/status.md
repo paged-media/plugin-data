@@ -9,12 +9,26 @@ of work, with file and line references, is
 
 ## Shipped
 
+- **The session is saved with the document** (since 2026-10-05, wave 4). Sources, queries,
+  binding definitions, data sets, the locale, pinned bindings and the imported CSV text are
+  written to this plugin's `session` container part (`paged/media.paged.data/session.json`,
+  declared in `contributes.partTypes`) after each change and before every save. An imported
+  file over 64 KiB is written once as `data/<hash>.csv` and the session names it by hash.
+  Opening a document restores its session: the recipe through `DataEngine.load_payload`, the
+  data into DuckDB on DuckDB's first boot, remote sources as inert descriptors (nothing is
+  fetched on open). The restore checks the document: placed fields are found again, and a
+  table whose label no longer names its binding is reported. Opening another document drops
+  the previous session first. On a host without container parts the Sources panel says the
+  session is not saved.
 - **Sources.** The Data sources panel imports a `.csv` or `.tsv` file into an in-memory
   DuckDB table. A remote URL (CSV, TSV, JSON or Parquet) can be added as a descriptor; Load
   calls `fetch` only for an origin the host reports as consented and hands DuckDB the bytes.
 - **Bindings from the panel.** "Map fields…" lists the columns of the first source and
-  creates one variable binding per chosen column. "Add binding" binds an image or a barcode
-  to the selected rectangle. "Lower to document" writes native content: a variable as a
+  creates one variable binding per chosen column. "Add binding" defines every binding kind:
+  a variable field, an image or a barcode in the selected rectangle, a table with
+  comma-separated columns, show/hide on the selected element, a style rule (condition and
+  document style, on the selected table cell's column or the caret's story) and a record
+  flow (fields per record, optional grouping) with a preview list of what it would place. "Lower to document" writes native content: a variable as a
   tagged placeholder field, an image through `placeImage`, a barcode (EAN-13, UPC-A,
   Code-128, QR) as one closed vector path per dark module, scaled to the rectangle.
 - **Refresh.** "Refresh data" runs the queries again; "Refresh fields" rewrites the
@@ -30,25 +44,22 @@ of work, with file and line references, is
 - **The binding language**: 42 functions, arithmetic, comparison and `&`, with errors as
   values. The image and barcode bindings of the panel take an expression; so do all
   bindings defined through the session or in a batch job.
-- **Through the session only**: a table binding with chosen columns, lowered to a native
-  table; a visibility binding that sets `elementVisible`; a rule that applies a named style
-  to a story range or to table cells.
+- **Lowering**: a table binding lowers to a native table; a visibility binding sets
+  `elementVisible`; a rule applies a named style to a story range or to table cells.
 - **Headless batch.** `paged-data-batch`, built from source, reads a JSON job with
   materialised query results and prints the paginated flow of each output document. A
   script evaluated in Boa can supply the locale, the parameters and the build.
 
 ## Limits of what is shipped
 
-- **Nothing is restored on reopen.** Sources, queries, binding definitions and data sets
-  live in the session. The engine can serialise them (`payload()`); the bundle never calls
-  it and the wasm class cannot load one. Imported rows stay in memory. Fields and frames
-  already in the document survive, but a field is refreshed only if a binding with its key is
-  defined again ([ADR 552](adr/552-binding-is-a-recipe.md)).
-- **The panels expose a small part of the engine.** Their only query is
-  `SELECT * FROM <first source>`. There is no SQL field and no control for a table with
-  chosen columns, a visibility binding, a rule or a record flow. "Add binding" for a
-  variable passes the typed column name as the binding's `target` and an empty string as
-  its expression; "Wire demo binding" passes empty expressions too.
+- **Saving the session is not undoable.** Container parts take no part in undo, and
+  defining a binding is not a document change. What a binding writes into the document
+  (fields, tables, barcodes, styles, visibility) undoes as usual; the label on a lowered
+  table or barcode names the binding, the hash of its definition and the hash of the session
+  part it was lowered under, and goes with the content on undo. The engine has no
+  document-level label a plugin could write, so the session itself cannot follow undo.
+- **The panels' only query is** `SELECT * FROM <first source>`. There is no SQL field.
+  "Wire demo binding" still passes empty expressions.
 - **Tables and barcodes are written again on every lower** and on every preview step.
   Nothing removes or updates the earlier frame or paths. A table goes into a new frame at a
   fixed inset on the active page, with column widths estimated from character counts. The
@@ -57,11 +68,13 @@ of work, with file and line references, is
   Overridden, Stale, Error); the bundle never reads it and resolves every binding regardless.
   The engine marks a binding `Overridden` when a data set is applied; the bundle's field
   refresh does not read that state ([ADR 553](adr/553-non-destructive-refresh.md)).
-- **Record flow stops at a data structure.** The paginator returns frames and blocks; no
-  code writes them to the document, and no page or frame is created on overflow. A record's
-  height is its field count times a line height, not a measured layout. The session has no
-  method that defines a record-flow binding, so "Run batch" in the panel answers that none
-  exists ([ADR 554](adr/554-record-flow-pagination.md)).
+- **Record flow stops at a data structure.** The panel defines a record flow and previews
+  its records; the paginator returns frames and blocks, and no code writes them to the
+  document, and no page or frame is created on overflow. "Lower to document" reports a
+  record flow as preview-only. A record's height is its field count times a line height,
+  not a measured layout ([ADR 554](adr/554-record-flow-pagination.md)).
+- **A table lower is four undo steps** (frame, table, cell fill, label), measured by
+  `test/persist-real-core.spec.ts`.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
 - **Remote sources.** JSON and Parquet bytes are registered with DuckDB as a file, not
   inserted as a table. A `credentialRef` can be stored on the descriptor, but nothing
@@ -96,7 +109,17 @@ of work, with file and line references, is
   graph-data variable. Their registry rows are `planned`.
 - A Node binding for the batch runner (registry row `planned`); the CLI is the native route.
 - Turning a paginated flow into document content, in the editor or anywhere else.
-- Saving imported data. Scheduled refresh: `RefreshPolicy` is stored and nothing acts on it.
+- Scheduled refresh: `RefreshPolicy` is stored and nothing acts on it.
 - Local import of JSON, Parquet or Excel files, and raster barcodes.
 - An importer or exporter contribution: the manifest declares none.
 - The differential test against native DuckDB: `data-conformance/tests/oracle.rs` is a stub.
+
+## Host gaps found in wave 4
+
+Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 2026-10-05.
+
+| Gap | Class | Effect here |
+| --- | --- | --- |
+| Container parts are not undoable (`PartsSurface.write`/`delete`, "Not undoable") | not modelled in core (shared with paged.web) | the session part does not follow undo |
+| No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead |
+| Window ▸ Bindings is greyed outside the `dataBinding` edit context | host UI | the Bindings panel opens from Object ▸ Insert data binding… or the command palette |
