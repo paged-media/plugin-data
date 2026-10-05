@@ -373,6 +373,12 @@ impl ResolutionEngine {
         self.results.get(query)
     }
 
+    /// The content hash of a query's ingested result (§8 — the identity of
+    /// the data), or `None` before an ingest.
+    pub fn result_hash(&self, query: &QueryId) -> Option<u64> {
+        self.results_hash.get(query).copied()
+    }
+
     /// The number of records ingested for a query (the stepper's "of N" bound,
     /// §9 record-preview). `0` when no result is ingested yet.
     pub fn record_count(&self, query: &QueryId) -> usize {

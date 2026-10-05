@@ -31,17 +31,21 @@
 //! - `group_by` finds a row's group through a hash bucket, not a scan of
 //!   every group: the groups (keys, rows, first-seen order) are the linear
 //!   scan's, NaN and signed zero included.
+//! - The column door (typed buffers) ingests the same data as the RecordSet
+//!   door, and re-delivering it is `Unchanged`; any change is `Changed`.
 //! - The change report re-resolves only bindings whose dependency stamp
 //!   moved: after ANY sequence of data changes its snapshot equals the full
 //!   re-resolve of every binding.
 
 use data_bind::ResolutionEngine;
+use data_conformance::perf_workloads::to_columns;
 use data_conformance::{record_set, today};
 use data_core::{
     Binding, BindingDef, BindingId, ColumnBind, FieldType, FlowOpts, FrameChainRef, FrameRef,
     MissingPolicy, PlaceholderRef, Query, QueryId, ResultShape, TableOpts, Template, TemplateField,
     TemplateRef, Value, ValueError,
 };
+use data_js::columns::IngestOutcome;
 use data_js::core::DataSession;
 use data_query::{cmp_values, order_rows, shape, stabilize, value_key, Shaped};
 use proptest::prelude::*;
@@ -277,5 +281,45 @@ proptest! {
         let got: Vec<String> = got.iter().map(|g| format!("{:?} {:?}", g.key, g.rows)).collect();
         let want: Vec<String> = want.iter().map(|(k, rows)| format!("{k:?} {rows:?}")).collect();
         prop_assert_eq!(got, want);
+    }
+
+    /// Column door == RecordSet door, for every value kind the door carries
+    /// (one kind per column, nulls anywhere); a re-delivery is `Unchanged`,
+    /// and a different result after it is `Changed` again.
+    #[test]
+    fn data_perf_prop_column_door_equals_record_set_door(
+        nums in prop::collection::vec(prop_oneof![Just(None), any::<f64>().prop_map(Some)], 0..12),
+        texts in prop::collection::vec(prop_oneof![Just(None), "\\PC{0,4}".prop_map(Some)], 0..12),
+        days in prop::collection::vec(prop_oneof![Just(None), any::<i32>().prop_map(Some)], 0..12),
+        flip in any::<bool>(),
+    ) {
+        let n = nums.len().min(texts.len()).min(days.len());
+        let opt = |v: Option<Value>| v.unwrap_or(Value::Null);
+        let r = record_set(
+            &[("n", FieldType::Float), ("s", FieldType::Text), ("d", FieldType::Date)],
+            vec![
+                nums[..n].iter().map(|x| opt(x.map(Value::Number))).collect(),
+                texts[..n].iter().map(|x| opt(x.as_deref().map(Value::text))).collect(),
+                days[..n].iter().map(|x| opt(x.map(Value::Date))).collect(),
+            ],
+        );
+        let q = QueryId::from("q");
+        let mut a = DataSession::new(today());
+        a.ingest_result(q.clone(), r.clone());
+        let mut b = DataSession::new(today());
+        prop_assert_eq!(b.ingest_columns(q.clone(), r.schema.clone(), n, to_columns(&r)).unwrap(), IngestOutcome::Changed);
+        prop_assert_eq!(a.result_token(&q), b.result_token(&q));
+        prop_assert_eq!(b.ingest_columns(q.clone(), r.schema.clone(), n, to_columns(&r)).unwrap(), IngestOutcome::Unchanged);
+        if n > 0 {
+            let mut changed = r.clone();
+            changed.columns[if flip { 0 } else { 1 }][0] = Value::text("x");
+            if flip { changed.columns[0][0] = Value::Null; }
+            let outcome = b.ingest_columns(q.clone(), changed.schema.clone(), n, to_columns(&changed)).unwrap();
+            let same = format!("{:?}", changed.columns) == format!("{:?}", r.columns);
+            prop_assert_eq!(outcome, if same { IngestOutcome::Unchanged } else { IngestOutcome::Changed });
+            let mut c = DataSession::new(today());
+            c.ingest_result(q.clone(), changed);
+            prop_assert_eq!(c.result_token(&q), b.result_token(&q));
+        }
     }
 }

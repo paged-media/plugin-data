@@ -37,10 +37,11 @@
 use data_automation::BatchMode;
 use data_bind::diff;
 use data_conformance::perf_workloads::{
-    catalog_session, change_report_session, changed_catalog, diff_inputs, grouped_session,
-    table_session, REPORT_TABLES,
+    catalog, catalog_session, change_report_session, changed_catalog, diff_inputs, grouped_session,
+    table_session, to_columns, REPORT_TABLES,
 };
 use data_core::{BindingId, QueryId};
+use data_js::columns::IngestOutcome;
 use data_js::core::{perf_counters, reset_perf_counters, LoweredOutput, PerfCountersOut};
 use data_lower::{FlowBlock, FlowLayoutOpts};
 
@@ -209,3 +210,34 @@ fn data_perf_count_group_plan_2k_by_100() {
 const BUDGET_GROUP_2K_COMPARES: u64 = 1_900;
 // Was 48 166 (the plan's stabilize building keys per comparison).
 const BUDGET_GROUP_2K_KEY_ALLOCS: u64 = 0;
+
+#[test]
+fn data_perf_count_column_reingest_unchanged_1k() {
+    // The column door (typed buffers, one per column) for a 1k-row result,
+    // then the SAME result again — a refresh whose data did not change.
+    let rows = 1_000;
+    let mut s = table_session(10);
+    let r = catalog(rows, 50);
+    let first = s
+        .ingest_columns(QueryId::from("q1"), r.schema.clone(), rows, to_columns(&r))
+        .unwrap();
+    let token = s.result_token(&QueryId::from("q1"));
+    let table = s.resolve_lowered(&BindingId::from("t1")).unwrap();
+    reset_perf_counters();
+    let again = s
+        .ingest_columns(QueryId::from("q1"), r.schema.clone(), rows, to_columns(&r))
+        .unwrap();
+    let c = perf_counters();
+    show("column_reingest_unchanged_1k", &c);
+    // Behaviour: the first ingest delivered the data, the second is
+    // recognised as the same data, and the engine's result is untouched.
+    assert_eq!(first, IngestOutcome::Changed);
+    assert_eq!(again, IngestOutcome::Unchanged);
+    assert_eq!(s.result_token(&QueryId::from("q1")), token);
+    assert_eq!(s.resolve_lowered(&BindingId::from("t1")).unwrap(), table);
+    // Nothing decoded, nothing ingested, nothing hashed by the engine (was:
+    // every refresh re-ingested every cell — 4 000 here — and re-hashed it).
+    assert_eq!(c.ingest_cells, BUDGET_COLUMN_REINGEST_CELLS);
+    assert_eq!(c.content_hashes, 0);
+}
+const BUDGET_COLUMN_REINGEST_CELLS: u64 = 0;

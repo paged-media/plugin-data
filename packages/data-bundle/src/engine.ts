@@ -21,7 +21,10 @@
 // host.loadBundleWasm; BREAKAGE D-07). The artifact lands in ./bin via
 // scripts/build-wasm.sh; absent until built → ENGINE_NOT_BUILT (honest, never
 // faked). ALL binding/expression/sync/lowering semantics live behind this
-// boundary (CLAUDE.md hard rule) — this file only constructs the handle.
+// boundary (CLAUDE.md hard rule) — this file only constructs the handle (and
+// hands a result's typed column buffers across the column door).
+
+import { columnToValues, type ColumnBatch } from "./query/recordset";
 
 export const ENGINE_NOT_BUILT =
   "data-js wasm not built — run `bash scripts/build-wasm.sh` (100 MB app wasm budget, lands in packages/data-bundle/bin/)";
@@ -36,6 +39,22 @@ export interface DataEngineLike {
   set_param(name: string, value: unknown): void;
   set_locale(locale: unknown): void;
   ingest_result(query: string, records: unknown): void;
+  /** The typed column door (Wave 2): `begin_columns` → one `push_*` per
+   *  schema field → `finish_columns` (`"changed"` | `"unchanged"`). Each
+   *  buffer is copied into wasm once; no per-cell objects. Use
+   *  `ingestColumnBatch`, which falls back to `ingest_result` on an engine
+   *  without the door. */
+  begin_columns?(query: string, schema: unknown, rows: number): void;
+  push_f64?(values: Float64Array, valid?: Uint8Array): void;
+  push_bool?(values: Uint8Array, valid?: Uint8Array): void;
+  push_date?(values: Int32Array, valid?: Uint8Array): void;
+  push_datetime?(values: Float64Array, valid?: Uint8Array): void;
+  push_utf8?(bytes: Uint8Array, offsets: Int32Array, valid?: Uint8Array): void;
+  push_binary?(bytes: Uint8Array, offsets: Int32Array, valid?: Uint8Array): void;
+  finish_columns?(): string;
+  /** The content token (hex content hash) of a query's ingested result —
+   *  equal tokens, equal data. `undefined` before an ingest. */
+  result_token?(query: string): string | undefined;
   resolve_lowered(binding: string): unknown;
   /** §9 record-preview stepper: the count of records ingested for a query — the
    *  stepper's "of N" upper bound (0 before a refresh). Optional: a wasm
@@ -137,4 +156,49 @@ export async function bootEngine(today: number): Promise<DataEngineLike> {
     await mod.default();
   }
   return new mod.DataEngine(today) as DataEngineLike;
+}
+
+/** Deliver a query result to the engine as typed column buffers (the column
+ *  door: one copy per column, no `{t, v}` object per cell). Returns whether
+ *  the engine's result changed: a re-delivery of the same data is
+ *  `"unchanged"` and decodes nothing. An engine built before the door gets
+ *  the same data through `ingest_result` (reported `"changed"`). */
+export function ingestColumnBatch(
+  e: DataEngineLike,
+  query: string,
+  batch: ColumnBatch,
+): "changed" | "unchanged" {
+  if (typeof e.begin_columns !== "function" || typeof e.finish_columns !== "function") {
+    e.ingest_result(query, {
+      schema: batch.schema,
+      columns: batch.columns.map((c) => columnToValues(c, batch.row_count)),
+      row_count: batch.row_count,
+    });
+    return "changed";
+  }
+  e.begin_columns(query, batch.schema, batch.row_count);
+  for (const c of batch.columns) {
+    const valid = c.valid ?? undefined;
+    switch (c.kind) {
+      case "f64":
+        e.push_f64!(c.values, valid);
+        break;
+      case "bool":
+        e.push_bool!(c.values, valid);
+        break;
+      case "date":
+        e.push_date!(c.values, valid);
+        break;
+      case "datetime":
+        e.push_datetime!(c.values, valid);
+        break;
+      case "utf8":
+        e.push_utf8!(c.bytes, c.offsets, valid);
+        break;
+      case "binary":
+        e.push_binary!(c.bytes, c.offsets, valid);
+        break;
+    }
+  }
+  return e.finish_columns() === "unchanged" ? "unchanged" : "changed";
 }
