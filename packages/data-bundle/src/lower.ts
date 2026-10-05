@@ -54,10 +54,33 @@ import {
   type RuleTarget,
 } from "../../data-host-model/src";
 
-/** The frame center, page-local pt, from `[top, left, bottom, right]`. */
-function center(bounds: [number, number, number, number]): [number, number] {
-  const [top, left, bottom, right] = bounds;
-  return [(left + right) / 2, (top + bottom) / 2];
+/** What one command's lowerings share: the active page, read once. */
+export interface LowerContext {
+  page?: Promise<PageId | null>;
+  /** The scene tree indexed by raw id, built once (see `sceneIndex`). */
+  scene?: Promise<Map<string, ElementId> | null>;
+}
+
+/** The active page id, read once per command when a context is given. */
+function pageFor(host: BundleHost, ctx?: LowerContext): Promise<PageId | null> {
+  if (!ctx) return activePageId(host);
+  return (ctx.page ??= activePageId(host));
+}
+
+/** The text frame (and its story) a batch minted, from the outcome's
+ *  `minted` list: the entry named `handle` by a `bindCreated`, else the first
+ *  text frame. (Core 0.67 reports `handle: null` even for a named element,
+ *  so the name alone cannot find it; every batch here mints one frame.) */
+function mintedFrame(
+  outcome: { minted?: readonly { handle: string | null; element: ElementId; storyId: string | null }[] },
+  handle: string,
+): { element: ElementId; storyId: string | null } | null {
+  const minted = outcome.minted ?? [];
+  return (
+    minted.find((m) => m.handle === handle) ??
+    minted.find((m) => m.element.kind === "textFrame") ??
+    null
+  );
 }
 
 /** The active page id (meta first, else the first page). */
@@ -74,19 +97,6 @@ function frameIdOf(id: ElementId): string | null {
   return null;
 }
 
-/** The string table id from an `insertTable` outcome's created element. The
- *  platform's ElementId/table-address shape is in flight (the table-content
- *  rework), so the id may be a plain string or a `{ table_id }` locator —
- *  handle both until it settles. Returns "" when neither shape is present. */
-function tableIdOf(created: ElementId): string {
-  const id = created.id as unknown;
-  if (typeof id === "string") return id;
-  if (id && typeof id === "object" && "table_id" in id) {
-    return String((id as { table_id: unknown }).table_id);
-  }
-  return "";
-}
-
 /** What a lowering records in the metadata label of the content it creates:
  *  the binding it came from, the hash of that binding's definition, and the
  *  hash of the saved session part it was lowered under. The label is written
@@ -97,15 +107,24 @@ export interface LowerStamp {
   session: string | null;
 }
 
-/** Commit a lowered dynamic table to a fresh page frame (the degraded tab-text +
- *  rules path, D-02). Returns the created frame's id, or null on any failure
- *  (mutate-never-throws: outcomes are checked, not caught). */
+/** Commit a lowered dynamic table to a fresh page frame as ONE batch — one
+ *  rebuild and one undo step: the frame, the native table in its story, every
+ *  cell, and the binding label. The batch names what it mints (C-15
+ *  `bindCreated`), so the table addresses the frame's story as `$h:frame`
+ *  and the cells address the table as `$h:table`; the ids come back in
+ *  `minted`. No hitTest (D-16) and no second read.
+ *
+ *  If core refuses the `insertTable` child (a host without native tables),
+ *  the §2.2 degradation — tab-aligned text plus drawn rules — goes into a
+ *  fresh frame instead, also as one batch. Returns the created frame's id,
+ *  or null on any failure (mutate-never-throws: outcomes are checked). */
 export async function commitLoweredTable(
   host: BundleHost,
   table: LoweredTable,
   stamp?: LowerStamp,
+  ctx?: LowerContext,
 ): Promise<string | null> {
-  const pageId = await activePageId(host);
+  const pageId = await pageFor(host, ctx);
   if (!pageId) {
     host.log.warn("lower: no page to place the data table into");
     return null;
@@ -113,63 +132,82 @@ export async function commitLoweredTable(
   const placement = defaultPlacement(pageId, table.bounds);
   const envelope = makeEnvelope({ kind: "table", region: table.region, ...(stamp ?? {}) });
   const [top, left] = placement.bounds;
+  const FRAME = "$h:frame";
+  const frameRef = { kind: "textFrame", id: FRAME } as unknown as ElementId;
+  const head: Mutation[] = [
+    { op: "insertTextFrame", args: { pageId, bounds: placement.bounds } },
+    { op: "bindCreated", args: { handle: "frame" } } as Mutation,
+  ];
+  const label = bindingMetadata(frameRef, envelope);
 
-  // Phase 1 — the frame (both the native + degraded paths attach to its story).
-  const frameOutcome = await host.document.mutate({
-    op: "insertTextFrame",
-    args: { pageId, bounds: placement.bounds },
-  });
-  if (!frameOutcome.applied || !frameOutcome.createdId) {
-    host.log.warn("lower: insertTextFrame rejected");
-    return null;
-  }
-  const createdFrame = frameOutcome.createdId;
-  const frameId = frameIdOf(createdFrame);
-  if (!frameId) {
-    host.log.warn("lower: created element is not a frame target");
-    return null;
-  }
-
-  // Resolve the new frame's story via the hitTest read door.
-  const hit = await host.document.hitTest(pageId, center(placement.bounds));
-  const storyId = hit?.storyId ?? null;
-  if (!storyId) {
-    host.log.warn("lower: could not resolve the created frame's story");
-    return frameId;
-  }
-
-  // Phase 2 — NATIVE: insert the table, then fill its cells by (tableId,row,col).
-  const tableOutcome = await host.document.mutate(tableInsertMutation(storyId, tableInsertSpec(table)));
-  const tableId = tableOutcome.applied && tableOutcome.createdId ? tableIdOf(tableOutcome.createdId) : "";
-  if (tableId) {
-    const cells = tableCellInserts(table, storyId, tableId);
-    if (cells.length > 0) {
-      const filled = await host.document.mutate({ op: "batch", args: { ops: cells } });
-      if (!filled.applied) host.log.warn("lower: native table cell fill rejected");
+  // NATIVE: frame, table, cells, label.
+  const TABLE_CHILD = head.length;
+  const native: Mutation[] = [
+    ...head,
+    tableInsertMutation(FRAME, tableInsertSpec(table)),
+    { op: "bindCreated", args: { handle: "table" } } as Mutation,
+    ...tableCellInserts(table, FRAME, "$h:table"),
+    label,
+  ];
+  let outcome = await host.document.mutate({ op: "batch", args: { ops: native } });
+  if (!outcome.applied) {
+    const child = failedBatchChild(outcome.error);
+    if (child !== TABLE_CHILD) {
+      host.log.warn(`lower: the table batch was rejected (${String(errorText(outcome.error))})`);
+      return null;
     }
-    await host.document.mutate(bindingMetadata(createdFrame, envelope));
-    await host.selection.set([createdFrame]);
-    return frameId;
+    // FALLBACK — no native table: the §2.2 degradation (D-02 fallback).
+    host.log.info("lower: insertTable unsupported — degrading to tab-text + drawn rules (D-02)");
+    const degraded: Mutation[] = [
+      ...head,
+      ...table.rules.map(
+        (r): Mutation => ({
+          op: "insertLine",
+          args: {
+            pageId,
+            start: [left + r.x1Pt, top + r.y1Pt] as [number, number],
+            end: [left + r.x2Pt, top + r.y2Pt] as [number, number],
+          },
+        }),
+      ),
+      ...(table.text.length > 0
+        ? [{ op: "insertText", args: { storyId: FRAME, offset: 0, text: table.text } } as Mutation]
+        : []),
+      label,
+    ];
+    outcome = await host.document.mutate({ op: "batch", args: { ops: degraded } });
+    if (!outcome.applied) {
+      host.log.warn(`lower: the degraded table batch was rejected (${String(errorText(outcome.error))})`);
+      return null;
+    }
   }
-
-  // FALLBACK — the host has no `insertTable`: the §2.2 degradation (tab-aligned
-  // text + drawn rules) poured into the SAME frame (D-02 fallback).
-  host.log.info("lower: insertTable unsupported — degrading to tab-text + drawn rules (D-02)");
-  const ruleOps: Mutation[] = table.rules.map((r) => ({
-    op: "insertLine",
-    args: {
-      pageId,
-      start: [left + r.x1Pt, top + r.y1Pt] as [number, number],
-      end: [left + r.x2Pt, top + r.y2Pt] as [number, number],
-    },
-  }));
-  if (ruleOps.length > 0) await host.document.mutate({ op: "batch", args: { ops: ruleOps } });
-  if (table.text.length > 0) {
-    await host.document.mutate({ op: "insertText", args: { storyId, offset: 0, text: table.text } });
+  const frame = mintedFrame(outcome, "frame")?.element ?? null;
+  const frameId = frame ? frameIdOf(frame) : null;
+  if (!frame || !frameId) {
+    host.log.warn("lower: the batch applied but did not report the frame it minted");
+    return null;
   }
-  await host.document.mutate(bindingMetadata(createdFrame, envelope));
-  await host.selection.set([createdFrame]);
+  await host.selection.set([frame]);
   return frameId;
+}
+
+/** The index of the batch child a rejected batch names, or null. Core rolls a
+ *  failed batch back and says which child failed:
+ *  `Mutation::Batch child 3 (setFieldValue): … — batch rolled back`. */
+export function failedBatchChild(error: unknown): number | null {
+  const m = /Batch child (\d+)/.exec(errorText(error));
+  return m ? Number(m[1]) : null;
+}
+
+/** A host error as text (a string, an Error, or the wire's error object). */
+function errorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error) ?? "";
+  } catch {
+    return String(error);
+  }
 }
 
 /** Read the user's text caret (C-9, `host.text.caret()`, published in
@@ -196,7 +234,9 @@ function readCaret(host: BundleHost): { storyId: string; offset: number } | null
   }
 }
 
-/** Resolve the {story, offset} a NEW variable field is inserted at.
+/** Where a NEW variable field goes: a `{story, offset}` in existing text, or
+ *  `{mint}` — a fresh text frame on that page, minted in the same batch as
+ *  the field.
  *
  *  Precedence, best first:
  *   1. **the user's caret** (C-9) — a real insertion point, which is what
@@ -209,7 +249,8 @@ function readCaret(host: BundleHost): { storyId: string; offset: number } | null
  *  edits and re-resolves live; only WHERE a new field first lands differs. */
 async function variableInsertionPoint(
   host: BundleHost,
-): Promise<{ storyId: string; offset: number } | null> {
+  ctx?: LowerContext,
+): Promise<{ storyId: string; offset: number } | { mint: PageId } | null> {
   const caret = readCaret(host);
   if (caret) {
     host.log.info(
@@ -232,43 +273,24 @@ async function variableInsertionPoint(
     }
   }
 
-  // Else mint a fresh frame on the active page and use its story.
-  //
-  // MEASURED UNDO COST — this path is TWO steps (insertTextFrame, then
-  // insertField), and `bindCreated` does NOT collapse it. `bindCreated` names a
-  // created ELEMENT id so a later op in the same batch can address it as
-  // `$h:<handle>`; but `insertField` addresses a STORY, and the story a new text
-  // frame mints is not an ElementId and has no handle spelling. There is also no
-  // read door that answers "the story of element X" without the element already
-  // existing (we resolve it by `hitTest` at the frame's centre, which needs the
-  // frame committed). So the split is structural, not sloppy. Filed as RFI D-16
-  // — created-story addressability. The selection and caret paths, which are the
-  // ones a user actually takes, are ONE step.
-  const pageId = await activePageId(host);
-  if (!pageId) return null;
-  const placement = defaultPlacement(pageId, { widthPt: 160, heightPt: 60 });
-  const frameOutcome = await host.document.mutate({
-    op: "insertTextFrame",
-    args: { pageId, bounds: placement.bounds },
-  });
-  if (!frameOutcome.applied || !frameOutcome.createdId) return null;
-  const frameId = frameIdOf(frameOutcome.createdId);
-  if (!frameId) return null;
-  const storyId = await frameStory(host, frameId);
-  return storyId ? { storyId, offset: 0 } : null;
+  // Else a fresh frame on the active page. The frame and the field go in ONE
+  // batch: `bindCreated` names the frame and a `storyId` of `$h:<name>`
+  // addresses the story it mints (C-15), so this is one undo step and needs
+  // no hitTest to find the new story (D-16, closed by core's handles).
+  const pageId = await pageFor(host, ctx);
+  return pageId ? { mint: pageId } : null;
 }
 
-/** Resolve a frame's story id via the hitTest read door (the frame's center). */
+/** Resolve an EXISTING frame's story via the hitTest read door (the frame's
+ *  center, on the frame's own page). */
 async function frameStory(host: BundleHost, frameId: string): Promise<string | null> {
   const geom = await host.document.elementGeometry([
     { kind: "textFrame", id: frameId } as ElementId,
   ]);
-  const bounds = geom[0]?.bounds;
-  if (!bounds) return null;
-  const pageId = await activePageId(host);
-  if (!pageId) return null;
-  const [top, left, bottom, right] = bounds as [number, number, number, number];
-  const hit = await host.document.hitTest(pageId, [(left + right) / 2, (top + bottom) / 2]);
+  const g = geom[0] as { bounds?: [number, number, number, number]; pageId?: string } | undefined;
+  if (!g?.bounds || !g.pageId) return null;
+  const [top, left, bottom, right] = g.bounds;
+  const hit = await host.document.hitTest(g.pageId as PageId, [(left + right) / 2, (top + bottom) / 2]);
   return hit?.storyId ?? null;
 }
 
@@ -283,12 +305,13 @@ async function frameStory(host: BundleHost, frameId: string): Promise<string | n
  *  `bindingKey` is the field key; `targetStoryId` (when supplied) pins the story
  *  — the caret still supplies the OFFSET within it when the caret is in that
  *  story (see `variableInsertionPoint` for the full precedence + the honest
- *  status of the D-01 caret residual). */
+ *  status of the D-01 caret residual). Every path is ONE mutate. */
 export async function commitLoweredVariable(
   host: BundleHost,
   variable: LoweredVariable,
   bindingKey: string,
   targetStoryId?: string | null,
+  ctx?: LowerContext,
 ): Promise<{ storyId: string; offset: number } | null> {
   if (!host.supports("document.placeholders@1")) {
     host.log.info(
@@ -297,7 +320,7 @@ export async function commitLoweredVariable(
     );
     return null;
   }
-  let point: { storyId: string; offset: number } | null;
+  let point: { storyId: string; offset: number } | { mint: PageId } | null;
   if (targetStoryId) {
     // A caller-pinned story still honors the caret's OFFSET, but only when the
     // caret is actually inside that story — using a foreign story's offset would
@@ -308,16 +331,36 @@ export async function commitLoweredVariable(
       offset: caret && caret.storyId === targetStoryId ? caret.offset : 0,
     };
   } else {
-    point = await variableInsertionPoint(host);
+    point = await variableInsertionPoint(host, ctx);
   }
   if (!point) {
     host.log.warn(`variable "${variable.target}": no target story to place the field into`);
     return null;
   }
-  const { storyId, offset } = point;
   // The HideParagraph missing policy resolves to a null value (the field shows
   // its <key> token).
   const value = variable.hidden ? null : variable.text;
+  if ("mint" in point) {
+    const placement = defaultPlacement(point.mint, { widthPt: 160, heightPt: 60 });
+    const outcome = await host.document.mutate({
+      op: "batch",
+      args: {
+        ops: [
+          { op: "insertTextFrame", args: { pageId: point.mint, bounds: placement.bounds } },
+          { op: "bindCreated", args: { handle: "frame" } } as Mutation,
+          insertFieldMutation("$h:frame", 0, bindingKey, value),
+        ],
+      },
+    });
+    const storyId = outcome.applied ? (mintedFrame(outcome, "frame")?.storyId ?? null) : null;
+    if (!storyId) {
+      host.log.warn(`variable "${variable.target}": the frame + field batch was rejected`);
+      return null;
+    }
+    host.log.info(`variable "${variable.target}" placed as field "${bindingKey}" in a new frame (story ${storyId})`);
+    return { storyId, offset: 0 };
+  }
+  const { storyId, offset } = point;
   const outcome = await host.document.mutate(insertFieldMutation(storyId, offset, bindingKey, value));
   if (!outcome.applied) {
     host.log.warn(`variable "${variable.target}": insertField rejected`);
@@ -327,30 +370,40 @@ export async function commitLoweredVariable(
   return { storyId, offset };
 }
 
-/** Resolve a raw Self id to a typed `ElementId` by walking the live scene tree
+/** Resolve a raw Self id to a typed `ElementId` from the live scene tree
  *  (§9.8). `setElementProperty` carries a KIND, and a binding payload stores
  *  only the id, so the kind has to come from the document. The scene tree is the
  *  read door that answers it; when the host has none (or the element is gone —
  *  deleted artwork), we return null and the caller SKIPS, never guessing
- *  `rectangle` and writing a property at a wrong address. */
+ *  `rectangle` and writing a property at a wrong address. With a context, the
+ *  tree is read and indexed once for every element the command resolves. */
 export async function resolveElementId(
   host: BundleHost,
   rawId: string,
+  ctx?: LowerContext,
 ): Promise<ElementId | null> {
+  const index = await (ctx ? (ctx.scene ??= sceneIndex(host)) : sceneIndex(host));
+  return index?.get(rawId) ?? null;
+}
+
+/** One pass over the live scene tree: every element by its raw id (the first
+ *  occurrence wins), or null when the host has no tree. */
+export async function sceneIndex(host: BundleHost): Promise<Map<string, ElementId> | null> {
   let roots: SceneNode[] = [];
   try {
     roots = (await host.document.tree()) as SceneNode[];
   } catch {
     return null;
   }
-  const stack: SceneNode[] = [...roots];
+  const index = new Map<string, ElementId>();
+  const stack: SceneNode[] = [...roots].reverse();
   while (stack.length > 0) {
     const node = stack.pop()!;
     const id = node.id;
-    if (id && typeof id.id === "string" && id.id === rawId) return id as ElementId;
-    if (node.children) stack.push(...node.children);
+    if (id && typeof id.id === "string" && !index.has(id.id)) index.set(id.id, id as ElementId);
+    if (node.children) for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
   }
-  return null;
+  return index;
 }
 
 /** The shape of a scene-tree node this bundle reads (the SDK type, narrowed to
@@ -376,6 +429,7 @@ export async function commitLoweredVisibility(
   host: BundleHost,
   lowered: LoweredVisibility,
   elementId?: ElementId | null,
+  ctx?: LowerContext,
 ): Promise<boolean> {
   if (lowered.visible === null) {
     host.log.info(
@@ -384,7 +438,7 @@ export async function commitLoweredVisibility(
     );
     return false;
   }
-  const target = elementId ?? (await resolveElementId(host, lowered.target));
+  const target = elementId ?? (await resolveElementId(host, lowered.target, ctx));
   if (!target) {
     host.log.warn(
       `visibility "${lowered.target}": the bound element is not in the document ` +

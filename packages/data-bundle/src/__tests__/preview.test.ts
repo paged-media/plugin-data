@@ -31,6 +31,30 @@ import type { DataEngineLike } from "../engine";
 
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
+/** A batch the fake host understands the way core does for what these tests
+ *  send: a batch that names what it mints has each child applied in order, `bindCreated` naming the frame the
+ *  previous child minted, and a `$h:` story address resolved to its story. */
+async function applyBatch(
+  m: Mutation,
+  one: (m: Mutation) => Promise<{ applied: boolean; createdId?: unknown; error?: unknown }>,
+) {
+  const ops = m.op === "batch" ? (m.args as { ops: Mutation[] }).ops : [];
+  if (!ops.some((o) => o.op === "bindCreated")) return one(m);
+  const minted: { handle: string | null; element: unknown; storyId: string | null }[] = [];
+  let last: unknown = null;
+  for (const raw of ops) {
+    if (raw.op === "bindCreated") {
+      minted.push({ handle: (raw.args as { handle: string }).handle, element: last, storyId: "story-new" });
+      continue;
+    }
+    const child = JSON.parse(JSON.stringify(raw).replace(/"\$h:frame"/g, '"story-new"')) as Mutation;
+    const out = await one(child);
+    if (!out.applied) return out;
+    if (out.createdId) last = out.createdId;
+  }
+  return { applied: true, createdId: last, pageIds: [], minted };
+}
+
 function fakeHost() {
   const mutations: Mutation[] = [];
   // The placeholder fields the host holds — insertField adds one, setFieldValue
@@ -43,7 +67,7 @@ function fakeHost() {
     selection: { get: () => [], set: async () => [] },
     network: { consentedOrigins: () => [], requestConsent: async () => ({ granted: [], denied: [] }) },
     document: {
-      mutate: async (m: Mutation) => {
+      mutate: async (batch: Mutation) => applyBatch(batch, async (m: Mutation) => {
         mutations.push(m);
         if (m.op === "insertTextFrame") {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
@@ -58,7 +82,7 @@ function fakeHost() {
           f.value = m.args.value ?? null;
         }
         return { applied: true, createdId: null, pageIds: [] };
-      },
+      }),
       placeholders: async () => fields.map((f) => ({ ...f })),
       frameChain: async () => [],
       elementGeometry: async (ids: { id: string }[]) =>

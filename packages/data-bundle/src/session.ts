@@ -72,7 +72,9 @@ import {
   commitLoweredVariable,
   commitLoweredVisibility,
   commitRule,
+  failedBatchChild,
   resolveElementId,
+  type LowerContext,
 } from "./lower";
 import {
   buildRemoteUrl,
@@ -124,6 +126,25 @@ async function readLiveChain(host: BundleHost, storyId: string): Promise<LiveFra
     };
   });
 }
+
+/** How `subscribeChainReflow` coalesces a burst of reflow events. */
+export interface ReflowOptions {
+  /** The quiet period after the last relevant event before re-paginating
+   *  (default 16 ms, about one frame). */
+  delayMs?: number;
+  /** The timer pair the debounce runs on (default: the global timers). */
+  timers?: {
+    setTimeout(fn: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
+}
+
+/** One binding's decision from the engine's `refresh_field_values`. */
+type FieldRefreshOut =
+  | { outcome: "value"; binding: string; value: string | null }
+  | { outcome: "kept"; binding: string; status: string }
+  | { outcome: "notVariable"; binding: string }
+  | { outcome: "failed"; binding: string; error?: string };
 
 /** Map an explicit IDML FittingOnEmptyFrame choice back to the engine's coarse
  *  `ImgFit` (fit/fill/crop) for the binding `policy`. The engine ImgFit is only
@@ -543,11 +564,14 @@ export interface DataSourceSession {
   paginateChain(bindingId: string, storyId: string): Promise<unknown>;
   /** D-12: subscribe to content-box reflow so a catalog flow re-paginates when
    *  its chain's frames resize. Returns a disposable; the callback fires with
-   *  the fresh paginated flow on each relevant reflow. */
+   *  the fresh paginated flow once per BURST of relevant reflows (a drag-resize
+   *  streams one per step; only the settled chain is paginated). `options`
+   *  sets the quiet period and injects the timers (tests). */
   subscribeChainReflow(
     bindingId: string,
     storyId: string,
     onRepaginate: (flow: unknown) => void,
+    options?: ReflowOptions,
   ): { dispose(): void };
   /** The §11 consent gate for remote/governed sources (D-03): review the
    *  data-source manifest (origins + purpose) and obtain per-origin consent
@@ -785,6 +809,21 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     }
   }
 
+  /** Document changes seen so far (every applied mutate, undo and redo).
+   *  A field address read at one count is valid only at that count. */
+  let docChanges = 0;
+  /** The preview's last field read, reusable while nothing but its own write
+   *  changed the document (see `previewRecord`). */
+  let previewFields: {
+    binding: string;
+    changes: number;
+    doc: number;
+    fields: PlaceholderField[];
+  } | null = null;
+
+  /** Set while `lowerAll` runs: what its lowerings share (the active page). */
+  let lowerCtx: LowerContext | undefined;
+
   /** The recipe `buildPersisted` serialised last (reused by `stampFor`). */
   let lastPayload: unknown;
 
@@ -977,27 +1016,42 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   }
 
   /** Write `value` into every given field, back to front per story, off the
-   *  addresses just read. Returns the number of writes the host applied; each
-   *  rejection is reported. */
+   *  addresses just read, as ONE mutate — one rebuild and one undo step for
+   *  the whole refresh (core applies such a batch atomically). Returns the
+   *  number of writes the host applied.
+   *
+   *  A rejected batch is rolled back whole, and core names the child that
+   *  failed ("Mutation::Batch child N"). That write is reported against its
+   *  binding and the batch is sent again without it, so one bad field does not
+   *  hold back the others (the addresses stay valid: nothing landed). A
+   *  rejection that names no child is reported against every write in it. */
   async function writeFields(
     source: SessionDiagnostic["source"],
     writes: readonly { storyId: string; offset: number; key: string; value: string | null }[],
   ): Promise<number> {
-    let applied = 0;
-    for (const w of backToFront(writes)) {
-      const out = await host.document.mutate(setFieldValueMutation(w.storyId, w.offset, w.value));
-      if (out.applied) {
-        applied += 1;
-      } else {
-        report({
-          level: "error",
-          source,
-          binding: w.key,
-          message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(out.error)})`,
-        });
+    let pending = backToFront(writes);
+    const rejected = (w: (typeof pending)[number], err: unknown) =>
+      report({
+        level: "error",
+        source,
+        binding: w.key,
+        message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(err)})`,
+      });
+    while (pending.length > 0) {
+      const ops = pending.map((w) => setFieldValueMutation(w.storyId, w.offset, w.value));
+      const out = await host.document.mutate(
+        ops.length === 1 ? ops[0]! : { op: "batch", args: { ops } },
+      );
+      if (out.applied) return pending.length;
+      const child = ops.length === 1 ? 0 : failedBatchChild(out.error);
+      if (child === null || child >= pending.length) {
+        for (const w of pending) rejected(w, out.error);
+        return 0;
       }
+      rejected(pending[child]!, out.error);
+      pending = pending.filter((_, i) => i !== child);
     }
-    return applied;
+    return 0;
   }
 
   /** The engine's sync status for a binding (`"linked"`, `"pinned"`, …), or
@@ -1040,6 +1094,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     const frames: Record<string, string> = {};
     const elements: Record<string, ElementId> = {};
 
+    // Elements without a known kind resolve from ONE scene-tree read.
+    const ctx: LowerContext = {};
     const wantsField = applies.some((a) => a.applicable && a.kind === "text");
     if (wantsField && host.supports("document.placeholders@1")) {
       try {
@@ -1067,7 +1123,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         if (!t) continue;
         const el = t.kind
           ? visibilityTarget(t.kind, t.elementId)
-          : await resolveElementId(host, t.elementId);
+          : await resolveElementId(host, t.elementId, ctx);
         if (el) elements[a.variable] = el;
       }
     }
@@ -1301,6 +1357,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   if (typeof host.document?.onDidChange === "function") {
     hostSubs.push(
       host.document.onDidChange((ev) => {
+        docChanges += 1;
         // Undo/redo can take a placed field away or bring it back; a stale
         // "placed" would make Lower skip placing it again.
         if (ev.kind === "undoApplied" || ev.kind === "redoApplied") void reconcilePlaced();
@@ -1890,7 +1947,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         }
         const lowered = e.resolve_lowered(id) as { kind?: string } | null;
         if (lowered?.kind === "table") {
-          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id));
+          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id), lowerCtx);
           if (frameId) {
             loweredInto.set(id, { kind: "textFrame", id: frameId } as ElementId);
             markDirty();
@@ -1899,7 +1956,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           // D-01: place the variable as a tagged placeholder field ONCE (keyed by
           // the binding id), then re-resolve it through the placeholders() loop.
           if (!placedVariables.has(id)) {
-            const placed = await commitLoweredVariable(host, lowered as never, id);
+            const placed = await commitLoweredVariable(host, lowered as never, id, null, lowerCtx);
             if (placed) placedVariables.add(id);
           } else {
             // Already placed — a re-lower just re-resolves the live field.
@@ -1919,7 +1976,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           // §9.8: show/hide the bound element via its own elementVisible property.
           const tgt = visibilityTargets.get(id);
           const el = tgt?.kind ? visibilityTarget(tgt.kind, tgt.elementId) : null;
-          await commitLoweredVisibility(host, lowered as never, el);
+          await commitLoweredVisibility(host, lowered as never, el, lowerCtx);
         }
         state.status = "ready";
         state.message = `Resolved + lowered "${id}".`;
@@ -1932,8 +1989,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     async lowerAll() {
       await this.refreshData();
-      for (const id of [...bindingIds]) {
-        await this.lowerBinding(id);
+      // One command: its lowerings share one read of the active page.
+      lowerCtx = {};
+      try {
+        for (const id of [...bindingIds]) {
+          await this.lowerBinding(id);
+        }
+      } finally {
+        lowerCtx = undefined;
       }
     },
 
@@ -2052,18 +2115,37 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         if (lowered?.kind === "variable") {
           const v = lowered as { hidden?: boolean; text?: string };
           const value = v.hidden ? null : (v.text ?? null);
-          // Re-read the field addresses on every step: an offset is valid only
-          // until the next edit, so a cached one writes into whatever now sits
-          // there (measured: another plugin's field, test/field-offsets-real-core).
-          const fields = await readOwnFields("preview", bindingId);
+          // An offset is valid only until the next edit, so a cached one writes
+          // into whatever now sits there (measured: another plugin's field,
+          // test/field-offsets-real-core). The addresses are re-read unless
+          // the ONLY change since the last read is this preview's own write:
+          // the document-change count moved by exactly that one mutate, and
+          // each story holds one copy of the field, so the write moved no
+          // address the next step uses.
+          const reuse =
+            previewFields?.binding === bindingId &&
+            previewFields.changes === docChanges &&
+            previewFields.doc === docEpoch;
+          const fields = reuse ? previewFields!.fields : await readOwnFields("preview", bindingId);
+          previewFields = null;
           if (fields === null) return;
           if (fields.length > 0) {
-            await writeFields(
+            const stale = fields.filter((f) => f.value !== value);
+            const before = docChanges;
+            const written = await writeFields(
               "preview",
-              fields
-                .filter((f) => f.value !== value)
-                .map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
+              stale.map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
             );
+            const oneCopyPerStory = new Set(fields.map((f) => f.storyId)).size === fields.length;
+            const onlyOurWrite = stale.length === 0 || (written === stale.length && docChanges === before + 1);
+            if (oneCopyPerStory && onlyOurWrite) {
+              previewFields = {
+                binding: bindingId,
+                changes: docChanges,
+                doc: docEpoch,
+                fields: fields.map((f) => ({ ...f, value })),
+              };
+            }
           } else if (!placedVariables.has(bindingId)) {
             // Not in the document yet: place it once (the normal lower lane).
             const placed = await commitLoweredVariable(host, lowered as never, bindingId);
@@ -2119,10 +2201,34 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       if (fields === null) return 0;
 
       const writes: { storyId: string; offset: number; key: string; value: string | null }[] = [];
-      // Resolve each binding once, however many copies of its field exist.
-      const resolved = new Map<string, { value: string | null } | "kept" | "failed">();
-      for (const f of fields) {
-        if (bindingKinds.get(f.key) !== "variable") continue; // a known variable binding
+      // Resolve each binding once, however many copies of its field exist —
+      // all of them in ONE engine call when the wasm has it.
+      const resolved = new Map<string, { value: string | null } | "kept" | "failed" | "same">();
+      const ours = fields.filter((f) => bindingKinds.get(f.key) === "variable");
+      if (typeof e.refresh_field_values === "function" && ours.length > 0) {
+        let decided: FieldRefreshOut[] = [];
+        try {
+          decided = (e.refresh_field_values([...new Set(ours.map((f) => f.key))]) as FieldRefreshOut[] | null) ?? [];
+        } catch (err) {
+          report({ level: "error", source: "refresh", message: `the engine could not resolve the fields: ${errText(err)}` });
+          return 0;
+        }
+        for (const d of decided) {
+          if (d.outcome === "value") resolved.set(d.binding, { value: d.value ?? null });
+          else if (d.outcome === "kept") resolved.set(d.binding, "kept");
+          else if (d.outcome === "notVariable") resolved.set(d.binding, "same");
+          else {
+            report({
+              level: "warn",
+              source: "refresh",
+              binding: d.binding,
+              message: `did not resolve — the field keeps its value: ${d.error ?? "unknown error"}`,
+            });
+            resolved.set(d.binding, "failed");
+          }
+        }
+      }
+      for (const f of ours) {
         let r = resolved.get(f.key);
         if (r === undefined) {
           const status = syncStatus(e, f.key);
@@ -2149,7 +2255,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           }
           resolved.set(f.key, r);
         }
-        if (r === "kept" || r === "failed") continue;
+        if (r === "kept" || r === "failed" || r === "same") continue;
         if (r.value === f.value) continue; // minimal: only changed → a write
         writes.push({ storyId: f.storyId, offset: f.offset, key: f.key, value: r.value });
       }
@@ -2183,23 +2289,74 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       return e.lower_record_flow(bindingId, chain, undefined);
     },
 
-    subscribeChainReflow(bindingId, storyId, onRepaginate) {
+    subscribeChainReflow(bindingId, storyId, onRepaginate, options) {
       // D-12: re-paginate when the chain's content boxes resize. A reflow event
       // carries ONLY a resize (never a transform, §8.5), so a transform-only
       // change is ignored — exactly the pagination consumer contract.
-      const sub = host.document.onDidChange((ev) => {
-        if (!ev.reflow) return; // resize-only; ignore pure transforms
-        void (async () => {
-          try {
-            const e = await ensureEngine();
-            const chain = await readLiveChain(host, storyId);
-            onRepaginate(e.lower_record_flow(bindingId, chain, undefined));
-          } catch (err) {
-            host.log.warn(`subscribeChainReflow(${bindingId}): ${String(err)}`);
+      //
+      // Coalesced: a drag-resize streams one event per step, and each
+      // re-pagination is a full resolve + sort of the flow, of which only the
+      // last result is ever shown. So the events of a burst only (re)arm a
+      // trailing timer; the chain is read and paginated once it is quiet. An
+      // event that arrives while a pagination runs schedules one more after it.
+      //
+      // Only THIS chain: an event for a frame that is not in the chain read
+      // last time is ignored. Any other document change may have relinked the
+      // chain, so it forgets the frame set and the next resize counts.
+      const delayMs = options?.delayMs ?? 16;
+      const timers = options?.timers ?? {
+        setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+        clearTimeout: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
+      };
+      let chainFrames: Set<string> | null = null;
+      let timer: unknown = null;
+      let running = false;
+      let again = false;
+      let disposed = false;
+      const run = async () => {
+        running = true;
+        try {
+          const e = await ensureEngine();
+          const chain = await readLiveChain(host, storyId);
+          chainFrames = new Set(chain.map((c) => c.frame));
+          if (!disposed) onRepaginate(e.lower_record_flow(bindingId, chain, undefined));
+        } catch (err) {
+          host.log.warn(`subscribeChainReflow(${bindingId}): ${String(err)}`);
+        } finally {
+          running = false;
+          if (again && !disposed) {
+            again = false;
+            schedule();
           }
-        })();
+        }
+      };
+      const schedule = () => {
+        if (running) {
+          again = true;
+          return;
+        }
+        if (timer !== null) timers.clearTimeout(timer);
+        timer = timers.setTimeout(() => {
+          timer = null;
+          void run();
+        }, delayMs);
+      };
+      const sub = host.document.onDidChange((ev) => {
+        if (!ev.reflow) {
+          chainFrames = null; // the chain may have changed; re-learn it
+          return;
+        }
+        if (chainFrames && !chainFrames.has(ev.reflow.frameId)) return; // another chain
+        schedule();
       });
-      return { dispose: () => sub.dispose() };
+      return {
+        dispose: () => {
+          disposed = true;
+          if (timer !== null) timers.clearTimeout(timer);
+          timer = null;
+          sub.dispose();
+        },
+      };
     },
 
     async requestNetworkConsent(origins, purpose) {

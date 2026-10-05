@@ -105,6 +105,11 @@ export interface DataEngineLike {
    *  the M1 slice lacks it (the session degrades honestly). */
   remote_invalidation_key?(source: string, bytes: Uint8Array): string;
   sync_state(binding: string): unknown;
+  /** The field-refresh decision per binding, in ONE call
+   *  (`[{outcome: "value"|"kept"|"notVariable"|"failed", binding, value?, error?}]`):
+   *  pinned / overridden bindings are kept without resolving. Optional: a wasm
+   *  built before it lacks it (the refresh falls back to two calls per binding). */
+  refresh_field_values?(bindings: string[]): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;
   relink(binding: string): void;
