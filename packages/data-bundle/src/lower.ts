@@ -34,6 +34,7 @@ import {
   insertFieldMutation,
   makeEnvelope,
   placeImageMutation,
+  paragraphRanges,
   placeableUri,
   ruleMutations,
   tableCellInserts,
@@ -571,10 +572,28 @@ export async function commitRule(
 ): Promise<number> {
   const application = toRuleApplication(result);
   // A table rule needs its named cell style to exist before the per-cell apply.
+  // A style picked from the document's own cell styles already does.
   if (application.apply.kind === "table" && target.kind === "tableColumn") {
-    await host.document.mutate(createRuleCellStyle(application.apply.name));
+    let exists = false;
+    try {
+      const styles = await host.document.collection<{ selfId: string }>("cellStyles");
+      exists = styles.some((st) => st.selfId === application.apply.name);
+    } catch {
+      // no collection read: mint it (idempotent at the host)
+    }
+    if (!exists) await host.document.mutate(createRuleCellStyle(application.apply.name));
   }
-  const muts = ruleMutations(application, target);
+  // A per-record paragraph rule addresses paragraphs by their live ranges.
+  let paragraphs: ReturnType<typeof paragraphRanges> = [];
+  if (target.kind === "storyParagraphs") {
+    try {
+      const story = await host.document.storyContent(target.storyId);
+      paragraphs = story ? paragraphRanges(story.paragraphs) : [];
+    } catch (err) {
+      host.log.warn(`rule (scope "${result.scope}"): the story could not be read (${String(err)})`);
+    }
+  }
+  const muts = ruleMutations(application, target, paragraphs);
   if (muts.length === 0) {
     host.log.info(
       `rule (scope "${result.scope}") fired on ${result.fires.length}/${result.total} records ` +
