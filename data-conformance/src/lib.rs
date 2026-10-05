@@ -32,9 +32,8 @@
 
 //! Conformance harness (spec §12) — the TEST-ONLY crate. The shared helpers
 //! used by the per-family / per-subsystem tier tests; the coverage gate
-//! (`bin/coverage-gate`) and an env-gated native-DuckDB differential oracle
-//! skeleton live alongside (the oracle ships at M1 with the real engine
-//! wiring — spec §12.4). Determinism: expression eval + binding resolution are
+//! (`bin/coverage-gate`) lives alongside, and `tests/oracle.rs` replays the
+//! recorded InDesign Data Merge oracle (docs/design/oracles.md). Determinism: expression eval + binding resolution are
 //! CPU/`f64` bit-stable (no GPU, no tolerance).
 
 use data_core::{FieldType, RecordSet, Schema, Value};

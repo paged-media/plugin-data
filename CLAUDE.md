@@ -206,6 +206,9 @@ pnpm validate:manifest
 node scripts/package-hash.mjs --check
 bash scripts/pubcheck.sh <packed.tgz>
 
-# Optional native-DuckDB differential oracle (CI container; not local)
-PAGED_DATA_ORACLE=1 cargo test -p data-conformance -- --ignored
+# Oracles (docs/design/oracles.md): replays run in the suites above
+# (data-conformance oracle.rs / oracle_props.rs; vitest duckdb-sql-oracle +
+# indesign-merge-duckdb). Re-recording is local only:
+DUCKDB=/path/to/duckdb-v1.1.1 node conformance/duckdb-sql/record.mjs
+bash conformance/indesign-merge/record.sh   # drives InDesign 2025
 ```
