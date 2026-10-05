@@ -426,10 +426,10 @@ mod tests {
         let at =
             |v: f64| date_time_parts(&ExcelDateTime::new(v, ExcelDateTimeType::DateTime, false));
         // 2026-03-01 18:45:15 as openpyxl writes it (just under :15).
-        assert_eq!(at(46082.781423611109), (2026, 3, 1, 18, 45, 15, 0));
+        assert_eq!(at(46_082.781_423_611_11), (2026, 3, 1, 18, 45, 15, 0));
         assert_eq!(at(46037.0 + 0.4 / 86_400.0), (2026, 1, 15, 0, 0, 0, 400));
         // 23:59:59.9999 rounds to the next midnight.
-        assert_eq!(at(46037.999_999_999), (2026, 1, 16, 0, 0, 0, 0));
+        assert_eq!(at(46_037.999_999_999), (2026, 1, 16, 0, 0, 0, 0));
         // The 1904 epoch is kept.
         let d1904 = ExcelDateTime::new(0.5, ExcelDateTimeType::DateTime, true);
         assert_eq!(date_time_parts(&d1904), (1904, 1, 1, 12, 0, 0, 0));
