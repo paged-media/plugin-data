@@ -43,11 +43,14 @@
 //! The query engine itself is the vendored DuckDB-WASM (TS side); it converts
 //! its Arrow result to a `RecordSet` JSON which `ingest_result` decodes.
 
+pub mod columns;
 pub mod core;
 pub mod import;
+pub mod review;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::columns::ColumnBuf;
     use crate::core::DataSession;
     use data_core::{BindingId, QueryId};
     use wasm_bindgen::prelude::*;
@@ -117,6 +120,102 @@ mod wasm {
             self.session
                 .ingest_result(QueryId::from(query), from_js(records)?);
             Ok(())
+        }
+
+        /// Start a typed-column ingest (the column door): `schema` is the
+        /// RecordSet schema JSON (`{fields: [{name, ty, nullable}]}`), then one
+        /// `push_*` per field in order, then `finish_columns`. Each buffer is
+        /// copied into wasm memory once; no per-cell objects cross.
+        pub fn begin_columns(
+            &mut self,
+            query: &str,
+            schema: JsValue,
+            rows: usize,
+        ) -> Result<(), JsValue> {
+            self.session
+                .begin_columns(QueryId::from(query), from_js(schema)?, rows);
+            Ok(())
+        }
+
+        /// Push a number column (`Float64Array`) + optional validity bitmap.
+        pub fn push_f64(
+            &mut self,
+            values: Vec<f64>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::F64 { values, valid })
+        }
+
+        /// Push a boolean column (`Uint8Array`, 0/1 per row).
+        pub fn push_bool(
+            &mut self,
+            values: Vec<u8>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Bool { values, valid })
+        }
+
+        /// Push a date column (`Int32Array`, days since 1970-01-01).
+        pub fn push_date(
+            &mut self,
+            values: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Date { values, valid })
+        }
+
+        /// Push a datetime column (`Float64Array`, ms since the epoch).
+        pub fn push_datetime(
+            &mut self,
+            values: Vec<f64>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::DateTime { values, valid })
+        }
+
+        /// Push a text column: one UTF-8 buffer + `Int32Array` offsets
+        /// (`rows + 1`).
+        pub fn push_utf8(
+            &mut self,
+            bytes: Vec<u8>,
+            offsets: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Utf8 {
+                bytes,
+                offsets,
+                valid,
+            })
+        }
+
+        /// Push a binary column: one buffer + `Int32Array` offsets.
+        pub fn push_binary(
+            &mut self,
+            bytes: Vec<u8>,
+            offsets: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Binary {
+                bytes,
+                offsets,
+                valid,
+            })
+        }
+
+        /// Finish the column ingest: `"unchanged"` when the buffers equal the
+        /// last column ingest for the query (nothing decoded or delivered),
+        /// else `"changed"`.
+        pub fn finish_columns(&mut self) -> Result<String, JsValue> {
+            self.session
+                .finish_columns()
+                .map(|o| o.as_str().to_string())
+                .map_err(map_err)
+        }
+
+        /// The content token (hex content hash) of a query's ingested result,
+        /// or `undefined` before an ingest. Equal tokens = equal data.
+        pub fn result_token(&self, query: &str) -> Option<String> {
+            self.session.result_token(&QueryId::from(query))
         }
 
         /// Resolve a binding and return its lowered IR.
@@ -338,9 +437,98 @@ mod wasm {
             self.session.relink(&BindingId::from(binding));
         }
 
+        /// Override one binding's formatting locale (a tag such as `"fr"`);
+        /// `null` clears the override.
+        pub fn set_binding_locale(
+            &mut self,
+            binding: &str,
+            locale: JsValue,
+        ) -> Result<(), JsValue> {
+            let locale = if locale.is_null() || locale.is_undefined() {
+                None
+            } else {
+                Some(from_js(locale)?)
+            };
+            self.session
+                .set_binding_locale(&BindingId::from(binding), locale);
+            Ok(())
+        }
+
+        /// The per-binding locale overrides (`{ binding: tag }`).
+        pub fn binding_locales(&self) -> JsValue {
+            to_js_json(self.session.binding_locales()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Record every query's current result as the one the document was
+        /// written from (the "before" of `row_diff`).
+        pub fn mark_rows_applied(&mut self) {
+            self.session.mark_rows_applied();
+        }
+
+        /// The §8 row diff per query since `mark_rows_applied`
+        /// (`QueryRowDiff[]`). `opts` is `{ keys?, ruleQueries?, limit? }`.
+        pub fn row_diff(&self, opts: JsValue) -> Result<JsValue, JsValue> {
+            let opts = if opts.is_null() || opts.is_undefined() {
+                Default::default()
+            } else {
+                from_js(opts)?
+            };
+            to_js(&self.session.row_diff(&opts))
+        }
+
+        /// Check an expression (parse error, fields read, fields the query's
+        /// result lacks).
+        pub fn check_expression(&self, src: &str, query: Option<String>) -> JsValue {
+            let q = query.map(|q| QueryId::from(q.as_str()));
+            to_js(&self.session.check_expression(src, q.as_ref())).unwrap_or(JsValue::NULL)
+        }
+
+        /// Which records a condition fires on (`{ fires, total, error? }`).
+        pub fn preview_condition(&self, query: &str, when: &str) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_condition(&QueryId::from(query), when)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// A per-record binding's display text for a record, without
+        /// re-linking it (`null` for other kinds).
+        pub fn preview_display(&self, binding: &str, record: usize) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_display(&BindingId::from(binding), record)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// Every formatting locale with formatted samples (`LocaleInfo[]`).
+        pub fn locales(&self) -> JsValue {
+            to_js(&crate::review::locale_catalog()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Wrap an expression in a display pattern (`{ kind, decimals?,
+        /// symbol?, pattern? }`).
+        pub fn format_expression(&self, inner: &str, pattern: JsValue) -> Result<String, JsValue> {
+            Ok(crate::review::format_expression(inner, from_js(pattern)?))
+        }
+
+        /// Split an expression into `{ inner, pattern }`.
+        pub fn split_expression(&self, src: &str) -> JsValue {
+            to_js(&crate::review::split_expression(src)).unwrap_or(JsValue::NULL)
+        }
+
         /// The sync report (`[{binding,status}]`).
         pub fn sync_report(&self) -> JsValue {
             to_js(&self.session.sync_report()).unwrap_or(JsValue::NULL)
+        }
+
+        /// The field-refresh decision for each named binding, in one call
+        /// (`[{outcome, binding, …}]`; see `DataSession::refresh_field_values`).
+        /// A hidden value crosses as `null`.
+        pub fn refresh_field_values(&mut self, bindings: Vec<String>) -> Result<JsValue, JsValue> {
+            let ids: Vec<BindingId> = bindings.into_iter().map(BindingId::from).collect();
+            to_js_json(&self.session.refresh_field_values(&ids))
         }
 
         /// The visible data-source manifest (§11).
@@ -449,6 +637,12 @@ mod wasm {
             let out = crate::import::xlsx_import(bytes, sheet.as_deref())
                 .map_err(|e| JsValue::from_str(&e))?;
             to_js(&out)
+        }
+    }
+
+    impl DataEngine {
+        fn push(&mut self, col: ColumnBuf) -> Result<(), JsValue> {
+            self.session.push_column(col).map_err(map_err)
         }
     }
 

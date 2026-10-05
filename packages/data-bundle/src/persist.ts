@@ -10,7 +10,9 @@
 //                 set (declarations + captured data sets). Credentials are
 //                 redacted by the engine before it gets here (§11/D-11).
 //                 Restored with `DataEngine.load_payload`.
-//   · `locale`  — the formatting locale (not part of the engine recipe).
+//   · `locale`  — the session formatting locale, a BCP 47 tag from the engine's
+//                 locale table (not part of the engine recipe; per-binding
+//                 overrides ARE in the recipe, as `engine.locales`).
 //   · `sync`    — the user's sync decisions (pinned / overridden bindings);
 //                 linked/stale/error are derived and are not saved.
 //   · `targets` — what only the host knows: the rectangle an image or barcode
@@ -98,13 +100,14 @@ export interface PersistedTargets {
 export interface PersistedSession {
   v: typeof SESSION_VERSION;
   engine: unknown;
-  locale: "en" | "de";
+  locale: string;
   sync: { binding: string; status: "pinned" | "overridden" }[];
   targets: PersistedTargets;
   data: PersistedData[];
   remote: PersistedRemote[];
-  /** Refresh policy per source; a source not named here is manual. */
-  refresh: Record<string, RefreshPolicy>;
+  /** Refresh policy per source; a source not named here is manual. Absent
+   *  in a part written before wave 6 (decodeSession fills it). */
+  refresh?: Record<string, RefreshPolicy>;
 }
 
 export function emptyTargets(): PersistedTargets {
@@ -235,7 +238,9 @@ export function decodeSession(bytes: Uint8Array): PersistedSession | { error: st
   return {
     v: SESSION_VERSION,
     engine: p.engine ?? null,
-    locale: p.locale === "de" ? "de" : "en",
+    // Any tag: the engine knows its locale table, and refuses a tag it lacks
+    // when the session applies it (reported then, not silently changed here).
+    locale: typeof p.locale === "string" && p.locale !== "" ? p.locale : "en",
     sync: Array.isArray(p.sync) ? p.sync : [],
     targets: { ...emptyTargets(), ...(p.targets ?? {}) },
     data: Array.isArray(p.data) ? p.data : [],

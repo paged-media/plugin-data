@@ -26,6 +26,7 @@ use data_core::{
     MissingPolicy, PlaceholderRef, Query, QueryId, RecordSet, ResultShape, TableOpts, Template,
     TemplateField, TemplateRef, Value,
 };
+use data_js::columns::ColumnBuf;
 use data_js::core::DataSession;
 use data_lower::FrameCapacity;
 
@@ -224,4 +225,91 @@ pub fn grouped_session(rows: usize, groups: usize) -> DataSession {
     query(&mut s, "q1");
     s.ingest_result(QueryId::from("q1"), catalog(rows, groups));
     s
+}
+
+/// A record set as the column door's typed buffers — what the bundle's
+/// `arrowToColumns` sends. Each column takes the buffer kind of its first
+/// non-null value (all-null → numbers); a value of another kind in the same
+/// column is a test-input error.
+pub fn to_columns(r: &RecordSet) -> Vec<ColumnBuf> {
+    r.columns
+        .iter()
+        .map(|col| {
+            let n = col.len();
+            let mut valid = vec![0u8; n.div_ceil(8)];
+            let mut any_null = false;
+            for (i, v) in col.iter().enumerate() {
+                if v.is_null() {
+                    any_null = true;
+                } else {
+                    valid[i >> 3] |= 1 << (i & 7);
+                }
+            }
+            let valid = any_null.then_some(valid);
+            let first = col.iter().find(|v| !v.is_null());
+            match first {
+                Some(Value::Text(_)) | Some(Value::Bytes(_)) => {
+                    let text = matches!(first, Some(Value::Text(_)));
+                    let mut bytes = Vec::new();
+                    let mut offsets = vec![0i32];
+                    for v in col {
+                        match v {
+                            Value::Text(t) => bytes.extend_from_slice(t.as_bytes()),
+                            Value::Bytes(b) => bytes.extend_from_slice(b),
+                            Value::Null => {}
+                            other => panic!("mixed column: {other:?}"),
+                        }
+                        offsets.push(bytes.len() as i32);
+                    }
+                    if text {
+                        ColumnBuf::Utf8 {
+                            bytes,
+                            offsets,
+                            valid,
+                        }
+                    } else {
+                        ColumnBuf::Binary {
+                            bytes,
+                            offsets,
+                            valid,
+                        }
+                    }
+                }
+                Some(Value::Bool(_)) => ColumnBuf::Bool {
+                    values: col
+                        .iter()
+                        .map(|v| matches!(v, Value::Bool(true)) as u8)
+                        .collect(),
+                    valid,
+                },
+                Some(Value::Date(_)) => ColumnBuf::Date {
+                    values: col
+                        .iter()
+                        .map(|v| if let Value::Date(d) = v { *d } else { 0 })
+                        .collect(),
+                    valid,
+                },
+                Some(Value::DateTime(_)) => ColumnBuf::DateTime {
+                    values: col
+                        .iter()
+                        .map(|v| {
+                            if let Value::DateTime(ms) = v {
+                                *ms as f64
+                            } else {
+                                0.0
+                            }
+                        })
+                        .collect(),
+                    valid,
+                },
+                _ => ColumnBuf::F64 {
+                    values: col
+                        .iter()
+                        .map(|v| if let Value::Number(x) = v { *x } else { 0.0 })
+                        .collect(),
+                    valid,
+                },
+            }
+        })
+        .collect()
 }

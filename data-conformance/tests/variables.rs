@@ -855,3 +855,67 @@ fn data_dataset_payload_budget_is_measured_not_guessed() {
         "a 3-variable catalog should fit hundreds of data sets, got {head_room}"
     );
 }
+
+// ── refresh_field_values: the field refresh in ONE boundary call ────────────
+
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_bind_refresh_field_values_decides_every_field_in_one_call__feat__data_bind_engine() {
+    use data_js::core::FieldRefresh;
+    let mut s = session();
+    let ids = |names: &[&str]| {
+        names
+            .iter()
+            .map(|n| BindingId::from(*n))
+            .collect::<Vec<_>>()
+    };
+
+    // A linked variable resolves to its display; a duplicate is answered once;
+    // other kinds keep their field; an unknown binding fails, reported by name.
+    let out = s.refresh_field_values(&ids(&["Name", "Photo", "Name", "Badge", "Nope"]));
+    assert_eq!(out.len(), 4);
+    assert_eq!(
+        out[0],
+        FieldRefresh::Value {
+            binding: "Name".into(),
+            value: Some("Alpha".into())
+        }
+    );
+    assert_eq!(
+        out[1],
+        FieldRefresh::NotVariable {
+            binding: "Photo".into()
+        }
+    );
+    assert_eq!(
+        out[2],
+        FieldRefresh::NotVariable {
+            binding: "Badge".into()
+        }
+    );
+    assert!(matches!(&out[3], FieldRefresh::Failed { binding, .. } if binding == "Nope"));
+
+    // §8: a pinned (or overridden) binding is kept and NOT resolved — a
+    // resolve would re-link it.
+    s.pin(&BindingId::from("Name"));
+    let out = s.refresh_field_values(&ids(&["Name"]));
+    assert_eq!(
+        out,
+        vec![FieldRefresh::Kept {
+            binding: "Name".into(),
+            status: Status::Pinned
+        }]
+    );
+    assert_eq!(
+        s.sync_state(&BindingId::from("Name")).map(|st| st.status),
+        Some(Status::Pinned)
+    );
+    s.mark_overridden(&BindingId::from("Name"));
+    assert!(matches!(
+        s.refresh_field_values(&ids(&["Name"]))[0],
+        FieldRefresh::Kept {
+            status: Status::Overridden,
+            ..
+        }
+    ));
+}

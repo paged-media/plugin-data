@@ -53,7 +53,6 @@ import {
   sessionOver,
   undoMark,
   undoSteps,
-  undoStepsSince,
   type CountedDuck,
   type CountedEngine,
   type Measured,
@@ -122,20 +121,27 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     duckQueries: 0,
   };
   // Wave 4 (persistence): +1 parts.write (the session part), +1 supports, +1 log; +1 payload +1 sync_report to build it (one payload, shared with the lowered label's definition hash).
+  // Wave 2: frame + table + cells + label are ONE batch addressed by C-15
+  // handles (`$h:frame`, `$h:table`), and the minted frame comes back in
+  // `minted` — no hitTest (D-16). hostCalls 11 → 7, reads 3 → 2, mutates
+  // 4 → 1, undo steps 4 → 1.
+  // Column door (Wave 2): the result crosses as typed column buffers — begin + one push per column + finish (+4 wasm calls) instead of 1 500 `{t, v}` cells (cellsIn 0; bytes in 41.5 KB → 16.9 KB).
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   // Wave 6 (query guard): +1 DuckDB statement — the first refresh asks DuckDB's
   // parser about the query once (`json_serialize_sql`, query/sql.ts guardQuery).
   const W1_LOWER: Measured = {
-    hostCalls: 11,
-    hostReads: 3,
-    mutates: 4,
+    hostCalls: 7,
+    hostReads: 2,
+    mutates: 1,
     mutationOps: 1506,
-    undoSteps: 4,
+    undoSteps: 1,
     placeholdersRead: 0,
-    wasmCalls: 4,
-    cellsIn: 1500,
+    wasmCalls: 9,
+    cellsIn: 0,
     resolves: 1,
     stabilizeCalls: 1,
-    keyAllocs: 9840,
+    // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
+    keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 2,
   };
@@ -170,11 +176,13 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     const lowerWork = work.snapshot();
     const bytes = { bytesIn: engine.log.bytesIn, bytesOut: engine.log.bytesOut };
     const pre = measure(lowerWork, engine, d, null);
-    // Behaviour: one table of 501 rows (header + 500) × 3, every cell filled.
-    const insert = lowerWork.mutations.find((m) => m.op === "insertTable");
-    expect(insert).toBeTruthy();
-    expect(lowerWork.mutations.some((m) => m.op === "batch" && m.ops === 501 * 3)).toBe(true);
+    // Behaviour: one table of 501 rows (header + 500) × 3, every cell filled —
+    // the frame, the table, 1,503 cells and the label in ONE batch (the two
+    // bindCreated names are not counted), which applied: the minted frame is
+    // selected.
+    expect(lowerWork.mutations.map((m) => `${m.op}(${m.ops})`)).toEqual([`batch(${2 + 501 * 3 + 1})`]);
     expect(s.getState().status).toBe("ready");
+    expect(h.host.selection.get().map((e) => e.kind)).toEqual(["textFrame"]);
     const undo = await undoSteps(h, mark);
     const low = { ...pre, undoSteps: undo };
     report("W1.lower-table-500", low, { ms: lowerMs, ...bytes, detail: {} }, lowerWork, engine);
@@ -184,17 +192,21 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
 
   // ── W2: refresh 100 fields in one story ───────────────────────────────────
   // AS FOUND: one placeholders() read, then ONE awaited setFieldValue mutate
-  // per changed field — 100 rebuilds and 100 undo steps for one refresh.
-  // (Measured beside it: today's core applies a back-to-front BATCH of
-  // setFieldValue ops atomically as one step — see the probe below.)
+  // per changed field — 100 rebuilds and 100 undo steps for one refresh, and
+  // two wasm calls per field (sync_state + resolve_lowered).
+  // Wave 2: the writes are ONE back-to-front batch (one rebuild, one undo
+  // step), and the engine decides every field in ONE `refresh_field_values`
+  // call. hostCalls 102 → 3, mutates 100 → 1, undo 89 (unreachable) → 1,
+  // wasm calls 200 → 1.
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W2: Measured = {
-    hostCalls: 102,
+    hostCalls: 3,
     hostReads: 1,
-    mutates: 100,
+    mutates: 1,
     mutationOps: 100,
-    undoSteps: 89,
+    undoSteps: 1,
     placeholdersRead: 100,
-    wasmCalls: 200,
+    wasmCalls: 2,
     cellsIn: 0,
     resolves: 100,
     stabilizeCalls: 0,
@@ -217,16 +229,21 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     for (let i = 0; i < N; i++) s.addVariableBinding(`v${i}`, "anchor", "q1", `c${i}`);
     await s.refreshData();
     // The fields are already in ONE story, stale ("x"), separated by spaces.
+    // The spaces go in first and each field is inserted INTO them: a space
+    // inserted at a field's start would join the field's run (the core
+    // defect pinned in field-offsets-real-core.spec.ts), and the field write
+    // would then erase it. (The Wave 1 fixture did that; its "89 undo steps,
+    // history exhausted" was that defect, not a bounded history.)
     const story = await newStory(h, [100, 100, 600, 500]);
+    await h.host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: " ".repeat(N - 1) } });
     for (let i = N - 1; i >= 0; i--) {
       const ins = await h.host.document.mutate({
         op: "insertField",
-        args: { storyId: story, offset: 0, field: { placeholder: { plugin: PLUGIN, key: `v${i}`, value: "x" } } },
+        args: { storyId: story, offset: i, field: { placeholder: { plugin: PLUGIN, key: `v${i}`, value: "x" } } },
       } as never);
       expect(ins.applied).toBe(true);
-      if (i > 0) await h.host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: " " } });
     }
-    expect((await ourFields(h)).length).toBe(N);
+    expect((await ourFields(h)).map((f) => f.key)).toEqual(Array.from({ length: N }, (_, i) => `v${i}`));
 
     const mark = await undoMark(h);
     resetAll(work, engine, d);
@@ -241,30 +258,42 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     expect(written).toBe(N);
     const after = await ourFields(h);
     expect(after.every((f) => f.value === `value-${f.key.slice(1)}`)).toBe(true);
-    // AS FOUND: 100 separate steps — more than the engine's bounded undo
-    // history reaches: the walk runs out after 89 undos, before it gets back to the mark,
-    // so the user cannot undo back past the refresh at all. The pin is the
-    // reachable count; the one-batch refresh brings it to 1, reached.
-    const walk = await undoStepsSince(h, mark);
-    const m = { ...pre, undoSteps: walk.steps };
-    report("W2.refresh-100-fields", m, { ms, ...bytes, detail: { undoReached: walk.reached } }, snap, engine);
+    // ...and the separators between them survived the writes.
+    const text = await h.host.document.storyContent(story);
+    expect(text?.paragraphs.map((p) => p.runs.map((r) => r.text).join("")).join("")).toBe(
+      Array.from({ length: N }, (_, i) => `value-${i}`).join(" "),
+    );
+    // One undo step takes the whole refresh back.
+    const m = { ...pre, undoSteps: await undoSteps(h, mark) };
+    expect((await ourFields(h)).every((f) => f.value === "x")).toBe(true);
+    report("W2.refresh-100-fields", m, { ms, ...bytes, detail: {} }, snap, engine);
     expectBudget("W2", m, W2);
   });
 
   // ── W3: preview-step 20 records ───────────────────────────────────────────
   // AS FOUND: every step re-reads ALL placeholders (the offset is valid only
   // until the next edit) and writes one setFieldValue — one undo step per step.
+  // Wave 2: the field read is re-used while the document-change count shows
+  // the preview's own write as the only change (one copy per story, so the
+  // write moved no address): one read for the 20 steps. hostCalls 40 → 21,
+  // reads and fields read 20 → 1. One write per step stays — each step is
+  // its own preview state, one undo step each.
   const W3: Measured = {
-    hostCalls: 40,
-    hostReads: 20,
+    hostCalls: 21,
+    hostReads: 1,
     mutates: 20,
     mutationOps: 20,
     undoSteps: 20,
-    placeholdersRead: 20,
+    placeholdersRead: 1,
     wasmCalls: 20,
     cellsIn: 0,
     resolves: 20,
-    stabilizeCalls: 0,
+    // RAISED 0 → 1, the one budget that went up (oracle defect DP-4): record N
+    // was record N of DuckDB's DELIVERY order, so the same rows delivered in
+    // another order previewed a different record. Record N is now record N of
+    // the stabilized order — one sort per result content, cached, shared by
+    // all 20 steps (and by every table / flow over the same result).
+    stabilizeCalls: 1,
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
@@ -302,13 +331,14 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // ── W4: one QR barcode lower ──────────────────────────────────────────────
   // AS FOUND: the frame box is read once, the symbol is ONE batch of
   // insertPath modules (one undo step) — the batching is already right; the
-  // cost is the module count (one path per dark module).
+  // cost is the module count (one path per dark module). 673 since the DB-2
+  // fix (format information, dark module): the symbol, not the work, changed.
   // Wave 4 (persistence): +1 parts.write, +1 log; +1 payload +1 sync_report to build the session part.
   const W4: Measured = {
     hostCalls: 8,
     hostReads: 4,
     mutates: 1,
-    mutationOps: 670,
+    mutationOps: 673,
     undoSteps: 1,
     placeholdersRead: 0,
     wasmCalls: 3,
@@ -357,17 +387,24 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 20 variables places its field in a FRESH frame: meta + pages + insertText-
   // Frame + elementGeometry + meta + hitTest + insertField — two undo steps
   // and five reads per variable (D-16: the minted story is not addressable).
+  // Wave 2: the active page is read once per command (meta + collection),
+  // and each variable's frame + field are ONE batch whose `storyId` is
+  // `$h:frame` (C-15) — no elementGeometry, no hitTest (D-16). Per variable:
+  // 2 supports, selection.get, one mutate, one log. hostCalls 240 → 102,
+  // reads 120 → 2, mutates 40 → 20, undo steps 40 → 20.
+  // Column door (Wave 2): begin + per-column push + finish replace one `{t, v}` ingest of 150 cells.
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   // Wave 6 (query guard): +1 DuckDB statement — `json_serialize_sql` once for the
   // one query on its first refresh (query/sql.ts guardQuery).
   const W5: Measured = {
-    hostCalls: 240,
-    hostReads: 120,
-    mutates: 40,
+    hostCalls: 102,
+    hostReads: 2,
+    mutates: 20,
     mutationOps: 40,
-    undoSteps: 40,
+    undoSteps: 20,
     placeholdersRead: 0,
-    wasmCalls: 21,
-    cellsIn: 150,
+    wasmCalls: 26,
+    cellsIn: 0,
     resolves: 20,
     stabilizeCalls: 0,
     keyAllocs: 0,

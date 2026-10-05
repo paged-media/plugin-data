@@ -42,8 +42,9 @@ use crate::Resolved;
 pub struct RowDelta {
     /// Indices into `new` whose key did not exist in `old`.
     pub inserted: Vec<usize>,
-    /// Keys present in `old` but not in `new`.
-    pub removed: Vec<String>,
+    /// Indices into `old` whose key does not exist in `new` (ascending) — the
+    /// removed rows themselves, so a report can name them by their values.
+    pub removed: Vec<usize>,
     /// Indices into `new` whose key existed but whose row content changed.
     pub updated: Vec<usize>,
     /// Count of rows whose key existed and content was identical.
@@ -60,10 +61,10 @@ pub fn diff(old: &RecordSet, new: &RecordSet, key_fields: &[String]) -> RowDelta
     let old_keys = key_cols(old, key_fields);
     let new_keys = key_cols(new, key_fields);
 
-    // old: key → (content, present-in-new?)
-    let mut old_map: HashMap<String, String> = HashMap::with_capacity(old.row_count);
+    // old: key → (old row index, content)
+    let mut old_map: HashMap<String, (usize, String)> = HashMap::with_capacity(old.row_count);
     for row in 0..old.row_count {
-        old_map.insert(row_key(old, row, &old_keys), row_content(old, row));
+        old_map.insert(row_key(old, row, &old_keys), (row, row_content(old, row)));
     }
 
     let mut delta = RowDelta::default();
@@ -73,7 +74,7 @@ pub fn diff(old: &RecordSet, new: &RecordSet, key_fields: &[String]) -> RowDelta
         seen.insert(key.clone(), ());
         match old_map.get(&key) {
             None => delta.inserted.push(row),
-            Some(old_content) => {
+            Some((_, old_content)) => {
                 if *old_content == row_content(new, row) {
                     delta.unchanged += 1;
                 } else {
@@ -82,9 +83,9 @@ pub fn diff(old: &RecordSet, new: &RecordSet, key_fields: &[String]) -> RowDelta
             }
         }
     }
-    for key in old_map.keys() {
+    for (key, (row, _)) in &old_map {
         if !seen.contains_key(key) {
-            delta.removed.push(key.clone());
+            delta.removed.push(*row);
         }
     }
     delta.removed.sort();
@@ -324,7 +325,7 @@ mod tests {
         assert_eq!(delta.unchanged, 1); // a
         assert_eq!(delta.updated, vec![1]); // b at new index 1
         assert_eq!(delta.inserted, vec![2]); // d at new index 2
-        assert_eq!(delta.removed, vec!["3:c\u{1f}".to_string()]);
+        assert_eq!(delta.removed, vec![2]); // c, old index 2
     }
 
     #[test]

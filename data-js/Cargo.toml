@@ -17,6 +17,7 @@ workspace = true
 data-core = { path = "../data-core" }
 data-sources = { path = "../data-sources" }
 data-bind = { path = "../data-bind" }
+data-expr = { path = "../data-expr" }
 data-lower = { path = "../data-lower" }
 data-barcode = { path = "../data-barcode" }
 data-dataset = { path = "../data-dataset" }

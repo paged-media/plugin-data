@@ -69,19 +69,19 @@ tolerance is zero. The lane also checks the following, all exactly:
 - Decimals agree at every width, which shows the decimal-scale fix holds.
 - UTF-8, quoting, ordering and NULL handling agree.
 
-**Defects pinned:**
+**Defects found, all FIXED in Wave 2** (`src/query/recordset.ts` now reads Arrow's raw
+buffers by type id, and `src/query/duckdb.ts` casts the types without a data-core kind to
+VARCHAR in SQL):
 
-- **DQ-1.** DATE cells arrive as epoch milliseconds, not days. `data-js` then rejects the whole
-  result (`expected i32`), so any query with a DATE column cannot be ingested.
-- **DQ-2.** A TIMESTAMP column with no nulls is read by `toArray()` in its storage unit: µs for
-  TIMESTAMP, s for `_S`, ns for `_NS`. The same column with one null is read row by row and
-  comes out right.
-- **DQ-3.** HUGEINT is classified `float`.
-- **DQ-4.** The types without a data-core kind are read wrongly:
-  - TIME arrives as raw µs text;
-  - INTERVAL, LIST and STRUCT are classified `int` by a substring match, then read as null
-    numbers;
-  - BLOB becomes the text `"97,98"`.
+- **DQ-1.** DATE cells arrived as epoch milliseconds, not days, and `data-js` rejected the whole
+  result (`expected i32`). The DateDay buffer is days and is now read directly.
+- **DQ-2.** A TIMESTAMP column with no nulls was read in its storage unit (µs, or s / ns for
+  `_S` / `_NS`). The buffer is now floored to ms by its unit.
+- **DQ-3.** HUGEINT (an Arrow Decimal(38, 0)) was classified `float`. It is `int` now; a
+  declared DECIMAL(38, 0) reads the same way, and its values are integers too.
+- **DQ-4.** TIME, INTERVAL, LIST and STRUCT (and MAP, UNION, DURATION) cross as DuckDB's own
+  text: when a result has such a column, the handle re-runs the query with exactly those
+  columns cast to VARCHAR. BLOB crosses as bytes.
 
 **Re-recording.** The CLI must be the engine inside the vendored duckdb-wasm. For
 `@duckdb/duckdb-wasm` 1.29.0 that is v1.1.1 (`af39bd0dcf`): download
@@ -207,7 +207,10 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 - **DM-6.** A record-flow template has no image field.
 - **DM-7.** The record height is not measured text, so an overset record is not flagged.
 - **DM-8.** A CSV column that DuckDB sniffs as DOUBLE loses its trailing zeros (`1234.50` prints
-  as `1234.5`). Data Merge prints the field text.
+  as `1234.5`). Data Merge prints the field text. PARTLY FIXED (Wave 2): a DECIMAL(p, s) column
+  now carries its scale (`Field.scale`), and a bare reference to it displays `1234.50`. A
+  DOUBLE-sniffed CSV column has no scale left to carry, so this lane stays pinned until the CSV
+  import keeps the text or declares the column type (a sources change).
 
 ## 3. Property lane
 
@@ -220,27 +223,39 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 | `diff(old, new)` applied to old yields new | `data.bind.engine` |
 | the payload survives save → JSON → load → save unchanged | `data.plugin.bundle` |
 | a second resolve and a second change report without a data change are no-ops | `data.bind.change-report` |
-| EAN-13 (first digit 0) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
+| EAN-13 (every first digit) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
+| Code-128 (printable ASCII and digit runs that switch B↔C) decodes back | `data.barcode.symbology` |
+| QR (byte mode, level M, 1–213 bytes, so versions 1–10) decodes back with `rqrr` | `data.barcode.symbology` |
 
 QR is decoded with `rqrr`, an independent decoder (MIT OR Apache-2.0, a dev-dependency only).
 The harness was first validated on a reference matrix from python `qrcode`. Code-128 has no
-independent decoder here, because no small, permissive, pure-Rust one exists.
+small, permissive, pure-Rust decoder, so the test carries its own. It reads the bar and space
+widths, looks them up in the published ISO/IEC 15417 width table (a different form from the
+encoder's module strings), checks the mod-103 check symbol, and runs code sets A, B and C. The
+published "Wikipedia" vector anchors it, and it rejects a symbol with one module flipped.
 
 **Defects pinned** as `defect_*` tests:
 
-- **DB-1.** EAN-13 G-parity symbols are written inverted: digit 0 comes out as `1011000`, not
-  `0100111`. Every EAN-13 whose first digit is not 0 is therefore unscannable. UPC-A is
-  unaffected.
-- **DB-2.** QR symbols do not decode. Their data modules match a reference encoder with the same
-  version, level and mask, but 9 format-information and dark-module modules differ.
-- **DP-1.** Dates and times before 1970 stabilize after later ones, because of big-endian
-  two's-complement byte keys.
-- **DP-2.** An f64 in the payload drifts by one ulp through serde_json, which is built without
-  `float_roundtrip`. The wasm boundary is exact.
-- **DP-3.** `RowDelta.removed` holds internal key encodings (`"3:k2\u{1f}"`), so a change report
-  cannot name the rows it removed.
-- **DP-4.** A variable binding follows the delivery order, so the same rows delivered in
-  another order report a change.
+- **DB-1 (fixed).** EAN-13 G-parity symbols were written inverted: digit 0 came out as
+  `1011000`, not `0100111`, so every EAN-13 whose first digit is not 0 was unscannable. G is now
+  R reversed, per the GS1 table. The EAN-13 property draws every first digit, and
+  `data_db1_*` keeps the GS1 worked example as a regression.
+- **DB-2 (fixed).** QR symbols did not decode. Their data modules matched a reference encoder
+  with the same version, level and mask, but the format information was written bit-reversed
+  and the dark module was cleared. Versions 7–10 also lacked their version information. All
+  three now follow ISO/IEC 18004. The QR property decodes every payload with `rqrr`. A data-barcode
+  unit test decodes every version (1–10) under every mask (0–7), and the matrices match python
+  `qrcode` module for module (checked once, 80 of 80).
+- **DP-1.** FIXED (Wave 2): dates and times before 1970 stabilized after later ones, because of
+  big-endian two's-complement byte keys. The sort key now flips the sign bit.
+- **DP-2 (fixed).** An f64 in the payload drifted by one ulp through serde_json, which was built
+  without `float_roundtrip`. The workspace now enables it (+8 bytes of wasm). The payload
+  property draws any finite f64. The wasm boundary was always exact.
+- **DP-3.** FIXED (Wave 2): `RowDelta.removed` held internal key encodings (`"3:k2\u{1f}"`), so a
+  change report could not name the rows it removed. It now holds their indices in `old`.
+- **DP-4.** FIXED (Wave 2): a variable binding followed the delivery order, so the same rows
+  delivered in another order reported a change. Record N is now record N of the stabilized
+  order, for every per-record kind.
 
 ## Feature links
 

@@ -40,10 +40,12 @@ pub mod eval;
 pub mod families;
 pub mod lexer;
 pub mod parser;
+pub mod pattern;
 
 pub use ctx::{EvalCtx, RecordCtx, SimpleCtx};
 pub use eval::eval;
 pub use parser::{parse, ParseError};
+pub use pattern::{apply_format, field_refs, split_format, FormatSpec};
 
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/dispatch.rs"));

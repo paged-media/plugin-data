@@ -190,6 +190,21 @@ impl From<bool> for Value {
 /// Shortest round-trip-ish display for a finite `f64`: integers print without a
 /// decimal point; non-finite values render as their error code. Bit-stable
 /// (no locale, no rounding heuristics) so re-resolution is idempotent.
+/// A number displayed with exactly `scale` digits after the point (a
+/// DECIMAL(p, s) field's own rendering: `1234.50`). Non-finite values display
+/// as `#NUM`, like [`Value::as_display`]; a negative zero as `0.00`.
+pub fn fmt_number_scaled(n: f64, scale: u8) -> String {
+    if !n.is_finite() {
+        return "#NUM".to_string();
+    }
+    let s = format!("{:.*}", scale as usize, n);
+    if s.starts_with('-') && s[1..].bytes().all(|b| b == b'0' || b == b'.') {
+        s[1..].to_string()
+    } else {
+        s
+    }
+}
+
 fn fmt_number(n: f64) -> String {
     if !n.is_finite() {
         return "#NUM".to_string();

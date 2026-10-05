@@ -10,7 +10,29 @@
   provenance:
     [
       "session locale threads engine -> EvalCtx -> the format kernels; de = '.' grouping / ',' decimal / '€' trailing / DD.MM.YYYY; canonical value form stays locale-free",
-      "breadth follow-up (NOT a sweep add): locale data is a hardcoded match on the FROZEN data-core Locale enum (decimal_sep/group_sep/currency/date_pattern), not a registry table — adding a locale is a variant + 4 arms + a payload-serde-affecting frozen-type amendment via the orchestrator. The clean shape table-ifies the per-variant match into a locale registry FIRST (locales become additive rows like the fn table), THEN adds fr/es/it; deferred to a locale wave, base-idea §9.1",
+      "breadth follow-up DONE (2026-10-05, wave 7): the per-variant match became the data-core LOCALES table; see data.i18n.locale-table",
     ]
   tests:
     rust: ["data-conformance/tests/locale.rs::data_i18n_locale"]
+
+- id: data.i18n.locale-table
+  title: Table-driven locales (en, de, en-GB, de-AT, de-CH, fr, it, es, nl), per-binding override, per-field patterns (§9.1)
+  spec: plugin-data data-core/src/locale.rs (LOCALES) + data-expr/src/pattern.rs + data-js review.rs
+  status: implemented
+  provenance:
+    [
+      "a locale is a ROW (decimal, group, minimumGroupingDigits, currency symbol + pattern, date pattern) with the CLDR values cited in the table; en/de keep their pre-table output (ISO date; ASCII space before EUR)",
+      "per-binding locale override saved in the payload (`locales`, omitted when empty); canonical value and resolve stamps stay locale-free",
+      "per-field display patterns are the binding's own expression wrapped in NUMBER/CURRENCY/PERCENT/DATEFMT (apply_format / split_format round-trip)",
+    ]
+  tests:
+    rust:
+      - "data-conformance/tests/locale.rs::data_i18n_locale_table_rows__feat__data_i18n_locale_table"
+      - "data-conformance/tests/locale.rs::data_i18n_locale_min_grouping__feat__data_i18n_locale_table"
+      - "data-conformance/tests/locale.rs::data_i18n_locale_stamp_is_locale_free__feat__data_i18n_locale_table"
+      - "data-conformance/tests/sync_review.rs::data_i18n_binding_locale_override__feat__data_i18n_locale_table"
+      - "data-conformance/tests/sync_review.rs::data_i18n_format_patterns_and_catalog__feat__data_i18n_locale_table"
+    vitest:
+      - "packages/data-bundle/src/__tests__/sync-panel.test.ts"
+      - "packages/data-bundle/src/__tests__/review.test.ts"
+      - "packages/data-bundle/test/sync-review-real-core.spec.ts"

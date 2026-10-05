@@ -35,6 +35,16 @@ import type {
   DataSourceSession,
   RecordFlowPreview,
 } from "../session";
+import type {
+  BindingSync,
+  ConditionPreview,
+  ExprCheck,
+  FormatPattern,
+  LocaleInfo,
+  QueryRowDiff,
+  StyleOption,
+  SyncStatus,
+} from "../review";
 import { DiagnosticsList } from "./diagnostics";
 import { useSessionSnapshot } from "./use-session";
 
@@ -57,6 +67,73 @@ const RULE_ACTIONS: { value: "characterStyle" | "paragraphStyle" | "tableStyle";
   { value: "paragraphStyle", label: "paragraph style" },
   { value: "tableStyle", label: "cell style (table column)" },
 ];
+
+/** The document style collection each rule action picks from. */
+const RULE_STYLE_KIND = {
+  characterStyle: "character",
+  paragraphStyle: "paragraph",
+  tableStyle: "cell",
+} as const;
+
+/** How the engine's sync statuses read in the panel (ADR 553). */
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  linked: "synced",
+  stale: "stale",
+  pinned: "pinned",
+  overridden: "overridden",
+  error: "error",
+};
+const SYNC_COLOR: Record<SyncStatus, string> = {
+  linked: "var(--status-ok, #2a2)",
+  stale: "var(--status-warn, #c80)",
+  pinned: "var(--pg-muted-fg, #999)",
+  overridden: "var(--status-warn, #c80)",
+  error: "var(--status-error, #c33)",
+};
+
+/** The display patterns a variable field can take. */
+const FORMAT_KINDS: { value: FormatPattern["kind"]; label: string }[] = [
+  { value: "plain", label: "as is" },
+  { value: "number", label: "number" },
+  { value: "currency", label: "currency" },
+  { value: "percent", label: "percent" },
+  { value: "date", label: "date" },
+];
+
+/** A pattern draft as the format editor edits it. */
+interface FormatDraft {
+  kind: FormatPattern["kind"];
+  decimals: string;
+  symbol: string;
+  date: string;
+  locale: string;
+}
+
+function draftFrom(b: BindingSync): FormatDraft {
+  const p = b.format?.pattern ?? { kind: "plain" };
+  return {
+    kind: p.kind,
+    decimals: "decimals" in p ? String(p.decimals) : "2",
+    symbol: p.kind === "currency" ? (p.symbol ?? "") : "",
+    date: p.kind === "date" ? (p.pattern ?? "") : "",
+    locale: b.locale ?? "",
+  };
+}
+
+function patternFrom(d: FormatDraft): FormatPattern {
+  const decimals = Math.max(0, Math.min(10, Number.parseInt(d.decimals, 10) || 0));
+  switch (d.kind) {
+    case "number":
+    case "percent":
+      return { kind: d.kind, decimals };
+    case "currency":
+      return d.symbol.trim() ? { kind: "currency", decimals, symbol: d.symbol.trim() } : { kind: "currency", decimals };
+    case "date":
+      return d.date.trim() ? { kind: "date", pattern: d.date.trim() } : { kind: "date" };
+    default:
+      return { kind: "plain" };
+  }
+}
 
 const VISIBILITY_KINDS: readonly string[] = [
   "textFrame",
@@ -145,12 +222,84 @@ export function makeBindingsPanel(
     const [chosen, setChosen] = useState<Set<string>>(new Set());
     // §8 change report: "what changed since last sync".
     const [changes, setChanges] = useState<ChangeReport | null>(null);
+    // §8 row diff since the document was last written from the data.
+    const [rowDiff, setRowDiff] = useState<QueryRowDiff[] | null>(null);
+    // Sync state per binding (ADR 553) and the per-binding decisions.
+    const [syncRows, setSyncRows] = useState<BindingSync[] | null>(null);
+    const [locales, setLocales] = useState<LocaleInfo[]>([]);
+    const [formatOpen, setFormatOpen] = useState<string | null>(null);
+    const [draft, setDraft] = useState<FormatDraft | null>(null);
+    const [formatPreview, setFormatPreview] = useState<string | null>(null);
+    // The rule editor (D-13): styles to pick from, the condition check, the
+    // firing preview, and where in a story the style lands.
+    const [ruleStyles, setRuleStyles] = useState<StyleOption[]>([]);
+    const [ruleCheck, setRuleCheck] = useState<ExprCheck | null>(null);
+    const [rulePreview, setRulePreview] = useState<ConditionPreview | null>(null);
+    const [ruleScope, setRuleScope] = useState<"story" | "paragraphs">("story");
+
+    /** Re-read every binding's sync state, locale and pattern. */
+    async function reloadSync(): Promise<void> {
+      const rows = (await session.bindingSync()) ?? null;
+      setSyncRows(rows);
+      if (locales.length === 0) setLocales((await session.locales()) ?? []);
+      refresh();
+    }
+
+    /** Run a per-binding decision, then show the states it left. */
+    async function decide(run: () => Promise<unknown>): Promise<void> {
+      await run();
+      await reloadSync();
+    }
+
+    /** The document's styles for a rule action (the selfId is what applies). */
+    async function loadRuleStyles(action: (typeof RULE_ACTIONS)[number]["value"]): Promise<void> {
+      const styles = (await session.documentStyles(RULE_STYLE_KIND[action])) ?? [];
+      setRuleStyles(styles);
+      if (styles.length > 0 && !styles.some((st) => st.selfId === ruleStyle)) {
+        setRuleStyle(styles[0].selfId);
+      }
+      refresh();
+    }
+
+    /** Check the condition and list which records it fires on. */
+    async function previewRule(): Promise<void> {
+      const when = bindField.trim();
+      const check = (await session.checkExpression(when, "q_all")) ?? null;
+      setRuleCheck(check);
+      setRulePreview(check && check.ok ? ((await session.previewCondition("q_all", when)) ?? null) : null);
+      refresh();
+    }
+
+    /** Open a variable binding's format editor. */
+    function openFormat(b: BindingSync): void {
+      setFormatOpen(formatOpen === b.id ? null : b.id);
+      setDraft(draftFrom(b));
+      setFormatPreview(null);
+      refresh();
+    }
+
+    /** Apply the drafted pattern and locale, then preview the field. */
+    async function applyFormat(id: string): Promise<void> {
+      if (!draft) return;
+      await session.setBindingFormat(id, patternFrom(draft));
+      await session.setBindingLocale(id, draft.locale === "" ? null : draft.locale);
+      setFormatPreview((await session.previewBinding(id, 0)) ?? null);
+      await reloadSync();
+    }
 
     /** Refresh the data, then show the per-binding change report (§8). */
     async function refreshAndReport(): Promise<void> {
       await session.refreshData();
       const report = await session.refreshDiff();
       setChanges(report);
+      setRowDiff((await session.rowDiff()) ?? []);
+      await reloadSync();
+    }
+
+    /** Match a query's rows by another key, and diff again. */
+    async function rekey(query: string, column: string): Promise<void> {
+      session.setDiffKey(query, column === "" ? null : [column]);
+      setRowDiff((await session.rowDiff()) ?? []);
       refresh();
     }
 
@@ -269,16 +418,28 @@ export function makeBindingsPanel(
       }
       if (!caret) return null;
       let end = caret.offset;
+      // The paragraph the caret is in: with "one paragraph per record", record
+      // 0 is that paragraph, record 1 the next, and so on. Offsets count run
+      // text only (core: a paragraph break is not a character).
+      let caretParagraph = 0;
       try {
         const story = await host.document.storyContent(caret.storyId);
         if (story) {
-          end = story.paragraphs.reduce(
-            (n, p) => n + p.runs.reduce((m, r) => m + [...r.text].length, 0),
-            0,
-          );
+          let at = 0;
+          story.paragraphs.forEach((p, i) => {
+            const len = p.runs.reduce((m, r) => m + [...r.text].length, 0);
+            if (caret!.offset >= at && caret!.offset <= at + len && caretParagraph === 0) {
+              caretParagraph = i;
+            }
+            at += len;
+          });
+          end = at;
         }
       } catch {
         // no story read: the range ends at the caret
+      }
+      if (ruleScope === "paragraphs") {
+        return { kind: "storyParagraphs", storyId: caret.storyId, firstParagraph: caretParagraph };
       }
       return { kind: "storyRange", storyId: caret.storyId, start: 0, end };
     }
@@ -379,10 +540,22 @@ export function makeBindingsPanel(
             return;
           }
           session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          // The condition must parse and read only fields the data has.
+          const check = (await session.checkExpression(field, q)) ?? null;
+          if (check && !check.ok) {
+            setRuleCheck(check);
+            setBindMsg(`the condition is not usable: ${check.error ?? "it does not parse"}`);
+            return;
+          }
           session.addRuleBinding(id, id, q, field, { action: ruleAction, name: style }, target);
+          const styleName = ruleStyles.find((st) => st.selfId === style)?.name ?? style;
           setBindMsg(
-            `style rule ${id}: when ${field} → ${style} on the ${
-              target.kind === "tableColumn" ? "selected column" : "story"
+            `style rule ${id}: when ${field} → ${styleName} on the ${
+              target.kind === "tableColumn"
+                ? "selected column"
+                : target.kind === "storyParagraphs"
+                  ? "paragraph of each record that fires"
+                  : "story"
             } — Lower applies it`,
           );
           break;
@@ -450,7 +623,11 @@ export function makeBindingsPanel(
               <select
                 data-data-bind-rule-action
                 value={ruleAction}
-                onChange={(e) => setRuleAction(e.target.value as typeof ruleAction)}
+                onChange={(e) => {
+                  const next = e.target.value as typeof ruleAction;
+                  setRuleAction(next);
+                  void loadRuleStyles(next);
+                }}
               >
                 {RULE_ACTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -458,14 +635,61 @@ export function makeBindingsPanel(
                   </option>
                 ))}
               </select>
-              <input
-                data-data-bind-rule-style
-                type="text"
-                value={ruleStyle}
-                onChange={(e) => setRuleStyle(e.target.value)}
-                placeholder="style name"
-                style={{ width: 110 }}
-              />
+              {ruleStyles.length > 0 ? (
+                <select
+                  data-data-bind-rule-style
+                  value={ruleStyle}
+                  onChange={(e) => setRuleStyle(e.target.value)}
+                  title="A style defined in this document"
+                >
+                  {ruleStyles.map((st) => (
+                    <option key={st.selfId} value={st.selfId}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  data-data-bind-rule-style
+                  type="text"
+                  value={ruleStyle}
+                  onChange={(e) => setRuleStyle(e.target.value)}
+                  placeholder="style name"
+                  title="No styles of this kind were read from the document — type a style id"
+                  style={{ width: 110 }}
+                />
+              )}
+              <button
+                type="button"
+                data-data-rule-styles
+                title="Read this document's styles for the chosen action"
+                onClick={() => {
+                  void loadRuleStyles(ruleAction);
+                }}
+              >
+                styles
+              </button>
+              {ruleAction !== "tableStyle" && (
+                <select
+                  data-data-bind-rule-scope
+                  value={ruleScope}
+                  onChange={(e) => setRuleScope(e.target.value as "story" | "paragraphs")}
+                  title="Where in the story the style lands"
+                >
+                  <option value="story">whole story, when any record fires</option>
+                  <option value="paragraphs">one paragraph per record, from the cursor</option>
+                </select>
+              )}
+              <button
+                type="button"
+                data-data-rule-preview
+                title="Check the condition and list the records it fires on"
+                onClick={() => {
+                  void previewRule();
+                }}
+              >
+                Preview
+              </button>
             </>
           )}
           {bindKind === "recordFlow" && (
@@ -516,6 +740,29 @@ export function makeBindingsPanel(
           </button>
         </div>
         {bindMsg && <p style={note} data-data-bind-msg>{bindMsg}</p>}
+        {bindKind === "rule" && (ruleCheck || rulePreview) && (
+          <p style={note} data-data-rule-preview-out>
+            {ruleCheck && !ruleCheck.ok ? (
+              <span style={{ color: "var(--status-error, #c33)" }}>
+                {ruleCheck.error ?? "the condition does not parse"}
+              </span>
+            ) : rulePreview ? (
+              rulePreview.error ? (
+                <span style={{ color: "var(--status-error, #c33)" }}>{rulePreview.error}</span>
+              ) : (
+                <>
+                  fires on {rulePreview.fires.length} of {rulePreview.total} record
+                  {rulePreview.total === 1 ? "" : "s"}
+                  {rulePreview.fires.length > 0 &&
+                    `: ${rulePreview.fires
+                      .slice(0, 20)
+                      .map((i) => `#${i + 1}`)
+                      .join(", ")}${rulePreview.fires.length > 20 ? " …" : ""}`}
+                </>
+              )
+            ) : null}
+          </p>
+        )}
         <div style={row}>
           <button type="button" onClick={wireDemo} title="The one-click table+variable demo wiring">
             Wire demo binding
@@ -682,15 +929,237 @@ export function makeBindingsPanel(
             )}
           </div>
         )}
+        {rowDiff && (
+          <div data-testid="row-diff" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {rowDiff.length === 0 && <span style={note}>no query has data yet — refresh first.</span>}
+            {rowDiff.map((d) => (
+              <div key={d.query} data-row-diff-query={d.query} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <strong>
+                  {d.query}:{" "}
+                  {d.baseline
+                    ? `${d.insertedCount} row(s) — nothing was written from this data yet`
+                    : `+${d.insertedCount} added · −${d.removedCount} removed · ${d.updatedCount} changed · ${d.unchanged} unchanged`}
+                </strong>
+                <label style={note}>
+                  rows matched by{" "}
+                  <select
+                    data-row-diff-key
+                    value={d.key.length === 1 ? d.key[0] : ""}
+                    onChange={(e) => {
+                      void rekey(d.query, e.target.value);
+                    }}
+                  >
+                    <option value="">{d.key.length === 0 ? "the whole row" : "automatic"}</option>
+                    {d.columns.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {!d.baseline &&
+                  d.updated.map((u) => (
+                    <span key={`u${u.index}`} data-row-change="updated" style={mono}>
+                      ~ {u.key}:{" "}
+                      {u.changes.map((c) => `${c.column} ${c.before} → ${c.after}`).join("; ")}
+                    </span>
+                  ))}
+                {!d.baseline &&
+                  d.inserted.map((r) => (
+                    <span key={`i${r.index}`} data-row-change="inserted" style={{ ...mono, color: "var(--status-ok, #2a2)" }}>
+                      + {r.key}: {r.values.join(" · ")}
+                    </span>
+                  ))}
+                {d.removed.map((r) => (
+                  <span key={`r${r.index}`} data-row-change="removed" style={{ ...mono, color: "var(--status-error, #c33)" }}>
+                    − {r.key}: {r.values.join(" · ")}
+                  </span>
+                ))}
+                {d.updatedCount + d.insertedCount + d.removedCount > d.updated.length + d.inserted.length + d.removed.length &&
+                  !d.baseline && <span style={note}>… more rows than listed</span>}
+                {d.affected.length > 0 ? (
+                  <span style={note}>reaches:</span>
+                ) : (
+                  !d.baseline && <span style={note}>no binding reads what changed.</span>
+                )}
+                {d.affected.map((a) => (
+                  <span key={a.binding} data-row-affected={a.binding} style={note}>
+                    <span style={mono}>{a.binding}</span> ({a.kind}) — {a.reason}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
         <div data-data-bindings>
           bindings:{" "}
+          <button
+            type="button"
+            data-data-sync-reload
+            title="Show each binding's sync state"
+            onClick={() => {
+              void reloadSync();
+            }}
+          >
+            sync states
+          </button>
           {snapshot.bindings.length === 0 ? (
             <span style={note}>none</span>
           ) : (
             <ul style={{ margin: 0, paddingLeft: "var(--space-3, 12px)" }}>
-              {(session.listBindings() ?? []).map((b) => (
+              {(session.listBindings() ?? []).map((b) => {
+                const sync = syncRows?.find((r) => r.id === b.id) ?? null;
+                const status = sync?.status ?? null;
+                return (
                 <li key={b.id} data-binding-kind={b.kind}>
                   <span style={mono}>{b.id}</span> <span style={note}>({b.kind})</span>
+                  {status && (
+                    <span
+                      data-sync-status={status}
+                      title="ADR 553: pinned and overridden content is never replaced by a refresh"
+                      style={{ marginLeft: 6, color: SYNC_COLOR[status] }}
+                    >
+                      {SYNC_LABEL[status]}
+                    </span>
+                  )}
+                  {sync?.locale && <span style={note}> · {sync.locale}</span>}
+                  {status && status !== "pinned" && status !== "overridden" && b.kind !== "rule" && (
+                    <button
+                      type="button"
+                      data-data-sync-pin
+                      title="Keep this content as it is; refreshes leave it alone"
+                      onClick={() => {
+                        void decide(() => session.pin(b.id));
+                      }}
+                    >
+                      Pin
+                    </button>
+                  )}
+                  {status === "pinned" && (
+                    <button
+                      type="button"
+                      data-data-sync-unpin
+                      title="Follow the source again from the next refresh"
+                      onClick={() => {
+                        void decide(() => session.unpin(b.id));
+                      }}
+                    >
+                      Unpin
+                    </button>
+                  )}
+                  {(status === "pinned" || status === "overridden") && (
+                    <button
+                      type="button"
+                      data-data-sync-accept
+                      title="Replace this content with the source's value now"
+                      onClick={() => {
+                        void decide(() => session.acceptSource(b.id));
+                      }}
+                    >
+                      Accept source
+                    </button>
+                  )}
+                  {b.kind === "variable" && sync && (
+                    <button
+                      type="button"
+                      data-data-format-open
+                      title="Number, currency or date pattern and locale for this field"
+                      onClick={() => openFormat(sync)}
+                    >
+                      Format…
+                    </button>
+                  )}
+                  {formatOpen === b.id && draft && (
+                    <div data-data-format-editor style={{ ...row, marginTop: 4 }}>
+                      <select
+                        data-data-format-kind
+                        value={draft.kind}
+                        onChange={(e) => {
+                          setDraft({ ...draft, kind: e.target.value as FormatPattern["kind"] });
+                          refresh();
+                        }}
+                      >
+                        {FORMAT_KINDS.map((k) => (
+                          <option key={k.value} value={k.value}>
+                            {k.label}
+                          </option>
+                        ))}
+                      </select>
+                      {(draft.kind === "number" || draft.kind === "currency" || draft.kind === "percent") && (
+                        <label style={note}>
+                          decimals{" "}
+                          <input
+                            data-data-format-decimals
+                            type="number"
+                            min={0}
+                            max={10}
+                            value={draft.decimals}
+                            style={{ width: "3.5em" }}
+                            onChange={(e) => {
+                              setDraft({ ...draft, decimals: e.target.value });
+                              refresh();
+                            }}
+                          />
+                        </label>
+                      )}
+                      {draft.kind === "currency" && (
+                        <input
+                          data-data-format-symbol
+                          type="text"
+                          value={draft.symbol}
+                          placeholder="symbol (locale's)"
+                          style={{ width: 90 }}
+                          onChange={(e) => {
+                            setDraft({ ...draft, symbol: e.target.value });
+                            refresh();
+                          }}
+                        />
+                      )}
+                      {draft.kind === "date" && (
+                        <input
+                          data-data-format-date
+                          type="text"
+                          value={draft.date}
+                          placeholder="DD.MM.YYYY (locale's)"
+                          style={{ width: 110 }}
+                          onChange={(e) => {
+                            setDraft({ ...draft, date: e.target.value });
+                            refresh();
+                          }}
+                        />
+                      )}
+                      <select
+                        data-data-format-locale
+                        value={draft.locale}
+                        title="Format this field for another locale than the session's"
+                        onChange={(e) => {
+                          setDraft({ ...draft, locale: e.target.value });
+                          refresh();
+                        }}
+                      >
+                        <option value="">session locale ({session.getLocale()})</option>
+                        {locales.map((l) => (
+                          <option key={l.tag} value={l.tag}>
+                            {l.tag} — {l.currency} · {l.date}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        data-data-format-apply
+                        onClick={() => {
+                          void applyFormat(b.id);
+                        }}
+                      >
+                        Apply
+                      </button>
+                      {formatPreview !== null && (
+                        <span data-data-format-preview style={mono}>
+                          → {formatPreview}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {b.kind === "recordFlow" && (
                     <button
                       type="button"
@@ -703,7 +1172,8 @@ export function makeBindingsPanel(
                     </button>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

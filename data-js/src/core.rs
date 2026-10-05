@@ -21,7 +21,7 @@
 //! exercises it WITHOUT a wasm runtime. The `#[wasm_bindgen]` `DataEngine`
 //! (in `lib.rs`) is a forwarding shim over this; nothing computes there.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,7 +30,8 @@ use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_barcode::{encode, with_quiet_zone, Symbology};
 use data_bind::{
     diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
-    ResolutionEngine, ResolveError, Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
+    FingerprintSnapshot, ResolutionEngine, ResolveError, Resolved, ResolvedBarcode,
+    ResolvedRecordFlow, RuleEvaluation,
 };
 use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
@@ -45,6 +46,8 @@ use data_lower::{
     LoweredTable, LoweredVariable, LoweredVisibility, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
+
+use crate::columns::{ColumnBuf, ColumnIngest, IngestOutcome};
 use data_sources::{
     authorize, build_manifest, enrich_schema, DatasetMetadata, GovernedCatalog,
     GrantedCapabilities, SourceManifest,
@@ -137,6 +140,15 @@ pub struct RuleResult {
     pub total: usize,
 }
 
+/// Which records a condition fires on (the rules editor's preview).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConditionPreview {
+    pub fires: Vec<usize>,
+    pub total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// One executed batch unit (spec §10): a deterministic label + the paginated
 /// flow for that output document. The batch runner partitions a resolved record
 /// flow by [`BatchMode`] (per-record / per-group / one-catalog) and paginates
@@ -206,6 +218,11 @@ pub struct DocumentPayload {
     /// guess. `payload-budget.test.ts` pins the arithmetic.
     #[serde(default)]
     pub variables: VariableSet,
+    /// Per-binding locale overrides (§9.1): a field formatted for another
+    /// market than the session's. Omitted when empty, so a payload without
+    /// overrides is byte-identical to one written before the field existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub locales: BTreeMap<String, Locale>,
 }
 
 /// One source's authorization verdict (§11 data-source manifest review).
@@ -232,6 +249,27 @@ pub struct SessionMeta {
 pub struct SyncEntry {
     pub binding: String,
     pub status: Status,
+}
+
+/// One binding's field-refresh decision ([`DataSession::refresh_field_values`]),
+/// tagged by `outcome`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum FieldRefresh {
+    /// Pinned or Overridden: the field keeps its value (never resolved).
+    Kept { binding: String, status: Status },
+    /// The resolved display; `None` when the missing policy hides it (the
+    /// field then shows its `<key>` token).
+    Value {
+        binding: String,
+        value: Option<String>,
+    },
+    /// The binding lowers to something other than a variable: a field bound
+    /// to it keeps its value.
+    #[serde(rename = "notVariable")]
+    NotVariable { binding: String },
+    /// The resolve failed; the field keeps its value.
+    Failed { binding: String, error: String },
 }
 
 /// One binding's entry in the §8 refresh change report crossed to the host
@@ -313,10 +351,20 @@ pub struct DataSession {
     /// report). `refresh_change_report` diffs the current resolution against this
     /// then updates it; `None` until the first report (where every binding shows
     /// as `added` — the baseline).
-    last_fingerprints: Option<HashMap<String, String>>,
+    last_fingerprints: Option<FingerprintSnapshot>,
+    /// The transport hash of the last COLUMN ingest per query: a re-delivery
+    /// of identical buffers is recognised before anything is decoded.
+    column_hashes: HashMap<QueryId, u64>,
+    /// A column ingest in progress (`begin_columns` … `finish_columns`).
+    pending_columns: Option<ColumnIngest>,
     /// The §9.9 variable set: declarations (derived from the bindable bindings,
     /// plus any imported from a library) + the captured data sets.
     variables: VariableSet,
+    /// Per-binding locale overrides (saved in the payload).
+    binding_locales: BTreeMap<String, Locale>,
+    /// Each query's result as of the last time the document was written from
+    /// it (`mark_rows_applied`): the "before" of the row diff.
+    applied_rows: HashMap<QueryId, RecordSet>,
 }
 
 impl DataSession {
@@ -330,9 +378,13 @@ impl DataSession {
             bindings: Vec::new(),
             today,
             last_fingerprints: None,
+            column_hashes: HashMap::new(),
+            pending_columns: None,
             // Illustrator names a document's one variable set `binding1`; match
             // it so an exported library drops into that workflow unremarkably.
             variables: VariableSet::new("binding1"),
+            binding_locales: BTreeMap::new(),
+            applied_rows: HashMap::new(),
         }
     }
 
@@ -378,7 +430,74 @@ impl DataSession {
 
     /// Deliver a query's result (from the DuckDB-WASM query layer → RecordSet).
     pub fn ingest_result(&mut self, query: QueryId, records: RecordSet) {
+        // A RecordSet ingest replaces whatever the column door last delivered.
+        self.column_hashes.remove(&query);
         self.engine.set_result(query, records);
+    }
+
+    /// Start a typed-column ingest of `rows` rows (the column door — see
+    /// [`crate::columns`]). Push one column per schema field with
+    /// [`push_column`](Self::push_column), then
+    /// [`finish_columns`](Self::finish_columns). Replaces any ingest in
+    /// progress.
+    pub fn begin_columns(&mut self, query: QueryId, schema: Schema, rows: usize) {
+        self.pending_columns = Some(ColumnIngest::begin(query, schema, rows));
+    }
+
+    /// Push the next column of the ingest in progress.
+    pub fn push_column(&mut self, col: ColumnBuf) -> Result<(), SessionError> {
+        let pending = self
+            .pending_columns
+            .as_mut()
+            .ok_or_else(|| SessionError::Decode("push_column without begin_columns".into()))?;
+        let pushed = pending.push(col);
+        if pushed.is_err() {
+            self.pending_columns = None;
+        }
+        pushed
+    }
+
+    /// Finish the column ingest. When the buffers are identical to the last
+    /// column ingest for this query (and its result is still the engine's),
+    /// nothing is decoded or delivered: `Unchanged`. Otherwise the buffers
+    /// become a RecordSet and are delivered like
+    /// [`ingest_result`](Self::ingest_result): `Changed`.
+    pub fn finish_columns(&mut self) -> Result<IngestOutcome, SessionError> {
+        let pending = self
+            .pending_columns
+            .take()
+            .ok_or_else(|| SessionError::Decode("finish_columns without begin_columns".into()))?;
+        let hash = pending.transport_hash()?;
+        let query = pending.query().clone();
+        if self.column_hashes.get(&query) == Some(&hash) && self.engine.result(&query).is_some() {
+            return Ok(IngestOutcome::Unchanged);
+        }
+        let records = pending.into_record_set()?;
+        self.engine.set_result(query.clone(), records);
+        self.column_hashes.insert(query, hash);
+        Ok(IngestOutcome::Changed)
+    }
+
+    /// One-call column ingest (`begin_columns` + every `push_column` +
+    /// `finish_columns`) — the native form of the column door.
+    pub fn ingest_columns(
+        &mut self,
+        query: QueryId,
+        schema: Schema,
+        rows: usize,
+        columns: Vec<ColumnBuf>,
+    ) -> Result<IngestOutcome, SessionError> {
+        self.begin_columns(query, schema, rows);
+        for c in columns {
+            self.push_column(c)?;
+        }
+        self.finish_columns()
+    }
+
+    /// The content token of a query's ingested result (the engine's content
+    /// hash, hex), or `None` before an ingest. Equal tokens = equal data.
+    pub fn result_token(&self, query: &QueryId) -> Option<String> {
+        self.engine.result_hash(query).map(|h| format!("{h:016x}"))
     }
 
     /// Resolve a binding and lower it to the host IR.
@@ -420,9 +539,19 @@ impl DataSession {
     /// that wants the baseline silent can prime it with one discarded call after
     /// the first lower.
     pub fn refresh_change_report(&mut self) -> ChangeReportOut {
-        let current = self.engine.fingerprint_all();
-        let before = self.last_fingerprints.take().unwrap_or_default();
-        let report = diff_resolved(&before, &current);
+        // Only the bindings whose dependency stamp moved re-resolve; the rest
+        // keep their previous fingerprint (data-bind fingerprint_incremental).
+        let prev = self.last_fingerprints.take();
+        let current = self
+            .engine
+            .fingerprint_incremental(prev.as_ref().unwrap_or(&HashMap::new()));
+        let fingerprints = |snap: &FingerprintSnapshot| -> HashMap<String, String> {
+            snap.iter()
+                .filter_map(|(id, (_, fp))| fp.clone().map(|fp| (id.clone(), fp)))
+                .collect()
+        };
+        let before = prev.as_ref().map(fingerprints).unwrap_or_default();
+        let report = diff_resolved(&before, &fingerprints(&current));
         self.last_fingerprints = Some(current);
         ChangeReportOut {
             entries: report
@@ -721,6 +850,115 @@ impl DataSession {
         }
     }
 
+    /// Override the formatting locale of one binding (`None` clears it).
+    pub fn set_binding_locale(&mut self, id: &BindingId, locale: Option<Locale>) {
+        self.engine.set_binding_locale(id, locale);
+        match locale {
+            Some(l) => {
+                self.binding_locales.insert(id.to_string(), l);
+            }
+            None => {
+                self.binding_locales.remove(id.as_str());
+            }
+        }
+    }
+
+    /// The per-binding locale overrides.
+    pub fn binding_locales(&self) -> &BTreeMap<String, Locale> {
+        &self.binding_locales
+    }
+
+    /// Record every query's current result as the one the document was written
+    /// from: the "before" of the next [`row_diff`](Self::row_diff). The host
+    /// calls it after it wrote the document from the data (a lower, a field
+    /// refresh), never after a refresh alone.
+    pub fn mark_rows_applied(&mut self) {
+        for q in &self.queries {
+            if let Some(r) = self.engine.result(&q.id) {
+                self.applied_rows.insert(q.id.clone(), r.clone());
+            }
+        }
+    }
+
+    /// The §8 row diff: for every query with a result, the rows added, removed
+    /// and changed since [`mark_rows_applied`](Self::mark_rows_applied), and
+    /// which bindings read what changed. Read-only: it neither moves the applied
+    /// snapshot nor touches a sync state. A separate entry point from
+    /// [`refresh_change_report`](Self::refresh_change_report), which reports per
+    /// binding.
+    pub fn row_diff(
+        &self,
+        opts: &crate::review::RowDiffOptions,
+    ) -> Vec<crate::review::QueryRowDiff> {
+        let current: Vec<(QueryId, &RecordSet)> = self
+            .queries
+            .iter()
+            .filter_map(|q| self.engine.result(&q.id).map(|r| (q.id.clone(), r)))
+            .collect();
+        let templates: HashMap<String, Vec<String>> = self
+            .templates
+            .iter()
+            .map(|t| {
+                let reads = t
+                    .fields
+                    .iter()
+                    .flat_map(|f| data_expr::field_refs(&f.expr))
+                    .collect();
+                (t.id.to_string(), reads)
+            })
+            .collect();
+        crate::review::row_diffs(
+            &self.applied_rows,
+            &current,
+            &self.bindings,
+            &templates,
+            opts,
+        )
+    }
+
+    /// Check an expression: does it parse, which fields does it read, and —
+    /// given a query with a result — which of those the result lacks.
+    pub fn check_expression(&self, src: &str, query: Option<&QueryId>) -> crate::review::ExprCheck {
+        crate::review::check_expression(src, query.and_then(|q| self.engine.result(q)))
+    }
+
+    /// Which records a condition fires on, without defining a rule — the
+    /// rules editor's preview. Same evaluation as [`evaluate_rule`](Self::evaluate_rule).
+    pub fn preview_condition(
+        &self,
+        query: &QueryId,
+        when: &str,
+    ) -> Result<ConditionPreview, SessionError> {
+        let check = self.check_expression(when, Some(query));
+        if let Some(error) = check.error.filter(|_| !check.ok) {
+            return Ok(ConditionPreview {
+                fires: vec![],
+                total: self.engine.record_count(query),
+                error: Some(error),
+            });
+        }
+        let (fires, total) = self.engine.evaluate_condition(query, when)?;
+        Ok(ConditionPreview {
+            fires,
+            total,
+            error: None,
+        })
+    }
+
+    /// A per-record binding's display text for record `record`, WITHOUT
+    /// re-linking it (a preview must not change a sync decision). `None` for a
+    /// kind with no single display text.
+    pub fn preview_display(
+        &self,
+        id: &BindingId,
+        record: usize,
+    ) -> Result<Option<String>, SessionError> {
+        Ok(match self.engine.resolve_content(id, record)? {
+            Resolved::Variable(v) => Some(if v.hidden { String::new() } else { v.display }),
+            _ => None,
+        })
+    }
+
     /// The sync state of a binding.
     pub fn sync_state(&self, id: &BindingId) -> Option<SyncState> {
         self.engine.sync_state(id)
@@ -751,6 +989,45 @@ impl DataSession {
                 status,
             })
             .collect()
+    }
+
+    /// The field-refresh decision for every binding named, in ONE call (the
+    /// bundle's `refreshFields`; it used to cost two boundary calls per field,
+    /// `sync_state` + `resolve_lowered`). The §8 conflict policy is applied
+    /// here, before anything resolves: a `Pinned` or `Overridden` binding is
+    /// [`FieldRefresh::Kept`] and is NOT resolved, because a resolve re-links.
+    /// Each binding is decided once, in the order given (duplicates are
+    /// answered once, at their first position).
+    pub fn refresh_field_values(&mut self, ids: &[BindingId]) -> Vec<FieldRefresh> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let binding = id.to_string();
+            if let Some(st) = self.engine.sync_state(id) {
+                if matches!(st.status, Status::Pinned | Status::Overridden) {
+                    out.push(FieldRefresh::Kept {
+                        binding,
+                        status: st.status,
+                    });
+                    continue;
+                }
+            }
+            out.push(match self.resolve_lowered(id) {
+                Ok(LoweredOutput::Variable(v)) => FieldRefresh::Value {
+                    binding,
+                    value: if v.hidden { None } else { Some(v.text) },
+                },
+                Ok(_) => FieldRefresh::NotVariable { binding },
+                Err(e) => FieldRefresh::Failed {
+                    binding,
+                    error: e.to_string(),
+                },
+            });
+        }
+        out
     }
 
     /// The **remote invalidation key** (§6.2/§8, the M1 remote slice): the
@@ -816,6 +1093,7 @@ impl DataSession {
             templates: self.templates.clone(),
             bindings: self.bindings.clone(),
             variables: self.variables.clone(),
+            locales: self.binding_locales.clone(),
         }
     }
 
@@ -839,6 +1117,9 @@ impl DataSession {
         // deriving on load would make `from_payload(payload(s))` differ from `s`
         // — the recipe round-trip must be exact (`roundtrip.rs` pins it).
         s.variables = payload.variables;
+        for (id, l) in payload.locales {
+            s.set_binding_locale(&BindingId::from(id.as_str()), Some(l));
+        }
         s
     }
 
@@ -973,10 +1254,9 @@ impl DataSession {
     /// query has no result, the record is out of range, or the column is absent.
     fn record_field_display(&self, query: &QueryId, record: usize, column: &str) -> Option<String> {
         let records = self.engine.result(query)?;
-        if record >= records.row_count {
-            return None;
-        }
-        records.field(record, column).map(|v| v.as_display())
+        // Record N in the stabilized order, like every other record index.
+        let row = self.engine.record_row(query, record)?;
+        records.field(row, column).map(|v| v.as_display())
     }
 
     /// The named data sets, in palette order (§9.9).

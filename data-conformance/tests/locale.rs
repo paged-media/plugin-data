@@ -75,13 +75,13 @@ fn display(e: &mut ResolutionEngine, id: &str) -> String {
 #[test]
 fn data_i18n_locale() {
     // English: `,` grouping, `.` decimal, `$` leading, `YYYY-MM-DD`.
-    let mut en = engine(Locale::En);
+    let mut en = engine(Locale::EN);
     assert_eq!(display(&mut en, "num"), "1,234.50");
     assert_eq!(display(&mut en, "cur"), "$1,234.50");
     assert_eq!(display(&mut en, "date"), "1970-01-01");
 
     // German: `.` grouping, `,` decimal, `€` trailing, `DD.MM.YYYY`.
-    let mut de = engine(Locale::De);
+    let mut de = engine(Locale::DE);
     assert_eq!(display(&mut de, "num"), "1.234,50");
     assert_eq!(display(&mut de, "cur"), "1.234,50 €");
     assert_eq!(display(&mut de, "date"), "01.01.1970");
@@ -91,7 +91,7 @@ fn data_i18n_locale() {
 fn data_i18n_locale_default_is_en() {
     // A fresh engine (no set_locale) formats en — the locale-free canonical
     // behavior is unchanged for existing callers.
-    let mut e = engine(Locale::En);
+    let mut e = engine(Locale::EN);
     let mut default = ResolutionEngine::new(0);
     // Mirror `engine` without the set_locale call.
     default.add_query(Query {
@@ -118,4 +118,94 @@ fn data_i18n_locale_default_is_en() {
         .unwrap(),
     );
     assert_eq!(display(&mut default, "cur"), display(&mut e, "cur"));
+}
+
+/// Every row of the locale table, through the real resolve path. The expected
+/// strings are the CLDR facts the table cites (data-core/src/locale.rs):
+/// separators, minimum grouping, currency placement with its no-break space,
+/// and date order. `en` and `de` keep their pre-table output (ISO dates; an
+/// ASCII space before `€`).
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_i18n_locale_table_rows__feat__data_i18n_locale_table() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        ("en", "1,234.50", "$1,234.50", "1970-01-01"),
+        ("de", "1.234,50", "1.234,50 €", "01.01.1970"),
+        ("en-GB", "1,234.50", "£1,234.50", "01/01/1970"),
+        (
+            "de-AT",
+            "1\u{a0}234,50",
+            "€\u{a0}1\u{a0}234,50",
+            "01.01.1970",
+        ),
+        ("de-CH", "1’234.50", "CHF\u{a0}1’234.50", "01.01.1970"),
+        (
+            "fr",
+            "1\u{202f}234,50",
+            "1\u{202f}234,50\u{a0}€",
+            "01/01/1970",
+        ),
+        ("it", "1.234,50", "1.234,50\u{a0}€", "01/01/1970"),
+        // es: minimumGroupingDigits 2 — a four-digit integer is not grouped.
+        ("es", "1234,50", "1234,50\u{a0}€", "01/01/1970"),
+        ("nl", "1.234,50", "€\u{a0}1.234,50", "01-01-1970"),
+    ];
+    for &(tag, num, cur, date) in cases {
+        let locale = Locale::from_tag(tag).unwrap_or_else(|| panic!("no locale {tag}"));
+        let mut e = engine(locale);
+        assert_eq!(display(&mut e, "num"), num, "{tag} NUMBER");
+        assert_eq!(display(&mut e, "cur"), cur, "{tag} CURRENCY");
+        assert_eq!(display(&mut e, "date"), date, "{tag} DATEFMT");
+    }
+    // Every table row is covered by a case above.
+    assert_eq!(Locale::all().count(), cases.len());
+}
+
+/// es groups from five integer digits on (CLDR minimumGroupingDigits = 2).
+#[test]
+#[allow(non_snake_case)]
+fn data_i18n_locale_min_grouping__feat__data_i18n_locale_table() {
+    let mut e = ResolutionEngine::new(0);
+    e.set_locale(Locale::from_tag("es").unwrap());
+    e.add_query(Query {
+        id: QueryId::from("q1"),
+        sql: String::new(),
+        params: vec![],
+        shape: ResultShape::SingleRecord,
+    });
+    e.add_binding(
+        BindingId::from("big"),
+        Binding::Variable {
+            target: PlaceholderRef::from("big"),
+            query: QueryId::from("q1"),
+            expr: "NUMBER(n, 0)".into(),
+            missing: MissingPolicy::Blank,
+        },
+    );
+    e.set_result(
+        QueryId::from("q1"),
+        RecordSet::new(
+            Schema::from_fields([("n".to_string(), FieldType::Float)]),
+            vec![vec![Value::Number(12345.0)]],
+        )
+        .unwrap(),
+    );
+    assert_eq!(display(&mut e, "big"), "12.345");
+}
+
+/// Content hashing is locale-free: every locale resolves with the same
+/// resolve stamp (source content + query + params), so a refresh's change
+/// detection never depends on the locale a document is viewed in.
+#[test]
+#[allow(non_snake_case)]
+fn data_i18n_locale_stamp_is_locale_free__feat__data_i18n_locale_table() {
+    let stamps: Vec<_> = Locale::all()
+        .map(|l| {
+            let mut e = engine(l);
+            e.resolve(&BindingId::from("num")).unwrap();
+            e.sync_state(&BindingId::from("num")).unwrap().last_resolved
+        })
+        .collect();
+    assert!(stamps[0].is_some());
+    assert!(stamps.windows(2).all(|w| w[0] == w[1]), "{stamps:?}");
 }

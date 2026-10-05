@@ -35,6 +35,30 @@ const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** A capturing fake host: records every mutation, serves placeholders/frameChain/
  *  geometry from in-memory fixtures, and a `supports` allow-list. */
+/** A batch the fake host understands the way core does for what these tests
+ *  send: a batch that names what it mints has each child applied in order, `bindCreated` naming the frame the
+ *  previous child minted, and a `$h:` story address resolved to its story. */
+async function applyBatch(
+  m: Mutation,
+  one: (m: Mutation) => Promise<{ applied: boolean; createdId?: unknown; error?: unknown }>,
+) {
+  const ops = m.op === "batch" ? (m.args as { ops: Mutation[] }).ops : [];
+  if (!ops.some((o) => o.op === "bindCreated")) return one(m);
+  const minted: { handle: string | null; element: unknown; storyId: string | null }[] = [];
+  let last: unknown = null;
+  for (const raw of ops) {
+    if (raw.op === "bindCreated") {
+      minted.push({ handle: (raw.args as { handle: string }).handle, element: last, storyId: "story-new" });
+      continue;
+    }
+    const child = JSON.parse(JSON.stringify(raw).replace(/"\$h:frame"/g, '"story-new"')) as Mutation;
+    const out = await one(child);
+    if (!out.applied) return out;
+    if (out.createdId) last = out.createdId;
+  }
+  return { applied: true, createdId: last, pageIds: [], minted };
+}
+
 function fakeHost(opts?: {
   supports?: (f: string) => boolean;
   placeholders?: () => { storyId: string; offset: number; plugin: string; key: string; value: string | null }[];
@@ -50,7 +74,7 @@ function fakeHost(opts?: {
     selection: { get: () => [], set: async () => [] },
     network: { consentedOrigins: () => [], requestConsent: async () => ({ granted: [], denied: [] }) },
     document: {
-      mutate: async (m: Mutation) => {
+      mutate: async (batch: Mutation) => applyBatch(batch, async (m: Mutation) => {
         mutations.push(m);
         // A freshly inserted frame mints a createdId so commitLoweredVariable can
         // resolve a story from a new frame when selection is empty.
@@ -58,7 +82,7 @@ function fakeHost(opts?: {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
         }
         return { applied: true, createdId: null, pageIds: [] };
-      },
+      }),
       placeholders: async () => opts?.placeholders?.() ?? [],
       frameChain: async () => opts?.frameChain?.() ?? [],
       elementGeometry: async (ids: { id: string }[]) =>
@@ -79,7 +103,7 @@ function fakeHost(opts?: {
   return {
     host,
     mutations,
-    fireReflow: () => changeListener?.({ reflow: { frameId: "f0", contentBox: [0, 0, 80, 200] } }),
+    fireReflow: (frameId = "f0") => changeListener?.({ reflow: { frameId, contentBox: [0, 0, 80, 200] } }),
     fireTransformOnly: () => changeListener?.({}),
   };
 }
@@ -240,16 +264,79 @@ describe("data_lower_recordflow_live session lane (D-12)", () => {
       lower_record_flow: () => ({ frames: [], overflow: false, placed: 0, total: 0 }),
     });
     const s = await sessionWith(fake.host, engine);
-    const sub = s.subscribeChainReflow("rf1", "story-1", (f) => repaginations.push(f));
+    const clock = manualClock();
+    const sub = s.subscribeChainReflow("rf1", "story-1", (f) => repaginations.push(f), { timers: clock });
     fake.fireTransformOnly(); // no reflow → ignored
-    await Promise.resolve();
+    await clock.flush();
     expect(repaginations).toHaveLength(0);
     fake.fireReflow(); // resize → re-paginate
-    await new Promise((r) => setTimeout(r, 0));
+    await clock.flush();
     expect(repaginations).toHaveLength(1);
     sub.dispose();
   });
+
+  it("coalesces a burst of reflows into ONE re-pagination, and ignores other chains [data.perf.gates]", async () => {
+    const repaginations: unknown[] = [];
+    let chainReads = 0;
+    const fake = fakeHost({
+      frameChain: () => {
+        chainReads += 1;
+        return [{ frameId: "f0", next: null, overflow: false }];
+      },
+      geometry: () => [0, 0, 100, 200],
+    });
+    let flows = 0;
+    const engine = fakeEngine({
+      lower_record_flow: () => ({ frames: [], overflow: false, placed: ++flows, total: 0 }),
+    });
+    const s = await sessionWith(fake.host, engine);
+    const clock = manualClock();
+    const sub = s.subscribeChainReflow("rf1", "story-1", (f) => repaginations.push(f), { timers: clock });
+    for (let i = 0; i < 50; i++) fake.fireReflow(); // a drag-resize stream
+    expect(repaginations).toHaveLength(0); // nothing until the burst is quiet
+    await clock.flush();
+    expect(repaginations).toHaveLength(1);
+    expect(chainReads).toBe(1);
+    // A resize of a frame outside this chain is someone else's.
+    fake.fireReflow("elsewhere");
+    await clock.flush();
+    expect(repaginations).toHaveLength(1);
+    // Any other change may have relinked the chain: the next resize counts.
+    fake.fireTransformOnly();
+    fake.fireReflow("elsewhere");
+    await clock.flush();
+    expect(repaginations).toHaveLength(2);
+    // Disposed: a pending burst never reaches the callback.
+    fake.fireReflow();
+    sub.dispose();
+    await clock.flush();
+    expect(repaginations).toHaveLength(2);
+  });
 });
+
+/** Timers a test advances by hand: `flush` runs every pending timer, then
+ *  lets the async work they started settle. */
+function manualClock() {
+  const pending = new Map<number, () => void>();
+  let next = 0;
+  return {
+    setTimeout(fn: () => void): unknown {
+      pending.set(++next, fn);
+      return next;
+    },
+    clearTimeout(h: unknown): void {
+      pending.delete(h as number);
+    },
+    async flush(): Promise<void> {
+      for (let round = 0; round < 5; round++) {
+        const fns = [...pending.values()];
+        pending.clear();
+        for (const fn of fns) fn();
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      }
+    },
+  };
+}
 
 describe("data_lower_rule session lane (D-13)", () => {
   it("evaluates a rule and applies appliedCellStyle per fired cell", async () => {

@@ -118,7 +118,7 @@ fn data_plugin_load_payload_in_place__feat__data_plugin_persistence() {
     let saved = build().payload();
 
     let mut live = DataSession::new(0);
-    live.set_locale(data_core::Locale::De);
+    live.set_locale(data_core::Locale::DE);
     live.define_query(Query {
         id: QueryId::from("stale"),
         sql: "SELECT 1".into(),
@@ -140,7 +140,7 @@ fn data_plugin_load_payload_in_place__feat__data_plugin_persistence() {
 
     // The locale survived the load: CURRENCY formats the German way.
     let mut probe = DataSession::new(0);
-    probe.set_locale(data_core::Locale::De);
+    probe.set_locale(data_core::Locale::DE);
     live.ingest_result(QueryId::from("q1"), price_rows());
     probe.load_payload(saved);
     probe.ingest_result(QueryId::from("q1"), price_rows());
@@ -159,11 +159,13 @@ fn price_rows() -> data_core::RecordSet {
                     name: "sku".into(),
                     ty: FieldType::Text,
                     nullable: true,
+                    scale: None,
                 },
                 Field {
                     name: "price".into(),
                     ty: FieldType::Float,
                     nullable: true,
+                    scale: None,
                 },
             ],
         },
