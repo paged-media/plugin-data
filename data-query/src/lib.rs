@@ -290,6 +290,14 @@ fn hash_value(h: &mut u64, v: &Value) {
 /// A stable content hash of a record set (schema + every value). Bit-stable —
 /// the basis for [`ResolveStamp`] invalidation (§8).
 pub fn content_hash(records: &RecordSet) -> u64 {
+    content_hashes(records).0
+}
+
+/// [`content_hash`] and, in the same pass, one hash per column (that column's
+/// values only, in row order) — the column-level change signal the change
+/// report uses to skip bindings that read no changed column. Counted as one
+/// [`Counter::ContentHashes`].
+pub fn content_hashes(records: &RecordSet) -> (u64, Vec<u64>) {
     perf::bump(Counter::ContentHashes);
     let mut h = FNV_OFFSET;
     for f in &records.schema.fields {
@@ -297,12 +305,47 @@ pub fn content_hash(records: &RecordSet) -> u64 {
         fnv_bytes(&mut h, &[0xff]);
     }
     fnv_bytes(&mut h, &records.row_count.to_le_bytes());
+    let mut per_column = Vec::with_capacity(records.columns.len());
     for col in &records.columns {
+        let mut ch = FNV_OFFSET;
         for v in col {
             hash_value(&mut h, v);
+            hash_value(&mut ch, v);
         }
+        per_column.push(ch);
     }
-    h
+    (h, per_column)
+}
+
+/// An FNV-1a hasher over the same primitive the content hashes use — for the
+/// engine's own composite stamps (a binding's dependency stamp).
+#[derive(Debug, Clone, Copy)]
+pub struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Fnv(FNV_OFFSET)
+    }
+}
+
+impl Fnv {
+    /// Feed raw bytes.
+    pub fn bytes(&mut self, b: &[u8]) -> &mut Self {
+        fnv_bytes(&mut self.0, b);
+        self
+    }
+    /// Feed a `u64` (little-endian).
+    pub fn u64(&mut self, n: u64) -> &mut Self {
+        self.bytes(&n.to_le_bytes())
+    }
+    /// Feed a string, terminated so `"ab"+"c"` ≠ `"a"+"bc"`.
+    pub fn str(&mut self, s: &str) -> &mut Self {
+        self.bytes(s.as_bytes()).bytes(&[0xff])
+    }
+    /// The hash so far.
+    pub fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Hash a query's SQL + shape (the query half of the resolve stamp).

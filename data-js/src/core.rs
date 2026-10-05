@@ -30,7 +30,8 @@ use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_barcode::{encode, with_quiet_zone, Symbology};
 use data_bind::{
     diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
-    ResolutionEngine, ResolveError, Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
+    FingerprintSnapshot, ResolutionEngine, ResolveError, Resolved, ResolvedBarcode,
+    ResolvedRecordFlow, RuleEvaluation,
 };
 use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
@@ -313,7 +314,7 @@ pub struct DataSession {
     /// report). `refresh_change_report` diffs the current resolution against this
     /// then updates it; `None` until the first report (where every binding shows
     /// as `added` — the baseline).
-    last_fingerprints: Option<HashMap<String, String>>,
+    last_fingerprints: Option<FingerprintSnapshot>,
     /// The §9.9 variable set: declarations (derived from the bindable bindings,
     /// plus any imported from a library) + the captured data sets.
     variables: VariableSet,
@@ -420,9 +421,19 @@ impl DataSession {
     /// that wants the baseline silent can prime it with one discarded call after
     /// the first lower.
     pub fn refresh_change_report(&mut self) -> ChangeReportOut {
-        let current = self.engine.fingerprint_all();
-        let before = self.last_fingerprints.take().unwrap_or_default();
-        let report = diff_resolved(&before, &current);
+        // Only the bindings whose dependency stamp moved re-resolve; the rest
+        // keep their previous fingerprint (data-bind fingerprint_incremental).
+        let prev = self.last_fingerprints.take();
+        let current = self
+            .engine
+            .fingerprint_incremental(prev.as_ref().unwrap_or(&HashMap::new()));
+        let fingerprints = |snap: &FingerprintSnapshot| -> HashMap<String, String> {
+            snap.iter()
+                .filter_map(|(id, (_, fp))| fp.clone().map(|fp| (id.clone(), fp)))
+                .collect()
+        };
+        let before = prev.as_ref().map(fingerprints).unwrap_or_default();
+        let report = diff_resolved(&before, &fingerprints(&current));
         self.last_fingerprints = Some(current);
         ChangeReportOut {
             entries: report

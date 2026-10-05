@@ -28,11 +28,16 @@
 //!   records in it: the preview stepper's record N is the same record
 //!   whatever order the rows were delivered in, and a cached re-resolve is
 //!   the same content as a cold one.
+//! - The change report re-resolves only bindings whose dependency stamp
+//!   moved: after ANY sequence of data changes its snapshot equals the full
+//!   re-resolve of every binding.
 
+use data_bind::ResolutionEngine;
 use data_conformance::{record_set, today};
 use data_core::{
-    Binding, BindingDef, BindingId, FieldType, MissingPolicy, PlaceholderRef, Query, QueryId,
-    ResultShape, Value, ValueError,
+    Binding, BindingDef, BindingId, ColumnBind, FieldType, FlowOpts, FrameChainRef, FrameRef,
+    MissingPolicy, PlaceholderRef, Query, QueryId, ResultShape, TableOpts, Template, TemplateField,
+    TemplateRef, Value, ValueError,
 };
 use data_js::core::DataSession;
 use data_query::{cmp_values, order_rows, stabilize, value_key};
@@ -186,6 +191,54 @@ proptest! {
             let rc = format!("{:?}", session(&rows).resolve_lowered_at(&id, record));
             prop_assert_eq!(&ra, &rb);
             prop_assert_eq!(&ra, &rc);
+        }
+    }
+
+    /// The incremental change-report snapshot equals the full one after every
+    /// step of an arbitrary sequence of re-deliveries (cell edits, reorders,
+    /// added and dropped rows) — a stamp never hides a content change.
+    #[test]
+    fn data_perf_prop_incremental_report_equals_full(
+        steps in prop::collection::vec(rows_strategy(), 1..6),
+    ) {
+        let mut e = ResolutionEngine::new(today());
+        let q = QueryId::from("q");
+        e.add_query(Query { id: q.clone(), sql: String::new(), params: vec![], shape: ResultShape::RecordStream });
+        let var = |expr: &str| Binding::Variable {
+            target: PlaceholderRef::from("p"),
+            query: q.clone(),
+            expr: expr.into(),
+            missing: MissingPolicy::Blank,
+        };
+        e.add_binding(BindingId::from("va"), var("a"));
+        e.add_binding(BindingId::from("vbc"), var("CONCAT(b, c)"));
+        e.add_binding(BindingId::from("vconst"), var("\"k\""));
+        e.add_binding(BindingId::from("t"), Binding::Table {
+            region: FrameRef::from("r"),
+            query: q.clone(),
+            columns: vec![ColumnBind { header: "B".into(), expr: "b".into(), style: None }],
+            options: TableOpts { header_row: true, group_by: vec!["c".into()] },
+        });
+        e.add_template(Template {
+            id: TemplateRef::from("tm"),
+            fields: vec![TemplateField { label: String::new(), expr: "a".into() }],
+            line_height_pt: 10.0,
+        });
+        e.add_binding(BindingId::from("f"), Binding::RecordFlow {
+            chain: FrameChainRef::from("ch"),
+            query: q.clone(),
+            template: TemplateRef::from("tm"),
+            options: FlowOpts { group_by: vec!["b".into()], repeat_header: false, continued_marker: false, footer: None },
+        });
+        let mut snap = Default::default();
+        for rows in &steps {
+            e.set_result(q.clone(), make(rows));
+            snap = e.fingerprint_incremental(&snap);
+            let got: std::collections::HashMap<String, String> = snap
+                .iter()
+                .filter_map(|(id, (_, fp))| fp.clone().map(|fp| (id.clone(), fp)))
+                .collect();
+            prop_assert_eq!(got, e.fingerprint_all());
         }
     }
 }

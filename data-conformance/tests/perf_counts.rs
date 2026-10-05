@@ -147,18 +147,21 @@ fn data_perf_count_change_report_50_bindings() {
     // the price, so all of them are unchanged.
     assert_eq!(report.changed, REPORT_TABLES);
     assert_eq!(report.unchanged, 50 - REPORT_TABLES);
-    // AS FOUND: fingerprint_all re-resolves EVERY binding (50), and each table
-    // re-sorted the whole result — a one-cell change cost 10 full sorts. The
-    // engine now sorts once per (result content, keys) and the ten tables
-    // share it.
-    assert_eq!(c.resolves, 50);
-    assert_eq!(c.fingerprints, 50);
+    // AS FOUND: fingerprint_all re-resolved EVERY binding (50 resolves, 50
+    // fingerprints), and each table re-sorted the whole result — a one-cell
+    // change cost 10 full sorts. Now each binding carries a dependency stamp
+    // (its rows + the content of the columns it names): the 40 variables
+    // read sku/name, whose column hashes did not move, so only the 10 tables
+    // (which read price) re-resolve, sharing ONE sort.
+    assert_eq!(c.resolves, BUDGET_REPORT_50_RESOLVES);
+    assert_eq!(c.fingerprints, BUDGET_REPORT_50_RESOLVES);
     assert_eq!(c.stabilize_calls, BUDGET_REPORT_50_SORTS);
     assert_eq!(c.ingest_cells, (rows * 4) as u64);
     assert_eq!(c.content_hashes, 1);
     assert_eq!(c.diff_rows, 0, "the O(n) row diff() is not on this path");
     assert_eq!(c.key_allocs, BUDGET_REPORT_50_KEY_ALLOCS);
 }
+const BUDGET_REPORT_50_RESOLVES: u64 = REPORT_TABLES as u64;
 const BUDGET_REPORT_50_SORTS: u64 = 1;
 // Was 210 560: ten table sorts building keys per comparison.
 const BUDGET_REPORT_50_KEY_ALLOCS: u64 = 0;

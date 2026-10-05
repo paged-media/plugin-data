@@ -47,7 +47,7 @@ use data_core::{
     Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
-use data_query::{content_hash, first_stable_row, stable_order, stamp};
+use data_query::{content_hashes, first_stable_row, stable_order, stamp, Fnv};
 
 pub use diff::{
     diff, diff_resolved, resolved_fingerprint, BindingChange, ChangeKind, ChangeReport, RowDelta,
@@ -234,7 +234,23 @@ pub enum ResolveError {
 type OrderKey = (QueryId, Vec<String>);
 /// Cached stabilized orders, each with the result content hash it was sorted
 /// from.
-type OrderCache = HashMap<OrderKey, (u64, Arc<[usize]>)>;
+type OrderCache = HashMap<OrderKey, CachedOrder>;
+
+/// One cached stabilized order.
+#[derive(Clone)]
+struct CachedOrder {
+    /// The result content hash it was sorted from.
+    content: u64,
+    order: Arc<[usize]>,
+    /// A hash of the permutation itself — part of a whole-result binding's
+    /// dependency stamp (the rows it walks, in the order it walks them).
+    order_hash: u64,
+}
+
+/// A per-binding change-report snapshot: binding id → (dependency stamp,
+/// resolved-content fingerprint — `None` when it did not resolve). See
+/// [`ResolutionEngine::fingerprint_incremental`].
+pub type FingerprintSnapshot = HashMap<String, (u64, Option<String>)>;
 
 /// The resolution + synchronization engine (spec §8).
 #[derive(Default)]
@@ -246,6 +262,9 @@ pub struct ResolutionEngine {
     /// Per-query results delivered by the query engine (DuckDB → RecordSet).
     results: HashMap<QueryId, RecordSet>,
     results_hash: HashMap<QueryId, u64>,
+    /// Per-query, per-column content hashes (by column name) — the
+    /// column-level change signal of the change report.
+    column_hashes: HashMap<QueryId, HashMap<String, u64>>,
     /// Stabilized row orders per (query, sort keys), each valid for the result
     /// content hash it was sorted from. A table, a record flow, a rule and the
     /// preview stepper all reuse one sort until the data changes (a reflow
@@ -310,8 +329,18 @@ impl ResolutionEngine {
             data_query::perf::Counter::IngestCells,
             (records.row_count * records.columns.len()) as u64,
         );
-        let new_hash = content_hash(&records);
+        let (new_hash, per_column) = content_hashes(&records);
         let changed = self.results_hash.get(&query) != Some(&new_hash);
+        if changed {
+            let columns = records
+                .schema
+                .fields
+                .iter()
+                .zip(per_column)
+                .map(|(f, h)| (f.name.clone(), h))
+                .collect();
+            self.column_hashes.insert(query.clone(), columns);
+        }
         self.results.insert(query.clone(), records);
         self.results_hash.insert(query.clone(), new_hash);
         if !changed {
@@ -353,18 +382,34 @@ impl ResolutionEngine {
     /// The stabilized row order of a query's result by `keys`, sorted once per
     /// result content and reused until the data changes.
     fn cached_order(&self, query: &QueryId, records: &RecordSet, keys: &[String]) -> Arc<[usize]> {
-        let hash = self.results_hash.get(query).copied().unwrap_or(0);
+        self.cached_order_entry(query, records, keys).order
+    }
+
+    fn cached_order_entry(
+        &self,
+        query: &QueryId,
+        records: &RecordSet,
+        keys: &[String],
+    ) -> CachedOrder {
+        let content = self.results_hash.get(query).copied().unwrap_or(0);
         let key = (query.clone(), keys.to_vec());
-        if let Some((h, order)) = self.order_cache.borrow().get(&key) {
-            if *h == hash {
-                return order.clone();
+        if let Some(entry) = self.order_cache.borrow().get(&key) {
+            if entry.content == content {
+                return entry.clone();
             }
         }
         let order: Arc<[usize]> = stable_order(records, keys).into();
-        self.order_cache
-            .borrow_mut()
-            .insert(key, (hash, order.clone()));
-        order
+        let mut h = Fnv::default();
+        for &r in order.iter() {
+            h.u64(r as u64);
+        }
+        let entry = CachedOrder {
+            content,
+            order,
+            order_hash: h.finish(),
+        };
+        self.order_cache.borrow_mut().insert(key, entry.clone());
+        entry
     }
 
     /// The physical row that holds RECORD `record` of a query's result, where
@@ -380,9 +425,9 @@ impl ResolutionEngine {
         }
         if record == 0 {
             let hash = self.results_hash.get(query).copied().unwrap_or(0);
-            if let Some((h, order)) = self.order_cache.borrow().get(&(query.clone(), Vec::new())) {
-                if *h == hash {
-                    return Some(order[0]);
+            if let Some(entry) = self.order_cache.borrow().get(&(query.clone(), Vec::new())) {
+                if entry.content == hash {
+                    return Some(entry.order[0]);
                 }
             }
             return first_stable_row(records);
@@ -629,6 +674,121 @@ impl ResolutionEngine {
             }
         }
         out
+    }
+
+    /// The §8 change report's snapshot, re-resolving ONLY the bindings whose
+    /// inputs changed since `prev`. Each binding gets a dependency stamp
+    /// ([`dependency_stamp`](Self::dependency_stamp)): what it is, the rows it
+    /// reads in the order it reads them, and the content of the columns its
+    /// expressions name. A binding whose stamp equals its `prev` stamp keeps
+    /// its `prev` fingerprint without resolving — its content cannot have
+    /// changed. The rest resolve and fingerprint exactly as
+    /// [`fingerprint_all`](Self::fingerprint_all) does. A one-cell change
+    /// re-resolves the bindings that read that column, not every binding.
+    pub fn fingerprint_incremental(&self, prev: &FingerprintSnapshot) -> FingerprintSnapshot {
+        let mut out = HashMap::with_capacity(self.bindings.len());
+        for id in self.bindings.keys() {
+            let key = id.to_string();
+            // No stamp: no query, no result, or a rule — it cannot resolve.
+            let Some(stamp) = self.dependency_stamp(id) else {
+                out.insert(key, (0, None));
+                continue;
+            };
+            if let Some((was, fp)) = prev.get(&key) {
+                if *was == stamp {
+                    out.insert(key, (stamp, fp.clone()));
+                    continue;
+                }
+            }
+            let fp = self
+                .resolve_content(id, 0)
+                .ok()
+                .map(|r| resolved_fingerprint(&r));
+            out.insert(key, (stamp, fp));
+        }
+        out
+    }
+
+    /// A binding's dependency stamp for the change report: a hash of
+    ///
+    /// - the binding definition (and its template, for a record flow), the
+    ///   bound params, the locale and `today`;
+    /// - the rows it reads: record 0 of the stabilized order for the
+    ///   per-record kinds, the whole stabilized order (by its group-by keys)
+    ///   for tables and record flows;
+    /// - the content hash of every column its expressions (and group-by and
+    ///   footer fields) name.
+    ///
+    /// Equal stamps mean equal resolved content. `None` when the binding has
+    /// no query or no ingested result (it cannot resolve), or is a rule.
+    pub fn dependency_stamp(&self, id: &BindingId) -> Option<u64> {
+        let binding = self.bindings.get(id)?;
+        let query = binding.query()?;
+        let records = self.results.get(query)?;
+        let columns = self.column_hashes.get(query);
+        let mut h = Fnv::default();
+        h.str(&format!("{binding:?}"));
+        let mut params: Vec<(&String, &Value)> = self.params.iter().collect();
+        params.sort_by(|a, b| a.0.cmp(b.0));
+        h.str(&format!("{params:?}"));
+        h.str(&format!("{:?}", self.locale)).u64(self.today as u64);
+        let mut read: Vec<String> = Vec::new();
+        match binding {
+            Binding::Variable { expr, .. }
+            | Binding::Image { expr, .. }
+            | Binding::Barcode { expr, .. }
+            | Binding::Visibility { expr, .. } => {
+                collect_field_refs(expr, &mut read);
+                let row = self.record_row(query, 0);
+                h.u64(row.map_or(u64::MAX, |r| r as u64));
+            }
+            Binding::Table {
+                columns: cols,
+                options,
+                ..
+            } => {
+                cols.iter()
+                    .for_each(|c| collect_field_refs(&c.expr, &mut read));
+                h.u64(
+                    self.cached_order_entry(query, records, &options.group_by)
+                        .order_hash,
+                );
+            }
+            Binding::RecordFlow {
+                template, options, ..
+            } => {
+                match self.templates.get(template) {
+                    Some(t) => {
+                        h.str(&format!("{t:?}"));
+                        t.fields
+                            .iter()
+                            .for_each(|f| collect_field_refs(&f.expr, &mut read));
+                    }
+                    None => {
+                        h.str("no-template");
+                    }
+                }
+                read.extend(options.group_by.iter().cloned());
+                if let Some(sum) = options.footer.as_ref().and_then(|f| f.sum_field.clone()) {
+                    read.push(sum);
+                }
+                h.u64(
+                    self.cached_order_entry(query, records, &options.group_by)
+                        .order_hash,
+                );
+            }
+            Binding::Rule { .. } => return None,
+        }
+        read.sort();
+        read.dedup();
+        for name in &read {
+            h.str(name);
+            match columns.and_then(|c| c.get(name)) {
+                Some(ch) => h.u64(*ch),
+                None => h.str("absent"),
+            };
+        }
+        Some(h.finish())
     }
 
     /// Evaluate a data-driven formatting rule (spec §9.5) over a query's records.
@@ -1150,5 +1310,27 @@ fn classify_image_text(t: &str) -> ImageReference {
         ImageReference::Path {
             path: t.to_string(),
         }
+    }
+}
+
+/// The field names an expression source reads (its `Expr::Field` nodes),
+/// appended to `out`. An unparseable source reads nothing: it evaluates to a
+/// constant error value whatever the data.
+fn collect_field_refs(src: &str, out: &mut Vec<String>) {
+    fn walk(e: &data_core::Expr, out: &mut Vec<String>) {
+        use data_core::Expr;
+        match e {
+            Expr::Field(name) => out.push(name.to_string()),
+            Expr::Unary { rhs, .. } => walk(rhs, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            Expr::Call { args, .. } => args.iter().for_each(|a| walk(a, out)),
+            Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Text(_) | Expr::Param(_) => {}
+        }
+    }
+    if let Ok(expr) = data_expr::parse(src) {
+        walk(&expr, out);
     }
 }
