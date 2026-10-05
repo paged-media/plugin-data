@@ -24,9 +24,10 @@
 // sidecar file read yet (data.governed.extract) and no native batch execution
 // (napi-rs) — the ENGINE sides are done; these are the seams.
 
-import { useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 
+import type { LocaleInfo } from "../review";
 import { DiagnosticsList } from "./diagnostics";
 import { useSessionSnapshot } from "./use-session";
 
@@ -81,7 +82,18 @@ export function makeDatasetPanel(
     const [runs, setRuns] = useState<BatchRun[] | null>(null);
     const [providerNote, setProviderNote] = useState<string>("");
     const [error, setError] = useState<string>("");
-    const [locale, setLocaleState] = useState<"en" | "de">(session.getLocale());
+    const [locale, setLocaleState] = useState<string>(session.getLocale());
+    // §9.1: every locale the engine's table knows, with its own samples.
+    const [localeList, setLocaleList] = useState<LocaleInfo[]>([]);
+    useEffect(() => {
+      let live = true;
+      void session.locales().then((l) => {
+        if (live && l) setLocaleList(l);
+      });
+      return () => {
+        live = false;
+      };
+    }, [session]);
     // §9.9 — the Variables / data sets palette.
     const [variables, setVariables] = useState<VariableSummary[]>([]);
     const [dataSets, setDataSets] = useState<string[]>([]);
@@ -251,13 +263,23 @@ export function makeDatasetPanel(
           <select
             value={locale}
             onChange={(e) => {
-              const next = e.target.value as "en" | "de";
+              const next = e.target.value;
               session.setLocale(next);
               setLocaleState(next);
             }}
           >
-            <option value="en">en — $1,234.50 · YYYY-MM-DD</option>
-            <option value="de">de — 1.234,56 € · DD.MM.YYYY</option>
+            {localeList.length === 0 ? (
+              <>
+                <option value="en">en — $1,234.50 · YYYY-MM-DD</option>
+                <option value="de">de — 1.234,56 € · DD.MM.YYYY</option>
+              </>
+            ) : (
+              localeList.map((l) => (
+                <option key={l.tag} value={l.tag}>
+                  {l.tag} — {l.name}: {l.currency} · {l.date}
+                </option>
+              ))
+            )}
           </select>
         </label>
 

@@ -126,6 +126,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // `minted` — no hitTest (D-16). hostCalls 11 → 7, reads 3 → 2, mutates
   // 4 → 1, undo steps 4 → 1.
   // Column door (Wave 2): the result crosses as typed column buffers — begin + one push per column + finish (+4 wasm calls) instead of 1 500 `{t, v}` cells (cellsIn 0; bytes in 41.5 KB → 16.9 KB).
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W1_LOWER: Measured = {
     hostCalls: 7,
     hostReads: 2,
@@ -133,7 +134,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 1506,
     undoSteps: 1,
     placeholdersRead: 0,
-    wasmCalls: 8,
+    wasmCalls: 9,
     cellsIn: 0,
     resolves: 1,
     stabilizeCalls: 1,
@@ -195,6 +196,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // step), and the engine decides every field in ONE `refresh_field_values`
   // call. hostCalls 102 → 3, mutates 100 → 1, undo 89 (unreachable) → 1,
   // wasm calls 200 → 1.
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W2: Measured = {
     hostCalls: 3,
     hostReads: 1,
@@ -202,7 +204,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 100,
     undoSteps: 1,
     placeholdersRead: 100,
-    wasmCalls: 1,
+    wasmCalls: 2,
     cellsIn: 0,
     resolves: 100,
     stabilizeCalls: 0,
@@ -389,6 +391,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 2 supports, selection.get, one mutate, one log. hostCalls 240 → 102,
   // reads 120 → 2, mutates 40 → 20, undo steps 40 → 20.
   // Column door (Wave 2): begin + per-column push + finish replace one `{t, v}` ingest of 150 cells.
+  // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W5: Measured = {
     hostCalls: 102,
     hostReads: 2,
@@ -396,7 +399,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 40,
     undoSteps: 20,
     placeholdersRead: 0,
-    wasmCalls: 25,
+    wasmCalls: 26,
     cellsIn: 0,
     resolves: 20,
     stabilizeCalls: 0,

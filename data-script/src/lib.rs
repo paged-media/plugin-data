@@ -129,7 +129,7 @@ mod tests {
             })
         "#;
         let spec = eval_spec(script).unwrap();
-        assert_eq!(spec.locale, Some(Locale::De));
+        assert_eq!(spec.locale, Some(Locale::DE));
         assert_eq!(
             spec.params.get("minPrice").and_then(|v| v.as_f64()),
             Some(10.0)

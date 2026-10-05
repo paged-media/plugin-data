@@ -254,20 +254,68 @@ function appliedCellStyleMutation(
  *  region's lowered geometry), never inferred here. */
 export type RuleTarget =
   | { kind: "storyRange"; storyId: string; start: number; end: number }
+  | { kind: "storyParagraphs"; storyId: string; firstParagraph: number }
   | { kind: "tableColumn"; storyId: string; tableId: string; col: number; headerRows: number };
 
-/** Translate a fired rule into host Mutations (D-13). A character/paragraph
- *  StyleAction over a story range emits one `applyStyle`; a table StyleAction
- *  over the fired rows emits one per-cell `appliedCellStyle` (the fired
- *  stabilized record index maps to a table row, offset past header rows). Pure:
- *  the engine's `fires`/`apply` decided everything; this is op shaping. */
-export function ruleMutations(rule: RuleApplication, target: RuleTarget): Mutation[] {
+/** One paragraph's character range in its story, read live by the caller
+ *  (`[start, end)` in core's offset space, where a break is not a character). */
+export interface ParagraphRange {
+  start: number;
+  end: number;
+}
+
+/** The character range of each paragraph of a story read through
+ *  `storyContent`, in core's story offset space: run texts are contiguous and
+ *  a paragraph break is NOT a character (core paged-mutate
+ *  apply/paragraph.rs, "the paragraph break is not a character here"; the
+ *  placeholder offsets count the same way). Counted in Unicode scalar values,
+ *  as core counts `chars()`. */
+export function paragraphRanges(
+  paragraphs: readonly { runs: readonly { text: string }[] }[],
+): ParagraphRange[] {
+  const out: ParagraphRange[] = [];
+  let at = 0;
+  for (const p of paragraphs) {
+    let len = 0;
+    for (const r of p.runs) len += [...r.text].length;
+    out.push({ start: at, end: at + len });
+    at += len;
+  }
+  return out;
+}
+
+/** Translate a fired rule into host Mutations (D-13). Pure: the engine's
+ *  `fires`/`apply` decided everything; this is op shaping.
+ *
+ *  - `storyRange` + a character/paragraph action: one `applyStyle` over the
+ *    range when ANY record fired, none when none did.
+ *  - `storyParagraphs` + a character/paragraph action: one `applyStyle` per
+ *    fired record, over the paragraph that holds it (record i is paragraph
+ *    `firstParagraph + i`; `paragraphs` are the story's live ranges). A record
+ *    past the story's last paragraph is skipped.
+ *  - `tableColumn` + a cell action: one `appliedCellStyle` per fired record's
+ *    cell (the record index offset past the header rows). */
+export function ruleMutations(
+  rule: RuleApplication,
+  target: RuleTarget,
+  paragraphs: readonly ParagraphRange[] = [],
+): Mutation[] {
   const { apply, fires } = rule;
   if (apply.kind === "character" || apply.kind === "paragraph") {
-    if (target.kind !== "storyRange") return [];
-    // A range rule fires once over its scope (the firing records are styled by
-    // the host's range — the engine's row decision drives the table path).
-    return [applyStyleMutation(target.storyId, target.start, target.end, apply.name, apply.kind)];
+    if (target.kind === "storyRange") {
+      if (fires.length === 0) return [];
+      return [applyStyleMutation(target.storyId, target.start, target.end, apply.name, apply.kind)];
+    }
+    if (target.kind === "storyParagraphs") {
+      const out: Mutation[] = [];
+      for (const recordIndex of fires) {
+        const p = paragraphs[target.firstParagraph + recordIndex];
+        if (!p) continue;
+        out.push(applyStyleMutation(target.storyId, p.start, p.end, apply.name, apply.kind));
+      }
+      return out;
+    }
+    return [];
   }
   // Table style action → per-cell over the fired rows of the target column.
   if (target.kind !== "tableColumn") return [];

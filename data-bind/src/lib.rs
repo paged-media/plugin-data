@@ -274,11 +274,14 @@ pub struct ResolutionEngine {
     params: HashMap<String, Value>,
     today: i32,
     locale: Locale,
+    /// Per-binding locale overrides (a field formatted for another market than
+    /// the session's). Absent → the session locale.
+    binding_locales: HashMap<BindingId, Locale>,
 }
 
 impl ResolutionEngine {
     /// A fresh engine with an injected `today` serial (days since 1970-01-01).
-    /// The formatting locale defaults to [`Locale::En`]; set it with
+    /// The formatting locale defaults to [`Locale::EN`]; set it with
     /// [`set_locale`].
     pub fn new(today: i32) -> Self {
         ResolutionEngine {
@@ -295,6 +298,30 @@ impl ResolutionEngine {
     /// The formatting locale in effect (§9.1).
     pub fn locale(&self) -> Locale {
         self.locale
+    }
+
+    /// Override the formatting locale for ONE binding (`None` clears it, so the
+    /// binding follows the session locale again). Display output only; the
+    /// canonical value and every content hash stay locale-free.
+    pub fn set_binding_locale(&mut self, id: &BindingId, locale: Option<Locale>) {
+        match locale {
+            Some(l) => {
+                self.binding_locales.insert(id.clone(), l);
+            }
+            None => {
+                self.binding_locales.remove(id);
+            }
+        }
+    }
+
+    /// A binding's own locale override, if it has one.
+    pub fn binding_locale(&self, id: &BindingId) -> Option<Locale> {
+        self.binding_locales.get(id).copied()
+    }
+
+    /// The locale a binding formats with: its override, else the session's.
+    pub fn locale_for(&self, id: &BindingId) -> Locale {
+        self.binding_locales.get(id).copied().unwrap_or(self.locale)
     }
 
     /// Register a query (the recipe).
@@ -522,7 +549,21 @@ impl ResolutionEngine {
     /// [`resolve`](Self::resolve); a preview resolve is still an explicit user
     /// action that re-links. Re-resolution is idempotent (§12.4).
     pub fn resolve_at(&mut self, id: &BindingId, record: usize) -> Result<Resolved, ResolveError> {
-        let resolved = self.resolve_content(id, record)?;
+        let resolved = match self.resolve_content(id, record) {
+            Ok(r) => r,
+            Err(err) => {
+                // A known binding that cannot resolve is in `Error` (§8), unless
+                // the user froze it: a pinned or overridden binding keeps its
+                // content AND its status — the failure is not theirs to see as
+                // a sync decision being undone.
+                if let Some(st) = self.sync.get_mut(id) {
+                    if st.accepts_refresh() {
+                        st.status = Status::Error;
+                    }
+                }
+                return Err(err);
+            }
+        };
         // Stamp + relink (non-destructive policy already protected pinned/
         // overridden by short-circuiting before a manual resolve is requested;
         // an explicit resolve is the user action that re-links).
@@ -564,6 +605,7 @@ impl ResolutionEngine {
         // Per-record kinds read stabilized record `record` (see `record_row`);
         // an absent record is out of range for them (the missing policy).
         let row = || self.record_row(query_id, record).unwrap_or(usize::MAX);
+        let locale = self.locale_for(id);
 
         let resolved = match binding {
             Binding::Variable {
@@ -579,7 +621,7 @@ impl ResolutionEngine {
                 row(),
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
                 query.map(|q| &q.shape),
             )),
             Binding::Table {
@@ -594,7 +636,7 @@ impl ResolutionEngine {
                 records,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::RecordFlow {
                 chain,
@@ -614,7 +656,7 @@ impl ResolutionEngine {
                     records,
                     &self.params,
                     self.today,
-                    self.locale,
+                    locale,
                 ))
             }
             Binding::Image {
@@ -630,7 +672,7 @@ impl ResolutionEngine {
                 row(),
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Barcode {
                 target,
@@ -647,7 +689,7 @@ impl ResolutionEngine {
                 row(),
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Visibility {
                 target,
@@ -662,7 +704,7 @@ impl ResolutionEngine {
                 row(),
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
@@ -723,7 +765,8 @@ impl ResolutionEngine {
     /// A binding's dependency stamp for the change report: a hash of
     ///
     /// - the binding definition (and its template, for a record flow), the
-    ///   bound params, the locale and `today`;
+    ///   bound params, the binding's locale ([`locale_for`](Self::locale_for))
+    ///   and `today`;
     /// - the rows it reads: record 0 of the stabilized order for the
     ///   per-record kinds, the whole stabilized order (by its group-by keys)
     ///   for tables and record flows;
@@ -742,14 +785,17 @@ impl ResolutionEngine {
         let mut params: Vec<(&String, &Value)> = self.params.iter().collect();
         params.sort_by(|a, b| a.0.cmp(b.0));
         h.str(&format!("{params:?}"));
-        h.str(&format!("{:?}", self.locale)).u64(self.today as u64);
+        // The binding's OWN locale (its override, else the session's): changing
+        // one field's locale changes that field's output, so its stamp moves.
+        h.str(&format!("{:?}", self.locale_for(id)))
+            .u64(self.today as u64);
         let mut read: Vec<String> = Vec::new();
         match binding {
             Binding::Variable { expr, .. }
             | Binding::Image { expr, .. }
             | Binding::Barcode { expr, .. }
             | Binding::Visibility { expr, .. } => {
-                collect_field_refs(expr, &mut read);
+                read.extend(data_expr::field_refs(expr));
                 let row = self.record_row(query, 0);
                 h.u64(row.map_or(u64::MAX, |r| r as u64));
             }
@@ -759,7 +805,7 @@ impl ResolutionEngine {
                 ..
             } => {
                 cols.iter()
-                    .for_each(|c| collect_field_refs(&c.expr, &mut read));
+                    .for_each(|c| read.extend(data_expr::field_refs(&c.expr)));
                 h.u64(
                     self.cached_order_entry(query, records, &options.group_by)
                         .order_hash,
@@ -773,7 +819,7 @@ impl ResolutionEngine {
                         h.str(&format!("{t:?}"));
                         t.fields
                             .iter()
-                            .for_each(|f| collect_field_refs(&f.expr, &mut read));
+                            .for_each(|f| read.extend(data_expr::field_refs(&f.expr)));
                     }
                     None => {
                         h.str("no-template");
@@ -820,6 +866,36 @@ impl ResolutionEngine {
             Binding::Rule { scope, when, apply } => (scope.clone(), when.clone(), apply.clone()),
             _ => return Err(ResolveError::Unsupported("not a rule")),
         };
+        let locale = self.locale_for(rule_id);
+        let (fires, total) = self.condition_fires(query_id, &when, locale)?;
+        Ok(RuleEvaluation {
+            scope,
+            fires,
+            apply,
+            total,
+        })
+    }
+
+    /// Evaluate a `when` condition over a query's records WITHOUT a rule
+    /// defined — the rules editor's "which records fire" preview. The same
+    /// evaluation [`evaluate_rule`](Self::evaluate_rule) runs, so a preview and
+    /// the applied rule agree. Returns the stabilized indices that fired and the
+    /// record count. A condition that does not parse fires nowhere; check it
+    /// with `data_expr::parse` first to show the error.
+    pub fn evaluate_condition(
+        &self,
+        query_id: &QueryId,
+        when: &str,
+    ) -> Result<(Vec<usize>, usize), ResolveError> {
+        self.condition_fires(query_id, when, self.locale)
+    }
+
+    fn condition_fires(
+        &self,
+        query_id: &QueryId,
+        when: &str,
+        locale: Locale,
+    ) -> Result<(Vec<usize>, usize), ResolveError> {
         let records = self
             .results
             .get(query_id)
@@ -832,22 +908,14 @@ impl ResolutionEngine {
                 row,
                 params: &self.params,
             };
-            if eval_str(
-                &when,
-                &EvalCtx::new(&ctx, self.today).with_locale(self.locale),
-            )
-            .as_bool()
-            .unwrap_or(false)
+            if eval_str(when, &EvalCtx::new(&ctx, self.today).with_locale(locale))
+                .as_bool()
+                .unwrap_or(false)
             {
                 fires.push(i);
             }
         }
-        Ok(RuleEvaluation {
-            scope,
-            fires,
-            apply,
-            total: records.row_count,
-        })
+        Ok((fires, records.row_count))
     }
 
     /// The resolve stamp for a query's current result + params (§8).
@@ -1330,28 +1398,6 @@ fn classify_image_text(t: &str) -> ImageReference {
         ImageReference::Path {
             path: t.to_string(),
         }
-    }
-}
-
-/// The field names an expression source reads (its `Expr::Field` nodes),
-/// appended to `out`. An unparseable source reads nothing: it evaluates to a
-/// constant error value whatever the data.
-fn collect_field_refs(src: &str, out: &mut Vec<String>) {
-    fn walk(e: &data_core::Expr, out: &mut Vec<String>) {
-        use data_core::Expr;
-        match e {
-            Expr::Field(name) => out.push(name.to_string()),
-            Expr::Unary { rhs, .. } => walk(rhs, out),
-            Expr::Binary { lhs, rhs, .. } => {
-                walk(lhs, out);
-                walk(rhs, out);
-            }
-            Expr::Call { args, .. } => args.iter().for_each(|a| walk(a, out)),
-            Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Text(_) | Expr::Param(_) => {}
-        }
-    }
-    if let Ok(expr) = data_expr::parse(src) {
-        walk(&expr, out);
     }
 }
 

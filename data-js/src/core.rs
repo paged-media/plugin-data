@@ -21,7 +21,7 @@
 //! exercises it WITHOUT a wasm runtime. The `#[wasm_bindgen]` `DataEngine`
 //! (in `lib.rs`) is a forwarding shim over this; nothing computes there.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -140,6 +140,15 @@ pub struct RuleResult {
     pub total: usize,
 }
 
+/// Which records a condition fires on (the rules editor's preview).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConditionPreview {
+    pub fires: Vec<usize>,
+    pub total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// One executed batch unit (spec §10): a deterministic label + the paginated
 /// flow for that output document. The batch runner partitions a resolved record
 /// flow by [`BatchMode`] (per-record / per-group / one-catalog) and paginates
@@ -209,6 +218,11 @@ pub struct DocumentPayload {
     /// guess. `payload-budget.test.ts` pins the arithmetic.
     #[serde(default)]
     pub variables: VariableSet,
+    /// Per-binding locale overrides (§9.1): a field formatted for another
+    /// market than the session's. Omitted when empty, so a payload without
+    /// overrides is byte-identical to one written before the field existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub locales: BTreeMap<String, Locale>,
 }
 
 /// One source's authorization verdict (§11 data-source manifest review).
@@ -346,6 +360,11 @@ pub struct DataSession {
     /// The §9.9 variable set: declarations (derived from the bindable bindings,
     /// plus any imported from a library) + the captured data sets.
     variables: VariableSet,
+    /// Per-binding locale overrides (saved in the payload).
+    binding_locales: BTreeMap<String, Locale>,
+    /// Each query's result as of the last time the document was written from
+    /// it (`mark_rows_applied`): the "before" of the row diff.
+    applied_rows: HashMap<QueryId, RecordSet>,
 }
 
 impl DataSession {
@@ -364,6 +383,8 @@ impl DataSession {
             // Illustrator names a document's one variable set `binding1`; match
             // it so an exported library drops into that workflow unremarkably.
             variables: VariableSet::new("binding1"),
+            binding_locales: BTreeMap::new(),
+            applied_rows: HashMap::new(),
         }
     }
 
@@ -829,6 +850,115 @@ impl DataSession {
         }
     }
 
+    /// Override the formatting locale of one binding (`None` clears it).
+    pub fn set_binding_locale(&mut self, id: &BindingId, locale: Option<Locale>) {
+        self.engine.set_binding_locale(id, locale);
+        match locale {
+            Some(l) => {
+                self.binding_locales.insert(id.to_string(), l);
+            }
+            None => {
+                self.binding_locales.remove(id.as_str());
+            }
+        }
+    }
+
+    /// The per-binding locale overrides.
+    pub fn binding_locales(&self) -> &BTreeMap<String, Locale> {
+        &self.binding_locales
+    }
+
+    /// Record every query's current result as the one the document was written
+    /// from: the "before" of the next [`row_diff`](Self::row_diff). The host
+    /// calls it after it wrote the document from the data (a lower, a field
+    /// refresh), never after a refresh alone.
+    pub fn mark_rows_applied(&mut self) {
+        for q in &self.queries {
+            if let Some(r) = self.engine.result(&q.id) {
+                self.applied_rows.insert(q.id.clone(), r.clone());
+            }
+        }
+    }
+
+    /// The §8 row diff: for every query with a result, the rows added, removed
+    /// and changed since [`mark_rows_applied`](Self::mark_rows_applied), and
+    /// which bindings read what changed. Read-only: it neither moves the applied
+    /// snapshot nor touches a sync state. A separate entry point from
+    /// [`refresh_change_report`](Self::refresh_change_report), which reports per
+    /// binding.
+    pub fn row_diff(
+        &self,
+        opts: &crate::review::RowDiffOptions,
+    ) -> Vec<crate::review::QueryRowDiff> {
+        let current: Vec<(QueryId, &RecordSet)> = self
+            .queries
+            .iter()
+            .filter_map(|q| self.engine.result(&q.id).map(|r| (q.id.clone(), r)))
+            .collect();
+        let templates: HashMap<String, Vec<String>> = self
+            .templates
+            .iter()
+            .map(|t| {
+                let reads = t
+                    .fields
+                    .iter()
+                    .flat_map(|f| data_expr::field_refs(&f.expr))
+                    .collect();
+                (t.id.to_string(), reads)
+            })
+            .collect();
+        crate::review::row_diffs(
+            &self.applied_rows,
+            &current,
+            &self.bindings,
+            &templates,
+            opts,
+        )
+    }
+
+    /// Check an expression: does it parse, which fields does it read, and —
+    /// given a query with a result — which of those the result lacks.
+    pub fn check_expression(&self, src: &str, query: Option<&QueryId>) -> crate::review::ExprCheck {
+        crate::review::check_expression(src, query.and_then(|q| self.engine.result(q)))
+    }
+
+    /// Which records a condition fires on, without defining a rule — the
+    /// rules editor's preview. Same evaluation as [`evaluate_rule`](Self::evaluate_rule).
+    pub fn preview_condition(
+        &self,
+        query: &QueryId,
+        when: &str,
+    ) -> Result<ConditionPreview, SessionError> {
+        let check = self.check_expression(when, Some(query));
+        if let Some(error) = check.error.filter(|_| !check.ok) {
+            return Ok(ConditionPreview {
+                fires: vec![],
+                total: self.engine.record_count(query),
+                error: Some(error),
+            });
+        }
+        let (fires, total) = self.engine.evaluate_condition(query, when)?;
+        Ok(ConditionPreview {
+            fires,
+            total,
+            error: None,
+        })
+    }
+
+    /// A per-record binding's display text for record `record`, WITHOUT
+    /// re-linking it (a preview must not change a sync decision). `None` for a
+    /// kind with no single display text.
+    pub fn preview_display(
+        &self,
+        id: &BindingId,
+        record: usize,
+    ) -> Result<Option<String>, SessionError> {
+        Ok(match self.engine.resolve_content(id, record)? {
+            Resolved::Variable(v) => Some(if v.hidden { String::new() } else { v.display }),
+            _ => None,
+        })
+    }
+
     /// The sync state of a binding.
     pub fn sync_state(&self, id: &BindingId) -> Option<SyncState> {
         self.engine.sync_state(id)
@@ -963,6 +1093,7 @@ impl DataSession {
             templates: self.templates.clone(),
             bindings: self.bindings.clone(),
             variables: self.variables.clone(),
+            locales: self.binding_locales.clone(),
         }
     }
 
@@ -986,6 +1117,9 @@ impl DataSession {
         // deriving on load would make `from_payload(payload(s))` differ from `s`
         // — the recipe round-trip must be exact (`roundtrip.rs` pins it).
         s.variables = payload.variables;
+        for (id, l) in payload.locales {
+            s.set_binding_locale(&BindingId::from(id.as_str()), Some(l));
+        }
         s
     }
 

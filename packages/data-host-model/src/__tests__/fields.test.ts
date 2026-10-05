@@ -33,6 +33,7 @@ import {
   placeImageMutation,
   placeableUri,
   ruleMutations,
+  paragraphRanges,
   setFieldValueMutation,
   toRuleApplication,
   type PlaceholderField,
@@ -236,5 +237,58 @@ describe("data_lower_rule (D-13 rule application)", () => {
         end: 1,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("rule targets in a story [data.rule.authoring]", () => {
+  const app = (fires: number[]) =>
+    toRuleApplication({
+      scope: "r",
+      fires,
+      apply: { action: "paragraphStyle", name: "ParagraphStyle/Low" },
+      total: 3,
+    });
+
+  it("a story-range rule applies nothing when no record fires", () => {
+    expect(
+      ruleMutations(app([]), { kind: "storyRange", storyId: "s", start: 0, end: 9 }),
+    ).toEqual([]);
+  });
+
+  it("a per-paragraph rule styles the paragraph of each fired record", () => {
+    const paragraphs = [
+      { start: 0, end: 5 },
+      { start: 6, end: 11 },
+      { start: 12, end: 17 },
+      { start: 18, end: 23 },
+    ];
+    const muts = ruleMutations(
+      app([0, 2, 7]),
+      { kind: "storyParagraphs", storyId: "s", firstParagraph: 1 },
+      paragraphs,
+    ) as { op: string; args: { start: number; end: number; style: string; scope: string } }[];
+    // record 0 → paragraph 1, record 2 → paragraph 3, record 7 → none (skipped).
+    expect(muts.map((m) => [m.args.start, m.args.end])).toEqual([
+      [6, 11],
+      [18, 23],
+    ]);
+    expect(muts.every((m) => m.op === "applyStyle" && m.args.scope === "paragraph")).toBe(true);
+    expect(muts[0].args.style).toBe("ParagraphStyle/Low");
+  });
+});
+
+describe("paragraphRanges [data.rule.authoring]", () => {
+  it("counts run text only — a paragraph break is not a character in core", () => {
+    expect(
+      paragraphRanges([
+        { runs: [{ text: "ab" }, { text: "c" }] },
+        { runs: [] },
+        { runs: [{ text: "dé😀" }] },
+      ]),
+    ).toEqual([
+      { start: 0, end: 3 },
+      { start: 3, end: 3 },
+      { start: 3, end: 6 },
+    ]);
   });
 });

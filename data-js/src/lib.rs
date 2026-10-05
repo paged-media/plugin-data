@@ -45,6 +45,7 @@
 
 pub mod columns;
 pub mod core;
+pub mod review;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -433,6 +434,87 @@ mod wasm {
         /// Re-link a pinned/overridden binding.
         pub fn relink(&mut self, binding: &str) {
             self.session.relink(&BindingId::from(binding));
+        }
+
+        /// Override one binding's formatting locale (a tag such as `"fr"`);
+        /// `null` clears the override.
+        pub fn set_binding_locale(
+            &mut self,
+            binding: &str,
+            locale: JsValue,
+        ) -> Result<(), JsValue> {
+            let locale = if locale.is_null() || locale.is_undefined() {
+                None
+            } else {
+                Some(from_js(locale)?)
+            };
+            self.session
+                .set_binding_locale(&BindingId::from(binding), locale);
+            Ok(())
+        }
+
+        /// The per-binding locale overrides (`{ binding: tag }`).
+        pub fn binding_locales(&self) -> JsValue {
+            to_js_json(self.session.binding_locales()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Record every query's current result as the one the document was
+        /// written from (the "before" of `row_diff`).
+        pub fn mark_rows_applied(&mut self) {
+            self.session.mark_rows_applied();
+        }
+
+        /// The §8 row diff per query since `mark_rows_applied`
+        /// (`QueryRowDiff[]`). `opts` is `{ keys?, ruleQueries?, limit? }`.
+        pub fn row_diff(&self, opts: JsValue) -> Result<JsValue, JsValue> {
+            let opts = if opts.is_null() || opts.is_undefined() {
+                Default::default()
+            } else {
+                from_js(opts)?
+            };
+            to_js(&self.session.row_diff(&opts))
+        }
+
+        /// Check an expression (parse error, fields read, fields the query's
+        /// result lacks).
+        pub fn check_expression(&self, src: &str, query: Option<String>) -> JsValue {
+            let q = query.map(|q| QueryId::from(q.as_str()));
+            to_js(&self.session.check_expression(src, q.as_ref())).unwrap_or(JsValue::NULL)
+        }
+
+        /// Which records a condition fires on (`{ fires, total, error? }`).
+        pub fn preview_condition(&self, query: &str, when: &str) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_condition(&QueryId::from(query), when)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// A per-record binding's display text for a record, without
+        /// re-linking it (`null` for other kinds).
+        pub fn preview_display(&self, binding: &str, record: usize) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_display(&BindingId::from(binding), record)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// Every formatting locale with formatted samples (`LocaleInfo[]`).
+        pub fn locales(&self) -> JsValue {
+            to_js(&crate::review::locale_catalog()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Wrap an expression in a display pattern (`{ kind, decimals?,
+        /// symbol?, pattern? }`).
+        pub fn format_expression(&self, inner: &str, pattern: JsValue) -> Result<String, JsValue> {
+            Ok(crate::review::format_expression(inner, from_js(pattern)?))
+        }
+
+        /// Split an expression into `{ inner, pattern }`.
+        pub fn split_expression(&self, src: &str) -> JsValue {
+            to_js(&crate::review::split_expression(src)).unwrap_or(JsValue::NULL)
         }
 
         /// The sync report (`[{binding,status}]`).
