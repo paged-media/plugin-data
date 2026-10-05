@@ -220,7 +220,7 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 | `diff(old, new)` applied to old yields new | `data.bind.engine` |
 | the payload survives save → JSON → load → save unchanged | `data.plugin.bundle` |
 | a second resolve and a second change report without a data change are no-ops | `data.bind.change-report` |
-| EAN-13 (first digit 0) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
+| EAN-13 (every first digit) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
 
 QR is decoded with `rqrr`, an independent decoder (MIT OR Apache-2.0, a dev-dependency only).
 The harness was first validated on a reference matrix from python `qrcode`. Code-128 has no
@@ -228,9 +228,10 @@ independent decoder here, because no small, permissive, pure-Rust one exists.
 
 **Defects pinned** as `defect_*` tests:
 
-- **DB-1.** EAN-13 G-parity symbols are written inverted: digit 0 comes out as `1011000`, not
-  `0100111`. Every EAN-13 whose first digit is not 0 is therefore unscannable. UPC-A is
-  unaffected.
+- **DB-1 (fixed).** EAN-13 G-parity symbols were written inverted: digit 0 came out as
+  `1011000`, not `0100111`, so every EAN-13 whose first digit is not 0 was unscannable. G is now
+  R reversed, per the GS1 table. The EAN-13 property draws every first digit, and
+  `data_db1_*` keeps the GS1 worked example as a regression.
 - **DB-2.** QR symbols do not decode. Their data modules match a reference encoder with the same
   version, level and mask, but 9 format-information and dark-module modules differ.
 - **DP-1.** Dates and times before 1970 stabilize after later ones, because of big-endian

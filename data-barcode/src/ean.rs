@@ -37,8 +37,10 @@ use crate::{linear_geometry, BarcodeError, BarcodeGeometry, Symbology};
 const QUIET: u32 = 9;
 
 /// L-code (odd parity) 7-module patterns for digits 0–9 (`1` = dark). R-code is
-/// the bitwise complement; G-code is L reversed — derived below, so only the L
-/// table is a literal (the single source of truth, ISO/IEC 15420 Table).
+/// the bitwise complement of L; G-code is R reversed (GS1 General
+/// Specifications §5.2.1.2.1: "the G set … is the mirror image of the R set") —
+/// derived below, so only the L table is a literal (the single source of
+/// truth, ISO/IEC 15420 Table).
 const L_CODE: [[u8; 7]; 10] = [
     [0, 0, 0, 1, 1, 0, 1], // 0
     [0, 0, 1, 1, 0, 0, 1], // 1
@@ -69,9 +71,12 @@ const PARITY: [[bool; 6]; 10] = [
     [false, true, true, false, true, false],       // 9
 ];
 
-/// The L pattern reversed = the G-code (even parity) pattern for a digit.
+/// The R pattern reversed = the G-code (even parity) pattern for a digit. A G
+/// symbol starts with a space and ends with a bar, like L, but has an EVEN
+/// number of dark modules (that is what "even parity" names). Reversing L
+/// instead (DB-1) gives a bar-led, odd-parity pattern no reader accepts.
 fn g_code(digit: usize) -> [u8; 7] {
-    let mut g = L_CODE[digit];
+    let mut g = r_code(digit);
     g.reverse();
     g
 }
@@ -302,10 +307,35 @@ mod tests {
 
     #[test]
     fn data_barcode_ean13_r_and_g_codes_are_derived() {
-        // R = complement of L; G = L reversed. Spot-check digit 0.
+        // R = complement of L; G = R reversed. Spot-check against the GS1
+        // table: R(0) = 1110010, G(0) = 0100111, G(3) = 0100001.
         assert_eq!(r_code(0), [1, 1, 1, 0, 0, 1, 0]);
-        let mut rev = L_CODE[3];
-        rev.reverse();
-        assert_eq!(g_code(3), rev);
+        assert_eq!(g_code(0), [0, 1, 0, 0, 1, 1, 1]);
+        assert_eq!(g_code(3), [0, 1, 0, 0, 0, 0, 1]);
+        // Every L and G symbol starts with a space and ends with a bar; L has
+        // an odd number of dark modules, G an even one.
+        for d in 0..10 {
+            for (pat, parity) in [(L_CODE[d], 1), (g_code(d), 0)] {
+                assert_eq!((pat[0], pat[6]), (0, 1), "digit {d}");
+                assert_eq!(pat.iter().map(|&m| m as u32).sum::<u32>() % 2, parity);
+            }
+        }
+    }
+
+    #[test]
+    fn data_barcode_ean13_published_vector_modules() {
+        // 4006381333931 (the GS1 worked example; first digit 4 → LGLLGG):
+        // the left half is 0 L, 0 G, 6 L, 3 L, 8 G, 1 G.
+        let g = encode_ean13("4006381333931").unwrap();
+        let unit = 1.0 / g.modules_x as f64;
+        let mut bits = vec!['0'; g.modules_x as usize];
+        for r in &g.rects {
+            let start = (r.x / unit).round() as usize;
+            let len = (r.w / unit).round() as usize;
+            bits[start..start + len].iter_mut().for_each(|b| *b = '1');
+        }
+        let body: String = bits[QUIET as usize..QUIET as usize + 95].iter().collect();
+        let left = concat!("101", "0001101", "0100111", "0101111", "0111101", "0001001", "0110011");
+        assert_eq!(&body[..45], left);
     }
 }

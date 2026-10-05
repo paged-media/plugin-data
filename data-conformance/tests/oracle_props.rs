@@ -311,10 +311,9 @@ proptest! {
     }
 
     #[test]
-    fn data_prop_ean13_decodes_back__feat__data_barcode_symbology(digits in prop::collection::vec(0u8..10, 11)) {
-        // First digit 0 only: every other first digit puts G-parity symbols in
-        // the left half, which DB-1 encodes inverted.
-        let s: String = std::iter::once('0').chain(digits.iter().map(|d| (b'0' + d) as char)).collect();
+    fn data_prop_ean13_decodes_back__feat__data_barcode_symbology(digits in prop::collection::vec(0u8..10, 12)) {
+        // Every first digit: 1–9 select a parity row with G symbols (DB-1).
+        let s: String = digits.iter().map(|d| (b'0' + d) as char).collect();
         let g = encode(Symbology::Ean13, &s).unwrap();
         prop_assert_eq!(decode_ean13(&g), Some(g.text.clone()));
         prop_assert!(g.text.starts_with(&s));
@@ -534,19 +533,16 @@ fn defect_dp4_variable_follows_delivery_order__feat__data_bind_change_report() {
     );
 }
 
-/// DEFECT DB-1: the EAN-13 encoder writes G-parity symbols INVERTED (digit 0
+/// DB-1 (fixed): the EAN-13 encoder wrote G-parity symbols INVERTED (digit 0
 /// as 1011000, not 0100111), so every EAN-13 whose first digit is not 0 — all
-/// of GS1 Germany's 400–440, for one — is unscannable. UPC-A (first digit 0,
-/// all L parity) is unaffected.
+/// of GS1 Germany's 400–440, for one — was unscannable. The property above now
+/// draws every first digit; this keeps the GS1 worked example and the exact G(0)
+/// symbol as a named regression.
 #[test]
-fn defect_db1_ean13_g_parity_symbols_are_inverted__feat__data_barcode_symbology() {
+fn data_db1_ean13_g_parity_symbols_decode__feat__data_barcode_symbology() {
     let g = encode(Symbology::Ean13, "400638133393").unwrap();
     assert_eq!(g.text, "4006381333931");
-    assert_eq!(
-        decode_ean13(&g),
-        None,
-        "DB-1 fixed? 4006381333931 decodes: drop this pin"
-    );
+    assert_eq!(decode_ean13(&g).as_deref(), Some("4006381333931"));
     let g = encode(Symbology::Ean13, "100000000000").unwrap();
     let bits: String = modules_1d(&g)
         .iter()
@@ -554,7 +550,7 @@ fn defect_db1_ean13_g_parity_symbols_are_inverted__feat__data_barcode_symbology(
         .collect();
     let start = bits.find('1').unwrap();
     // Third digit, G parity for first digit 1 (LLGLGG): G(0) = 0100111.
-    assert_eq!(&bits[start + 3 + 14..start + 3 + 21], "1011000");
+    assert_eq!(&bits[start + 3 + 14..start + 3 + 21], "0100111");
 }
 
 /// DEFECT DB-2: QR symbols do not decode with an independent decoder. The data
