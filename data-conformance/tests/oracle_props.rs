@@ -464,7 +464,7 @@ fn decode_code128(g: &BarcodeGeometry) -> Result<String, String> {
     let start = bits.iter().position(|b| *b).ok_or("no bars")?;
     let end = bits.iter().rposition(|b| *b).ok_or("no bars")? + 1;
     let body = &bits[start..end];
-    if body.len() < 13 + 2 * 11 || (body.len() - 13) % 11 != 0 {
+    if body.len() < 13 + 2 * 11 || !(body.len() - 13).is_multiple_of(11) {
         return Err(format!("{} modules is not n×11 + 13", body.len()));
     }
     let (symbols, stop) = body.split_at(body.len() - 13);

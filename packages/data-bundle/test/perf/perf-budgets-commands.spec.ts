@@ -298,12 +298,13 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // ── W4: one QR barcode lower ──────────────────────────────────────────────
   // AS FOUND: the frame box is read once, the symbol is ONE batch of
   // insertPath modules (one undo step) — the batching is already right; the
-  // cost is the module count (one path per dark module).
+  // cost is the module count (one path per dark module). 673 since the DB-2
+  // fix (format information, dark module): the symbol, not the work, changed.
   const W4: Measured = {
     hostCalls: 6,
     hostReads: 4,
     mutates: 1,
-    mutationOps: 670,
+    mutationOps: 673,
     undoSteps: 1,
     placeholdersRead: 0,
     wasmCalls: 1,

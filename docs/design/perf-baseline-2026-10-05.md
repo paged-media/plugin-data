@@ -92,7 +92,7 @@ group-plan bench. They are now added once per row.
 | W1 lower it as one table | 8 | 3 | 4 (1,506) | 4 | 2 | 1,500 | 1 | 1 | 9,840 | 88 ms · 41 KB / 81 KB |
 | W2 refresh 100 fields, one story | 102 | 1 | 100 (100) | 89, history exhausted | 200 | 0 | 100 | 0 | 0 | 16 ms · 0 / 7 KB |
 | W3 preview-step 20 records | 40 | 20 | 20 (20) | 20 | 20 | 0 | 20 | 0 | 0 | 2 ms |
-| W4 one QR barcode | 6 | 4 | 1 (670) | 1 | 1 | 0 | 1 | 0 | 0 | 11 ms · 0 / 23 KB |
+| W4 one QR barcode | 6 | 4 | 1 (673, was 670 before the DB-2 QR fix) | 1 | 1 | 0 | 1 | 0 | 0 | 11 ms · 0 / 23 KB |
 | W5 `lowerAll`, 20 variable bindings | 240 | 120 | 40 (40) | 40 | 21 | 150 | 20 | 0 | 0 | 10 ms |
 | W6 200 reflow events on a record flow | 400 | 400 | 0 | — | 200 | 0 | 200 | 200 | 665,600 | 262 ms · 0 / 2.17 MB |
 | W7 cold boot (activate) | 21 | 0 | 0 | — | 0 | 0 | 0 | 0 | 0 | engine boot 9 ms, DuckDB boot 408 ms |

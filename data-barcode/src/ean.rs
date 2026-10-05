@@ -314,8 +314,8 @@ mod tests {
         assert_eq!(g_code(3), [0, 1, 0, 0, 0, 0, 1]);
         // Every L and G symbol starts with a space and ends with a bar; L has
         // an odd number of dark modules, G an even one.
-        for d in 0..10 {
-            for (pat, parity) in [(L_CODE[d], 1), (g_code(d), 0)] {
+        for (d, l) in L_CODE.iter().enumerate() {
+            for (pat, parity) in [(*l, 1), (g_code(d), 0)] {
                 assert_eq!((pat[0], pat[6]), (0, 1), "digit {d}");
                 assert_eq!(pat.iter().map(|&m| m as u32).sum::<u32>() % 2, parity);
             }
