@@ -213,7 +213,12 @@ proptest! {
         names in prop::collection::vec("\\PC{1,8}", 1..5),
         exprs in prop::collection::vec("[a-z]{1,6}|UPPER\\([a-z]{1,4}\\)|\"\\PC{0,6}\"", 1..5),
         sets in prop::collection::vec("\\PC{1,6}", 0..3),
-        line in (8u32..240).prop_map(|e| e as f64 / 8.0),
+        // Any finite f64, not only exact eighths: the payload must keep the
+        // bits (DP-2). JSON has no NaN/∞, and a line height is never one.
+        line in prop_oneof![
+            (8u32..240).prop_map(|e| e as f64 / 8.0),
+            prop::num::f64::NORMAL | prop::num::f64::SUBNORMAL | prop::num::f64::ZERO,
+        ],
     ) {
         let mut s = DataSession::new(today());
         for (i, name) in names.iter().enumerate() {
@@ -614,12 +619,13 @@ fn defect_dp1_pre_1970_dates_stabilize_after_later_ones__feat__data_query_seam()
     );
 }
 
-/// DEFECT DP-2: the payload's f64 fields do not survive serde_json (the
-/// workspace builds serde_json without `float_roundtrip`), so a line height
-/// drifts by an ulp per save → load. The wasm boundary (serde-wasm-bindgen →
-/// JS numbers) is exact; data-cli and any Rust-side JSON are not.
+/// DP-2 (fixed): the payload's f64 fields did not survive serde_json (the
+/// workspace built serde_json without `float_roundtrip`), so a line height
+/// drifted by an ulp per save → load in data-cli and any Rust-side JSON. The
+/// payload property above now draws any finite f64; this keeps the value the
+/// pin carried.
 #[test]
-fn defect_dp2_payload_f64_drifts_through_json__feat__data_plugin_bundle() {
+fn data_dp2_payload_f64_round_trips_through_json__feat__data_plugin_bundle() {
     let mut s = DataSession::new(today());
     s.define_template(Template {
         id: TemplateRef::from("t"),
@@ -629,13 +635,10 @@ fn defect_dp2_payload_f64_drifts_through_json__feat__data_plugin_bundle() {
     let saved = s.payload();
     let loaded: DocumentPayload =
         serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
-    assert_ne!(
-        loaded, saved,
-        "DP-2 fixed? the payload round-trips: drop this pin"
-    );
+    assert_eq!(loaded, saved);
     assert_eq!(
         loaded.templates[0].line_height_pt.to_bits(),
-        0x402d_0123_4567_c78a
+        0x402d_0123_4567_c789
     );
 }
 

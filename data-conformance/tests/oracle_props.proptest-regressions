@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc c9d9de26a2edcc2e7da1a72d1182939905ddac056dab5feb0bda7b3001644abc # shrinks to digits = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+cc ef8f497604a257739c58e3f93c329733827dacf1d7d79e26834592bb75084f4e # shrinks to names = ["⁰"], exprs = ["a"], sets = [], line = 2.333521884661322e-113

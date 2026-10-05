@@ -245,8 +245,9 @@ published "Wikipedia" vector anchors it, and it rejects a symbol with one module
   `qrcode` module for module (checked once, 80 of 80).
 - **DP-1.** Dates and times before 1970 stabilize after later ones, because of big-endian
   two's-complement byte keys.
-- **DP-2.** An f64 in the payload drifts by one ulp through serde_json, which is built without
-  `float_roundtrip`. The wasm boundary is exact.
+- **DP-2 (fixed).** An f64 in the payload drifted by one ulp through serde_json, which was built
+  without `float_roundtrip`. The workspace now enables it (+8 bytes of wasm). The payload
+  property draws any finite f64. The wasm boundary was always exact.
 - **DP-3.** `RowDelta.removed` holds internal key encodings (`"3:k2\u{1f}"`), so a change report
   cannot name the rows it removed.
 - **DP-4.** A variable binding follows the delivery order, so the same rows delivered in

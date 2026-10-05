@@ -42,7 +42,9 @@ compact_str = { version = "0.8", features = ["serde"] }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-serde_json = "1"
+# `float_roundtrip`: parse every f64 back to the exact bits it was written
+# from (the payload saves line heights etc. through Rust JSON — DP-2).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # XML read/write for the §9.9 variable-library codec (data-dataset only).
 # MIT — inside the §3 permissive-only allow-list. `default-features = false`
 # keeps the encoding/ (charset transcoding) and serde layers out of the wasm.
