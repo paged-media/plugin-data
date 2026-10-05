@@ -44,7 +44,7 @@
 
 use std::io::Cursor;
 
-use calamine::{Data, Reader, Xlsx};
+use calamine::{Data, ExcelDateTime, ExcelDateTimeType, Reader, Xlsx};
 use serde_json::{Map, Number, Value as Json};
 use thiserror::Error;
 
@@ -259,7 +259,7 @@ fn cell_of(c: &Data) -> Cell {
             }
         }
         Data::DateTime(d) if d.is_datetime() => {
-            let (y, mo, da, h, mi, s, ms) = d.to_ymd_hms_milli();
+            let (y, mo, da, h, mi, s, ms) = date_time_parts(d);
             if h == 0 && mi == 0 && s == 0 && ms == 0 {
                 Cell::Date(format!("{y:04}-{mo:02}-{da:02}"))
             } else if ms == 0 {
@@ -281,6 +281,37 @@ fn cell_of(c: &Data) -> Cell {
         }
         Data::DurationIso(s) => Cell::Text(s.clone()),
     }
+}
+
+/// A date-time serial as `(year, month, day, hour, minute, second, milli)`,
+/// rounded to the nearest millisecond. calamine 0.31's own
+/// `to_ymd_hms_milli` truncates the seconds but rounds the milliseconds, so
+/// 18:45:15 stored as 0.78142361111… came back as 18:45:14 + 1000 ms; here
+/// the time of day is rounded as a whole and a round-up past midnight moves
+/// to the next day. calamine still does the calendar (both epochs).
+fn date_time_parts(d: &ExcelDateTime) -> (u16, u8, u8, u8, u8, u8, u16) {
+    let v = d.as_f64();
+    // The epoch is private to calamine: the 1900 reading of the same serial
+    // differs from the 1904 one by 1 462 days, so comparing names it.
+    let is_1904 = ExcelDateTime::new(v, ExcelDateTimeType::DateTime, false).to_ymd_hms_milli()
+        != d.to_ymd_hms_milli();
+    let mut day = v.floor();
+    let mut ms = ((v - day) * 86_400_000.0).round() as u64;
+    if ms >= 86_400_000 {
+        ms -= 86_400_000;
+        day += 1.0;
+    }
+    let (y, mo, da, ..) =
+        ExcelDateTime::new(day, ExcelDateTimeType::DateTime, is_1904).to_ymd_hms_milli();
+    (
+        y,
+        mo,
+        da,
+        (ms / 3_600_000) as u8,
+        (ms / 60_000 % 60) as u8,
+        (ms / 1000 % 60) as u8,
+        (ms % 1000) as u16,
+    )
 }
 
 fn column_type<'a>(cells: impl Iterator<Item = &'a Cell>) -> ColumnType {
@@ -388,6 +419,20 @@ mod tests {
             json_of(Cell::Date("2026-10-05".into()), ColumnType::Timestamp),
             Json::String("2026-10-05 00:00:00".into())
         );
+    }
+
+    #[test]
+    fn times_round_to_the_millisecond_and_carry_past_midnight() {
+        let at =
+            |v: f64| date_time_parts(&ExcelDateTime::new(v, ExcelDateTimeType::DateTime, false));
+        // 2026-03-01 18:45:15 as openpyxl writes it (just under :15).
+        assert_eq!(at(46082.781423611109), (2026, 3, 1, 18, 45, 15, 0));
+        assert_eq!(at(46037.0 + 0.4 / 86_400.0), (2026, 1, 15, 0, 0, 0, 400));
+        // 23:59:59.9999 rounds to the next midnight.
+        assert_eq!(at(46037.999_999_999), (2026, 1, 16, 0, 0, 0, 0));
+        // The 1904 epoch is kept.
+        let d1904 = ExcelDateTime::new(0.5, ExcelDateTimeType::DateTime, true);
+        assert_eq!(date_time_parts(&d1904), (1904, 1, 1, 12, 0, 0, 0));
     }
 
     #[test]

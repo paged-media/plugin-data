@@ -73,6 +73,8 @@ fn first_sheet_reads_as_typed_records__feat__data_source_adapters() {
     // date-time in a TIMESTAMP column keeps its time of day.
     assert_eq!(t.rows[2][1], json!(7.0));
     assert_eq!(t.rows[1][4], json!("2026-02-01 00:00:00"));
+    // 18:45:15 is stored just under the second; it reads as 18:45:15.
+    assert_eq!(t.rows[2][4], json!("2026-03-01 18:45:15"));
     // A number in a text column is written as text.
     assert_eq!(t.rows[2][6], json!("42"));
     // The error cell is NULL.
