@@ -2,6 +2,9 @@ name: rust
 on:
   push:
     branches: [main]
+  # Pre-merge gate: a PR that breaks the engine goes red BEFORE it lands
+  # (this lane used to run on push to main only).
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -24,10 +27,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Each guard fails explicitly. They used to be two `! (… | grep …)`
+      # lines: bash's errexit ignores a `!`-negated command, so only the LAST
+      # line's status reached the step and the data-expr guard could never
+      # fail.
       - name: dependency guards (spec §4 rules)
         run: |
-          ! (cargo tree -p data-expr --edges normal | grep -E 'data-(sources|query|bind|lower|js)')
-          ! (cargo tree -p data-js --target wasm32-unknown-unknown | grep -E 'data-conformance|proptest')
+          if cargo tree -p data-expr --edges normal | grep -E 'data-(sources|query|bind|lower|js)'; then
+            echo "LEAK: data-expr depends on a sources/query/bind/lower/js crate"; exit 1
+          fi
+          if cargo tree -p data-js --target wasm32-unknown-unknown | grep -E 'data-conformance|proptest'; then
+            echo "LEAK: the wasm tree pulls a test-only crate"; exit 1
+          fi
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   test:
@@ -39,10 +50,19 @@ jobs:
           toolchain: 1.93.0
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: nextest (junit; red results still publish)
-        run: cargo nextest run --workspace --profile ci || true
+      # A red test FAILS this job. The step used to end in `|| true` (so red
+      # results would still ship as evidence), which also meant the Rust lane
+      # could never go red. Evidence still ships: the coverage gate and the
+      # JUnit upload below run under `!cancelled()`.
+      - name: nextest (junit)
+        run: cargo nextest run --workspace --profile ci --no-fail-fast
+      # The §12.2 invariant, both halves: every `implemented` registry row
+      # names a test that exists, AND (with --junit) that test ran in the
+      # nextest run above and passed. An #[ignore]d skeleton or a red test is
+      # a gap, not coverage.
       - name: coverage gate (the §12.2 verification invariant)
-        run: cargo run -p data-conformance --bin coverage-gate
+        if: ${{ !cancelled() }}
+        run: cargo run -p data-conformance --bin coverage-gate -- --junit target/nextest/ci/junit.xml
       # Evidence hand-off, INVERTED (2026-07-25). This step used to call
       # paged-media/state/actions/publish-results@main, but that action lives in the
       # PRIVATE paged-media/state repo, and GitHub refuses to resolve a private

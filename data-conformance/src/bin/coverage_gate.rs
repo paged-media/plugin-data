@@ -47,6 +47,16 @@
 //! An `implemented` row with NO tests at all is a gap. Prints a per-file
 //! summary plus the gap list and exits `1` iff any gap exists. Dependency-light
 //! (`serde_yaml` + `std`). Repo root resolves as `CARGO_MANIFEST_DIR/..`.
+//!
+//! `--junit <nextest junit.xml>` adds the second half: every `tests.rust`
+//! pointer must also have RUN and PASSED in that report. Without it the gate
+//! only proved that a test with the right name prefix existed on disk, so an
+//! `#[ignore]`d skeleton, a test filtered out of the run, or a red test all
+//! counted as coverage. With it, a pointer is a gap when no testcase of the
+//! pointer's binary (`<crate>` for `src/`, `<crate>::<stem>` for
+//! `tests/<stem>.rs`) whose name starts with the prefix is in the report, or
+//! when any matching testcase carries a `<failure>` or `<error>`. CI runs the
+//! gate with the report nextest just wrote (`rust.yml`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -69,6 +79,31 @@ struct FileStats {
 fn main() -> ExitCode {
     let root = repo_root();
     let registry = root.join("registry");
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let junit = match args.iter().position(|a| a == "--junit") {
+        Some(i) => {
+            let Some(path) = args.get(i + 1) else {
+                eprintln!("coverage-gate: --junit needs a path");
+                return ExitCode::FAILURE;
+            };
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    let report = JunitReport::parse(&text);
+                    println!(
+                        "coverage-gate: reading {} testcase(s) from {path}",
+                        report.cases.len()
+                    );
+                    Some(report)
+                }
+                Err(e) => {
+                    eprintln!("coverage-gate: cannot read --junit {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
 
     let mut files = Vec::new();
     for sub in ["functions", "features"] {
@@ -119,7 +154,15 @@ fn main() -> ExitCode {
 
             let id = row_str(row, "id").unwrap_or_else(|| "<no id>".to_string());
             let before = gaps.len();
-            check_row(&root, &rel, &id, row, &mut gaps, &mut text_cache);
+            check_row(
+                &root,
+                &rel,
+                &id,
+                row,
+                &mut gaps,
+                &mut text_cache,
+                junit.as_ref(),
+            );
             stat.gaps += gaps.len() - before;
         }
     }
@@ -140,6 +183,7 @@ fn check_row(
     row: &serde_yaml::Value,
     gaps: &mut Vec<Gap>,
     text_cache: &mut BTreeMap<PathBuf, Option<String>>,
+    junit: Option<&JunitReport>,
 ) {
     let mut push = |reason: String| {
         gaps.push(Gap {
@@ -165,6 +209,9 @@ fn check_row(
                 saw_known_lane = true;
                 for ptr in pointers {
                     check_rust_pointer(root, &ptr, &mut push, text_cache);
+                    if let Some(report) = junit {
+                        check_rust_pointer_ran(report, &ptr, &mut push);
+                    }
                 }
             }
             "corpus" | "vitest" => {
@@ -221,6 +268,113 @@ fn check_rust_pointer(
     if !text.contains(&format!("fn {prefix}")) {
         push(format!(
             "rust pointer `{ptr}` — `{rel_path}` has no `fn {prefix}` (test fn missing)"
+        ));
+    }
+}
+
+/// One `<testcase>` of a nextest JUnit report.
+struct JunitCase {
+    classname: String,
+    name: String,
+    failed: bool,
+}
+
+struct JunitReport {
+    cases: Vec<JunitCase>,
+}
+
+impl JunitReport {
+    /// A deliberately small reader for the JUnit nextest writes: one
+    /// `<testcase name=".." classname="..">` element per test that ran, with a
+    /// `<failure>` or `<error>` child when it failed. Skipped (`#[ignore]`d)
+    /// tests are not in the report at all.
+    fn parse(xml: &str) -> Self {
+        let mut cases = Vec::new();
+        let mut rest = xml;
+        while let Some(start) = rest.find("<testcase ") {
+            let after = &rest[start..];
+            let tag_end = after.find('>').unwrap_or(after.len());
+            let tag = &after[..tag_end];
+            let self_closing = tag.ends_with('/');
+            let body_end = if self_closing {
+                tag_end
+            } else {
+                after.find("</testcase>").unwrap_or(after.len())
+            };
+            let body = &after[tag_end.min(body_end)..body_end];
+            cases.push(JunitCase {
+                classname: attr(tag, "classname").unwrap_or_default(),
+                name: attr(tag, "name").unwrap_or_default(),
+                failed: body.contains("<failure") || body.contains("<error"),
+            });
+            rest = &after[body_end.max(1)..];
+        }
+        JunitReport { cases }
+    }
+}
+
+fn attr(tag: &str, key: &str) -> Option<String> {
+    let needle = format!(" {key}=\"");
+    let at = tag.find(&needle)? + needle.len();
+    let end = tag[at..].find('"')?;
+    Some(
+        tag[at..at + end]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// The nextest binary id (JUnit `classname`) a pointer's file belongs to:
+/// `<crate>/tests/<stem>.rs` → `<crate>::<stem>`; anything under
+/// `<crate>/src/` → the crate's lib unit tests, `<crate>`.
+fn binary_for(rel_path: &str) -> Option<String> {
+    let (krate, rest) = rel_path.split_once('/')?;
+    if let Some(file) = rest.strip_prefix("tests/") {
+        let stem = file.strip_suffix(".rs")?;
+        Some(format!("{krate}::{stem}"))
+    } else if rest.starts_with("src/") {
+        Some(krate.to_string())
+    } else {
+        None
+    }
+}
+
+fn check_rust_pointer_ran(report: &JunitReport, ptr: &str, push: &mut impl FnMut(String)) {
+    let Some((rel_path, prefix)) = ptr.split_once("::") else {
+        return; // malformed pointers are reported by check_rust_pointer
+    };
+    let Some(binary) = binary_for(rel_path) else {
+        push(format!(
+            "rust pointer `{ptr}` — `{rel_path}` is neither under src/ nor tests/ (cannot match it to a test run)"
+        ));
+        return;
+    };
+    let matching: Vec<&JunitCase> = report
+        .cases
+        .iter()
+        .filter(|c| {
+            c.classname == binary && c.name.rsplit("::").next().unwrap_or("").starts_with(prefix)
+        })
+        .collect();
+    if matching.is_empty() {
+        push(format!(
+            "rust pointer `{ptr}` — no `{prefix}*` test of `{binary}` ran (ignored, filtered out, or missing from the report)"
+        ));
+        return;
+    }
+    let failed: Vec<&str> = matching
+        .iter()
+        .filter(|c| c.failed)
+        .map(|c| c.name.as_str())
+        .collect();
+    if !failed.is_empty() {
+        push(format!(
+            "rust pointer `{ptr}` — {} of {} matching test(s) FAILED: {}",
+            failed.len(),
+            matching.len(),
+            failed.join(", ")
         ));
     }
 }
