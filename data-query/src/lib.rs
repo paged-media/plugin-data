@@ -189,8 +189,8 @@ fn key_parts(v: Option<&Value>) -> (u8, u64, &[u8]) {
         None | Some(Value::Null) => (0, 0, &[]),
         Some(Value::Bool(b)) => (1, *b as u64, &[]),
         Some(Value::Number(n)) => (2, order_f64(*n), &[]),
-        Some(Value::Date(d)) => (3, (*d as i64) as u64, &[]),
-        Some(Value::DateTime(ms)) => (3, *ms as u64, &[]),
+        Some(Value::Date(d)) => (3, order_i64(*d as i64), &[]),
+        Some(Value::DateTime(ms)) => (3, order_i64(*ms), &[]),
         Some(Value::Text(t)) => (4, 0, t.as_bytes()),
         Some(Value::Bytes(b)) => (5, 0, b.as_slice()),
         Some(Value::Error(e)) => (6, 0, e.code().as_bytes()),
@@ -324,12 +324,20 @@ pub fn value_key(v: &Value) -> (u8, Vec<u8>) {
         Value::Null => (0, Vec::new()),
         Value::Bool(b) => (1, vec![*b as u8]),
         Value::Number(n) => (2, order_f64(*n).to_be_bytes().to_vec()),
-        Value::Date(d) => (3, (*d as i64).to_be_bytes().to_vec()),
-        Value::DateTime(ms) => (3, ms.to_be_bytes().to_vec()),
+        Value::Date(d) => (3, order_i64(*d as i64).to_be_bytes().to_vec()),
+        Value::DateTime(ms) => (3, order_i64(*ms).to_be_bytes().to_vec()),
         Value::Text(t) => (4, t.as_bytes().to_vec()),
         Value::Bytes(b) => (5, b.clone()),
         Value::Error(e) => (6, e.code().as_bytes().to_vec()),
     }
+}
+
+/// Map an `i64` to a `u64` whose unsigned order matches signed order (flip
+/// the sign bit), so a date before 1970 sorts before a later one. Plain
+/// two's-complement bytes put every negative value after every positive one
+/// (defect DP-1).
+fn order_i64(n: i64) -> u64 {
+    (n as u64) ^ (1 << 63)
 }
 
 /// Map an `f64` to a `u64` whose unsigned order matches numeric order

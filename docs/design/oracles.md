@@ -233,8 +233,8 @@ independent decoder here, because no small, permissive, pure-Rust one exists.
   unaffected.
 - **DB-2.** QR symbols do not decode. Their data modules match a reference encoder with the same
   version, level and mask, but 9 format-information and dark-module modules differ.
-- **DP-1.** Dates and times before 1970 stabilize after later ones, because of big-endian
-  two's-complement byte keys.
+- **DP-1.** FIXED (Wave 2): dates and times before 1970 stabilized after later ones, because of
+  big-endian two's-complement byte keys. The sort key now flips the sign bit.
 - **DP-2.** An f64 in the payload drifts by one ulp through serde_json, which is built without
   `float_roundtrip`. The wasm boundary is exact.
 - **DP-3.** `RowDelta.removed` holds internal key encodings (`"3:k2\u{1f}"`), so a change report

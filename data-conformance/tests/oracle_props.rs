@@ -54,8 +54,8 @@ use proptest::prelude::*;
 
 // ── generators ──────────────────────────────────────────────────────────────
 
-/// Any value kind a result can carry (Date/DateTime non-negative: see
-/// `defect_dp1_*`), including NaN, ±0 and ±∞.
+/// Any value kind a result can carry, including NaN, ±0, ±∞ and dates and
+/// times either side of 1970.
 fn value() -> impl Strategy<Value = Value> {
     prop_oneof![
         Just(Value::Null),
@@ -69,8 +69,8 @@ fn value() -> impl Strategy<Value = Value> {
         ]
         .prop_map(Value::Number),
         "\\PC{0,6}".prop_map(|s| Value::text(&s)),
-        (0i32..40_000).prop_map(Value::Date),
-        (0i64..4_000_000_000_000).prop_map(Value::DateTime),
+        (-40_000i32..40_000).prop_map(Value::Date),
+        (-4_000_000_000_000i64..4_000_000_000_000).prop_map(Value::DateTime),
     ]
 }
 
@@ -142,7 +142,7 @@ proptest! {
     fn data_prop_stabilize_follows_value_order__feat__data_query_seam(
         nums in prop::collection::vec(any::<f64>(), 0..12),
         texts in prop::collection::vec("\\PC{0,5}", 0..12),
-        days in prop::collection::vec(0i32..40_000, 0..12),
+        days in prop::collection::vec(-40_000i32..40_000, 0..12),
     ) {
         let col = |v: Vec<Value>| record_set(&[("k", FieldType::Text)], vec![v]);
         let keys = ["k".to_string()];
@@ -433,28 +433,22 @@ fn decode_qr(g: &BarcodeGeometry) -> Result<String, String> {
 
 // ── pinned defects ──────────────────────────────────────────────────────────
 
-/// DEFECT DP-1: `value_key` writes a Date/DateTime as big-endian
-/// two's-complement bytes, so a negative one (before 1970) compares as a huge
-/// unsigned value and stabilizes AFTER every later date. Record order, group
-/// order and record identity all follow it. (The property above therefore
-/// draws non-negative dates; this pin goes red when the order is fixed.)
+/// Dates and times before 1970 stabilize BEFORE later ones (was defect DP-1:
+/// `value_key` wrote them as big-endian two's-complement bytes, so a
+/// negative one compared as a huge unsigned value and sorted last).
 #[test]
-fn defect_dp1_pre_1970_dates_stabilize_after_later_ones__feat__data_query_seam() {
+fn data_query_pre_1970_dates_stabilize_first__feat__data_query_seam() {
     let col = |v: Vec<Value>| record_set(&[("k", FieldType::Text)], vec![v]);
     let keys = ["k".to_string()];
     let dates = stabilize(&col(vec![Value::Date(1), Value::Date(-1)]), &keys);
-    assert_eq!(
-        dates.columns[0],
-        vec![Value::Date(1), Value::Date(-1)],
-        "DP-1 fixed? 1969-12-31 now sorts first: drop this pin"
-    );
+    assert_eq!(dates.columns[0], vec![Value::Date(-1), Value::Date(1)]);
     let times = stabilize(
         &col(vec![Value::DateTime(1_000), Value::DateTime(-1_000)]),
         &keys,
     );
     assert_eq!(
         times.columns[0],
-        vec![Value::DateTime(1_000), Value::DateTime(-1_000)]
+        vec![Value::DateTime(-1_000), Value::DateTime(1_000)]
     );
 }
 
