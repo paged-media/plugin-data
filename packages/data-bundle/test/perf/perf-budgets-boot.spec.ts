@@ -61,24 +61,27 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   });
 
   // ── W6: 200 reflow events on a record-flow chain ──────────────────────────
-  // AS FOUND: every reflow event re-reads the chain (frameChain +
+  // AS FOUND (Wave 1): every reflow event re-reads the chain (frameChain +
   // elementGeometry) and re-paginates the WHOLE flow — a resolve, a full
   // stabilize sort of every record — with no debounce or coalescing: 200
   // resize events cost 200 full re-paginations, even though only the last one
   // is ever shown.
   // Wave 4 (persistence): +1 parts.write +1 supports, +1 payload +1 sync_report — one session write for the whole burst.
+  // Wave 2: the subscription coalesces the burst — one chain read and one
+  // pagination once it is quiet. hostCalls 402 → 4, reads 400 → 2, wasm
+  // calls 202 → 3, resolves / sorts 200 → 1, sort keys 665,600 → 3,328.
   const W6: Measured = {
-    hostCalls: 402,
-    hostReads: 400,
+    hostCalls: 4,
+    hostReads: 2,
     mutates: 0,
     mutationOps: 0,
     undoSteps: null,
     placeholdersRead: 0,
-    wasmCalls: 202,
+    wasmCalls: 3,
     cellsIn: 0,
-    resolves: 200,
-    stabilizeCalls: 200,
-    keyAllocs: 665_600,
+    resolves: 1,
+    stabilizeCalls: 1,
+    keyAllocs: 3_328,
     fingerprints: 0,
     duckQueries: 0,
   };
@@ -117,7 +120,16 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     expect((await h.host.document.frameChain(story)).length).toBe(2);
 
     const flows: { placed: number; frames: unknown[] }[] = [];
-    const sub = s.subscribeChainReflow("rf", story, (flow) => flows.push(flow as never));
+    // The debounce runs on timers the test holds: the burst is fired, then
+    // the clock is let go once.
+    const held: (() => void)[] = [];
+    const timers = {
+      setTimeout: (fn: () => void) => held.push(fn),
+      clearTimeout: (n: unknown) => {
+        held[(n as number) - 1] = () => {};
+      },
+    };
+    const sub = s.subscribeChainReflow("rf", story, (flow) => flows.push(flow as never), { timers });
     engine.reset();
     work.reset();
     duck.reset();
@@ -129,13 +141,17 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
       await settle();
     }
     await settle();
+    expect(flows.length).toBe(0); // nothing while the burst runs
+    for (const fn of held.splice(0)) fn();
+    for (let i = 0; i < 20 && flows.length === 0; i++) await settle();
     const ms = performance.now() - t0;
     sub.dispose();
     const snap = work.snapshot();
     const m = measure(snap, engine, duck, null);
-    // Behaviour: every reflow re-paginated, and the last flow places all 200.
-    expect(flows.length).toBe(200);
-    expect(flows[flows.length - 1]!.placed).toBe(200);
+    // Behaviour: the burst re-paginated ONCE, over the settled chain, and that
+    // flow places all 200.
+    expect(flows.length).toBe(1);
+    expect(flows[0]!.placed).toBe(200);
     report("W6.reflow-200-events", m, { ms, bytesIn: engine.log.bytesIn, bytesOut: engine.log.bytesOut, detail: { repaginations: flows.length } }, snap, engine);
     expectBudget("W6", m, W6);
   });
