@@ -31,3 +31,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# An independent QR decoder for the barcode round-trip oracle (MIT OR Apache-2.0).
+rqrr = "0.10"
