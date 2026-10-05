@@ -420,6 +420,9 @@ export interface MergeWriteOptions {
   /** The id every merged element is labelled with, so a re-merge finds and
    *  replaces them (`relower.ts`). */
   mergeId: string;
+  /** Mutations that clear a previous run of this merge (`relower.ts`); they
+   *  ride the first batch, so a re-merge is no extra undo step. */
+  clear?: Mutation[];
 }
 
 /** The page mutations: what has to exist before anything can be placed.
@@ -427,17 +430,19 @@ export interface MergeWriteOptions {
 export function pageMutations(
   plan: Pick<MergePlan, "pageCount">,
   template: MergeTemplate,
-  opts: Pick<MergeWriteOptions, "template">,
+  opts: Pick<MergeWriteOptions, "template" | "clear">,
 ): Mutation | null {
   const ops: Mutation[] = [];
   if (opts.template === "consume") {
     if (plan.pageCount <= 1) return null;
+    ops.push(...(opts.clear ?? []));
     // Remove the merge frames first so the page copies come out empty.
     ops.push(...removeTemplateFrames(template));
     for (let i = 1; i < plan.pageCount; i++) {
       ops.push({ op: "duplicatePage", args: { page: template.pageId } });
     }
   } else {
+    ops.push(...(opts.clear ?? []));
     for (let i = 0; i < plan.pageCount; i++) {
       ops.push({ op: "insertPage", args: { afterPageId: template.pageId, masterId: null } });
     }
@@ -465,13 +470,24 @@ export function contentMutation(
   opts: MergeWriteOptions,
 ): Mutation {
   const ops: Mutation[] = [];
-  if (opts.template === "consume" && plan.pageCount <= 1) ops.push(...removeTemplateFrames(template));
+  if (opts.template === "consume" && plan.pageCount <= 1) {
+    ops.push(...(opts.clear ?? []), ...removeTemplateFrames(template));
+  }
   const fit = opts.fit ?? "Proportionally";
   for (const rec of plan.records) {
     const pageId = pages[rec.page];
     for (const f of rec.frames) {
       const h = `m${rec.record}f${f.template}`;
-      const label = makeEnvelope({ kind: "merge", merge: opts.mergeId, record: rec.record, frame: f.template });
+      // `createdPage`: this frame sits on a page the merge added, so a
+      // re-merge may remove that page with it (relower.ts).
+      const createdPage = opts.template === "keep" || rec.page > 0;
+      const label = makeEnvelope({
+        kind: "merge",
+        merge: opts.mergeId,
+        record: rec.record,
+        frame: f.template,
+        ...(createdPage ? { createdPage } : {}),
+      });
       const info = template.frames[f.template];
       if (f.text !== undefined) {
         const frame: ElementId = { kind: "textFrame", id: `$h:${h}` } as ElementId;

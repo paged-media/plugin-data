@@ -156,9 +156,15 @@ export function planRelower(
   const removed = old.filter(deletable);
   const remove: Mutation[] = removed.map((e) => ({ op: "deleteFrame", args: { frameId: e.id as string } }));
 
-  // Pages the previous lowering added that hold nothing else once it is gone.
+  // Pages the previous lowering added — remembered, or read off the labels
+  // (`createdPage: true` on what it put on a page it added) — that hold
+  // nothing else once it is gone.
+  const created = new Set<PageId>(memory.createdPages ?? []);
+  for (const e of labelled) {
+    if (e.data?.createdPage === true && memory.pages[e.page]) created.add(memory.pages[e.page]);
+  }
   const removedPages: PageId[] = [];
-  for (const pageId of memory.createdPages ?? []) {
+  for (const pageId of created) {
     const index = memory.pages.indexOf(pageId);
     if (index < 0) continue;
     const left = elements.filter(

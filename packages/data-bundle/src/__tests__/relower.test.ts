@@ -84,6 +84,15 @@ describe("re-lower updates in place [data.lower.relower-in-place]", () => {
     ]);
   });
 
+  it("pages a lowering added are known from its labels, after a reopen too", () => {
+    const tree = structuredClone(TREE);
+    for (const n of tree[1].children[0].children) {
+      n.pluginMetadata = label({ kind: "merge", merge: "mg", record: 0, createdPage: true });
+    }
+    const plan = planRelower(documentElements(tree), { kind: "merge", merge: "mg" }, { pages: PAGES });
+    expect(plan.removedPages).toEqual(["p2"]);
+  });
+
   it("a page the merge added that the user put something on stays", () => {
     const tree = structuredClone(TREE);
     tree[1].children[0].children!.push({ kind: "TextFrame", id: { kind: "textFrame", id: "note" }, pluginMetadata: [] });
