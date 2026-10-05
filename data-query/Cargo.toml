@@ -14,3 +14,8 @@ workspace = true
 data-core = { path = "../data-core" }
 thiserror.workspace = true
 smallvec.workspace = true
+
+[features]
+# Work counters for the perf budgets (src/perf.rs). Off by default: without it
+# every `perf::bump` is an empty inline function.
+perf-counters = []

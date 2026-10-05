@@ -53,6 +53,10 @@ pub struct RowDelta {
 /// Diff two results by a declared key (the key field names). An empty key uses
 /// every column as the identity.
 pub fn diff(old: &RecordSet, new: &RecordSet, key_fields: &[String]) -> RowDelta {
+    data_query::perf::add(
+        data_query::perf::Counter::DiffRows,
+        (old.row_count + new.row_count) as u64,
+    );
     let old_keys = key_cols(old, key_fields);
     let new_keys = key_cols(new, key_fields);
 
@@ -167,6 +171,7 @@ pub struct ChangeReport {
 /// same fingerprint commit the same host content (the refresh would be a no-op
 /// for that region); a differing fingerprint means the region's content changes.
 pub fn resolved_fingerprint(resolved: &Resolved) -> String {
+    data_query::perf::bump(data_query::perf::Counter::Fingerprints);
     let mut s = String::new();
     match resolved {
         Resolved::Variable(v) => {

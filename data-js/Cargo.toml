@@ -30,3 +30,14 @@ thiserror.workspace = true
 wasm-bindgen.workspace = true
 serde-wasm-bindgen.workspace = true
 console_error_panic_hook.workspace = true
+
+[features]
+# The engine work counters (data-query/src/perf.rs) behind `perfCounters()`.
+# ON by default, so the shipped wasm and the perf budgets measure the same
+# artifact. Measured 2026-10-05 (docs/design/perf-baseline-2026-10-05.md):
+# +404 bytes of wasm (0.06 %), and a 10k-row table resolve in wasm at
+# 30.5–31.1 ms on vs 30.7 ms off — inside the noise. Natively the counters
+# cost 2–5 % on the criterion benches, which is why the CRATES keep them off by
+# default and only this boundary crate turns them on.
+default = ["perf-counters"]
+perf-counters = ["data-bind/perf-counters", "data-query/perf-counters"]
