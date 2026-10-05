@@ -1,0 +1,83 @@
+{
+  "fixture": "multi-record-grid",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 96, 276],
+            "text": "<<name>>\rCode: <<sku>>",
+            "lines": 2,
+            "overset": false,
+            "story_length": 22
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 1,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [252, 36, 312, 276],
+            "text": "Card 7\rCode: G-7",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [180, 294, 240, 534],
+            "text": "Card 6\rCode: G-6",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [180, 36, 240, 276],
+            "text": "Card 5\rCode: G-5",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [108, 294, 168, 534],
+            "text": "Card 4\rCode: G-4",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [108, 36, 168, 276],
+            "text": "Card 3\rCode: G-3",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [36, 294, 96, 534],
+            "text": "Card 2\rCode: G-2",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          },
+          {
+            "bounds": [36, 36, 96, 276],
+            "text": "Card 1\rCode: G-1",
+            "lines": 2,
+            "overset": false,
+            "story_length": 16
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}

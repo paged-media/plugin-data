@@ -1,0 +1,7 @@
+sku,name,note,price
+A-1,"Widget, large","He said ""hi""",9.99
+B-2,"Two-line
+name",plain,19.99
+C-3,"",,0.5
+D-4,  padded  ," quoted space ",1
+E-5,"comma,and""quote","x",2.25

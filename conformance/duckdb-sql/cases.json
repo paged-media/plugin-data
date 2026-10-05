@@ -1,0 +1,78 @@
+{
+  "$comment": "DuckDB SQL oracle fixture set (docs/design/oracles.md). Every csv/<name>.csv is registered as table <name> first (the bundle's registerCsv path on the wasm side, read_csv_auto natively). record.mjs runs each case through the native duckdb CLI (engine v1.1.1, the engine inside @duckdb/duckdb-wasm 1.29.0) into recorded/results.json; packages/data-bundle/test/duckdb-sql-oracle.spec.ts replays it through the shipped duckdb-wasm + recordset.ts + data-js.",
+  "engine": "v1.1.1",
+  "cases": [
+    {
+      "id": "types-integers",
+      "sql": "SELECT 1::INTEGER AS i, -5::SMALLINT AS s, 127::TINYINT AS t, 9007199254740991::BIGINT AS big_safe, 9007199254740993::BIGINT AS big_unsafe, 42::UBIGINT AS ub, 170141183460469231731687303715884105727::HUGEINT AS huge"
+    },
+    {
+      "id": "types-floats",
+      "sql": "SELECT 0.1::DOUBLE AS d, 1.5::FLOAT AS f, 1e300::DOUBLE AS big, 5e-324::DOUBLE AS tiny, -0.0::DOUBLE AS negzero, 'inf'::DOUBLE AS pinf, 'nan'::DOUBLE AS nan"
+    },
+    {
+      "id": "types-decimal-widths",
+      "sql": "SELECT 19.99::DECIMAL(4,2) AS d16, 12345.6789::DECIMAL(9,4) AS d32, 123456789.123456::DECIMAL(18,6) AS d64, 1234567890123456789012.5::DECIMAL(38,1) AS d128, 42::DECIMAL(10,0) AS scale0"
+    },
+    {
+      "id": "types-decimal-signs",
+      "sql": "SELECT v FROM (VALUES (-0.05::DECIMAL(6,2)), (-12.34), (0.00), (0.01), (9999.99)) t(v)"
+    },
+    {
+      "id": "types-temporal",
+      "sql": "SELECT DATE '2024-02-29' AS leap, DATE '1969-12-31' AS before_epoch, DATE '1970-01-01' AS epoch, TIMESTAMP '2024-02-29 13:45:06.789' AS ts, TIMESTAMP '1960-01-01 00:00:00' AS ts_before_epoch, TIMESTAMP_S '2024-01-01 00:00:01' AS ts_s, TIMESTAMP_MS '2024-01-01 00:00:00.123' AS ts_ms, TIMESTAMP_NS '2024-01-01 00:00:00.123456789' AS ts_ns"
+    },
+    {
+      "id": "types-bool-varchar",
+      "sql": "SELECT true AS yes, false AS no, 'grüße' AS v, '' AS empty, ' padded ' AS padded, 'tab\there' AS tab"
+    },
+    {
+      "id": "types-extended",
+      "sql": "SELECT TIME '01:02:03' AS tm, INTERVAL 3 DAY AS iv, '550e8400-e29b-41d4-a716-446655440000'::UUID AS id, 'ab'::BLOB AS bl, [1, 2, 3] AS lst, {'a': 1} AS st"
+    },
+    {
+      "id": "nulls-every-type",
+      "sql": "SELECT * FROM (VALUES (1, 1.5::DOUBLE, 2.25::DECIMAL(6,2), DATE '2024-01-02', TIMESTAMP '2024-01-02 03:04:05', true, 'a'), (NULL, NULL, NULL, NULL, NULL, NULL, NULL), (3, 0.0::DOUBLE, 0.00::DECIMAL(6,2), DATE '1970-01-01', TIMESTAMP '1970-01-01 00:00:00', false, '')) t(i, d, dec, dt, ts, b, v)"
+    },
+    {
+      "id": "nulls-only",
+      "sql": "SELECT NULL AS n, NULL::INTEGER AS ni, NULL::DATE AS nd"
+    },
+    {
+      "id": "order-nulls-last-default",
+      "sql": "SELECT v FROM (VALUES (3), (NULL), (1), (2)) t(v) ORDER BY v"
+    },
+    {
+      "id": "order-nulls-first-desc",
+      "sql": "SELECT v FROM (VALUES (3), (NULL), (1), (2)) t(v) ORDER BY v DESC NULLS FIRST"
+    },
+    {
+      "id": "order-text-binary",
+      "sql": "SELECT name FROM utf8 ORDER BY name"
+    },
+    {
+      "id": "order-ties-secondary-key",
+      "sql": "SELECT city, id FROM utf8 ORDER BY city DESC, id"
+    },
+    {
+      "id": "utf8-roundtrip",
+      "sql": "SELECT id, name, city, length(name) AS chars, strlen(name) AS bytes FROM utf8 ORDER BY id"
+    },
+    {
+      "id": "csv-quoting",
+      "sql": "SELECT sku, name, note, price FROM quoting ORDER BY sku"
+    },
+    {
+      "id": "csv-type-detection",
+      "sql": "SELECT * FROM types ORDER BY sku"
+    },
+    {
+      "id": "aggregate-decimal-sum",
+      "sql": "SELECT SUM(v) AS total, AVG(v) AS mean, COUNT(*) AS n, MIN(v) AS lo FROM (VALUES (19.99::DECIMAL(10,2)), (0.01), (5.00)) t(v)"
+    },
+    {
+      "id": "aggregate-group-order",
+      "sql": "SELECT city, COUNT(*) AS n, string_agg(name, '|' ORDER BY id) AS names FROM utf8 GROUP BY city ORDER BY n DESC, city"
+    }
+  ]
+}

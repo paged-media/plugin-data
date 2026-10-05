@@ -1,0 +1,69 @@
+{
+  "fixture": "number-text",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "<<label>>\rEN: <<price_en>>\rDE: <<price_de>>\rQty: <<qty>>",
+            "lines": 4,
+            "overset": false,
+            "story_length": 56
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 3,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "en-de\rEN: 1,234.50\rDE: 1.234,50\rQty: 0007",
+            "lines": 4,
+            "overset": false,
+            "story_length": 41
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "2",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "negative\rEN: -0.50\rDE: -0,50\rQty: -3",
+            "lines": 4,
+            "overset": false,
+            "story_length": 36
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "3",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "sci\rEN: 1e3\rDE: 1,0E3\rQty: +12",
+            "lines": 4,
+            "overset": false,
+            "story_length": 30
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}

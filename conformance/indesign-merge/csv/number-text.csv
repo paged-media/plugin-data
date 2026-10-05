@@ -1,0 +1,4 @@
+label,price_en,price_de,qty
+en-de,"1,234.50","1.234,50",0007
+negative,-0.50,"-0,50",-3
+sci,1e3,"1,0E3",+12
