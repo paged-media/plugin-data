@@ -2,6 +2,9 @@ name: vitest
 on:
   push:
     branches: [main]
+  # Pre-merge gate: a PR that breaks the bundle goes red BEFORE it lands
+  # (this lane used to run on push to main only).
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -15,14 +18,12 @@ jobs:
   vitest:
     runs-on: ubuntu-latest
     steps:
+      # The plugin contract comes from npm (exact pins, test/sdk-pin.spec.ts);
+      # the sibling plugin-sdk checkout this lane used to make for a `link:`
+      # chain is no longer read by anything.
       - uses: actions/checkout@v4
         with:
           path: plugin-data
-      - uses: actions/checkout@v4
-        with:
-          repository: paged-media/sdk
-          path: sdk
-          token: ${{ secrets.STATE_DISPATCH_TOKEN || github.token }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -54,25 +55,43 @@ jobs:
           echo "$PWD/binaryen-version_119/bin" >> "$GITHUB_PATH"
       - name: build the engine wasm artifact (100 MB app wasm budget gate)
         run: bash plugin-data/scripts/build-wasm.sh
-      # Fail-not-skip belt at the JOB level too: the vitest step below keeps
-      # its deliberate `|| true` (red results still publish to state), so a
-      # missing artifact must redden the job HERE, before vitest can skip.
+      # Fail-not-skip belt at the JOB level too: a missing artifact reddens
+      # the job HERE, before any spec can skip.
       - name: real-engine artifact guard (fail, never skip)
         run: test -f plugin-data/packages/data-bundle/bin/data_js_bg.wasm
+      # The real query engine. DuckDB-WASM is vendored by this script (MIT,
+      # prebuilt, never compiled in-tree), which also stages the eh variant
+      # as the governed bin/duckdb-engine.wasm. REQUIRE_REAL_DUCKDB=1 below
+      # turns every "DuckDB not vendored" skip into a failure.
+      - name: vendor DuckDB-WASM (MIT prebuilt)
+        run: bash plugin-data/scripts/vendor-duckdb.sh
+      - name: real-DuckDB artifact guard (fail, never skip)
+        run: test -f plugin-data/packages/data-bundle/bin/duckdb-engine.wasm
       # ------------------------------------------------------------------
-      - name: install (sdk sibling satisfies the link chain)
+      - name: install
         run: pnpm install --frozen-lockfile --dir plugin-data
       - name: contract-import lint (fail fast)
         run: node plugin-data/scripts/check-contract-imports.mjs
-      - name: vitest (junit per package; red results still publish)
+      - name: typecheck
+        run: pnpm -r --dir plugin-data typecheck
+      # A red spec FAILS this job. It used to end in `|| true` (so red
+      # results would still be published as evidence), which also meant the
+      # TS lane could never go red: a failing spec merged green. Evidence
+      # still ships: the JUnit steps below run under `!cancelled()`.
+      - name: vitest (junit per package)
         env:
-          # The spec-level half of the dual gate (engine-real.spec.ts):
-          # under this env a missing artifact FAILS the suite instead of
-          # letting the skipIf gate silently pass a vacuous run.
+          # The spec-level half of the dual gate (engine-real.spec.ts,
+          # wasm-fresh.spec.ts): under this env a missing artifact FAILS the
+          # suite instead of letting the skipIf gate silently pass a vacuous
+          # run. REQUIRE_REAL_DUCKDB does the same for the DuckDB specs.
           REQUIRE_REAL_ENGINE: "1"
+          REQUIRE_REAL_DUCKDB: "1"
         run: |
           pnpm -r --no-bail --dir plugin-data exec \
-            vitest run --reporter=junit --outputFile=junit.xml || true
+            vitest run --reporter=default --reporter=junit --outputFile.junit=junit.xml
+      - name: collect junit
+        if: ${{ !cancelled() }}
+        run: |
           cat plugin-data/packages/*/junit.xml > junit-all.xml
           [ -s junit-all.xml ]
       # Evidence hand-off, INVERTED (2026-07-25). This step used to call
