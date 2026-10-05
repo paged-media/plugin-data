@@ -34,8 +34,30 @@ of work, with file and line references, is
 - **Refresh.** "Refresh data" runs the queries again; "Refresh fields" rewrites the
   placeholder fields whose value changed; "What changed?" lists the bindings whose resolved
   content differs from the previous report; a stepper previews the bindings against record N.
+- **Sync review** (since 2026-10-05, wave 7). Each binding in the Bindings panel shows its
+  sync state (synced, stale, pinned, overridden, error) with Pin, Unpin and Accept source.
+  Accept source re-links the binding and writes the source value at once. A binding that
+  cannot resolve is `Error` unless it is pinned or overridden. Pinned and overridden
+  decisions are saved with the session. "What changed?" also shows the row diff of each
+  query since the document was last written from it: rows added, removed and changed (each
+  changed cell before and after), the key rows are matched by, and which bindings each
+  change reaches (`DataSession::row_diff`, built on `data-bind` `diff()`).
+- **Rule editor.** A rule's condition is checked as it is defined: a parse error or a field
+  the data lacks is shown and the rule is not defined. "Preview" lists the records that fire,
+  through the same evaluation that applies the rule. The style comes from the document's
+  own paragraph, character or cell styles. A paragraph or character rule styles the whole
+  story when any record fires, or one paragraph per record from the cursor; a cell rule
+  styles the fired rows' cells through `appliedCellStyle`.
+- **Locales and field formats.** Locales are rows of one table in `data-core`
+  (`LOCALES`): en, de, en-GB, de-AT, de-CH, fr, it, es, nl, with the CLDR values cited
+  beside each row. The session locale is chosen in the Dataset panel; a variable field can
+  take its own locale and a number, currency, percent or date pattern ("Format…" in the
+  Bindings panel), which is written into the field at once unless it is pinned or
+  overridden. The pattern is the field's own expression wrapped in a format function;
+  per-field locales are saved in the engine recipe. The canonical value and every content
+  hash stay locale-free.
 - **Data set tools** (Dataset preview panel): a column list for a query; a batch plan per
-  record, per group or as one catalog; number and date formatting in `en` or `de`; publishing
+  record, per group or as one catalog; the session formatting locale; publishing
   a query result as a data provider, which other plugins can read when the host has a
   provider registry; a variables palette that captures the current values or one data set
   per record, applies a data set in one undo step, and imports or exports a variable library.
@@ -45,7 +67,8 @@ of work, with file and line references, is
   values. The image and barcode bindings of the panel take an expression; so do all
   bindings defined through the session or in a batch job.
 - **Lowering**: a table binding lowers to a native table; a visibility binding sets
-  `elementVisible`; a rule applies a named style to a story range or to table cells.
+  `elementVisible`; a rule applies a named style to a story range, to one paragraph per
+  fired record, or to table cells.
 - **Headless batch.** `paged-data-batch`, built from source, reads a JSON job with
   materialised query results and prints the paginated flow of each output document. A
   script evaluated in Boa can supply the locale, the parameters and the build.
@@ -64,10 +87,14 @@ of work, with file and line references, is
   Nothing removes or updates the earlier frame or paths. A table goes into a new frame at a
   fixed inset on the active page, with column widths estimated from character counts. The
   bundle sets no paint on barcode paths; they take the document's defaults for new objects.
-- **Sync states are not surfaced.** The engine keeps a state per binding (Linked, Pinned,
-  Overridden, Stale, Error); the bundle never reads it and resolves every binding regardless.
-  The engine marks a binding `Overridden` when a data set is applied; the bundle's field
-  refresh does not read that state ([ADR 553](adr/553-non-destructive-refresh.md)).
+- **Sync review limits.** Accepting the source of a table only re-links it: a table is
+  written again as a whole when lowered ([ADR 551](adr/551-compiled-to-native-content.md)),
+  so the panel says to lower it. Nothing marks a field `Overridden` when a user types into
+  it; only an applied data set does. The row diff's "before" is recorded when the document
+  is written from the data (a lower or a field refresh), not when it is saved, so a
+  reopened document starts with every row new. Which bindings a change reaches is read
+  from the fields their expressions name; a per-record binding is reported whenever rows
+  are added or removed, because the record it shows can move.
 - **Record flow stops at a data structure.** The panel defines a record flow and previews
   its records; the paginator returns frames and blocks, and no code writes them to the
   document, and no page or frame is created on overflow. "Lower to document" reports a

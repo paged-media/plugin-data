@@ -228,6 +228,7 @@ mod tests {
                 },
             }],
             variables: Default::default(),
+            locales: Default::default(),
         };
         let mut results = HashMap::new();
         results.insert(

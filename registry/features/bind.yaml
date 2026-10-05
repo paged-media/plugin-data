@@ -130,3 +130,59 @@
   provenance: ["per-record `when` evaluation (stabilized order) -> fired indices + StyleAction; styling is always a document-style ref, never a literal; host application gated on D-13"]
   tests:
     rust: ["data-conformance/tests/rule.rs::data_bind_rule"]
+
+- id: data.bind.row-diff
+  title: Row diff since the document was last written — added, removed, changed rows and the bindings they reach (§8)
+  spec: plugin-data data-js/src/review.rs (row_diffs over data-bind diff) + DataSession::row_diff / mark_rows_applied
+  status: implemented
+  provenance:
+    [
+      "built on data-bind diff(): record identity by a declared key, else the first column unique in both results, else the whole row; lists the values of added/removed rows and the before/after of each changed cell",
+      "affected bindings: a binding on the query that reads a changed column, or any binding when rows were added/removed (a per-record binding's record can move); rules via the caller's rule->query map",
+      "read-only and separate from refresh_change_report (per-binding fingerprints); the applied snapshot moves only on mark_rows_applied",
+    ]
+  tests:
+    rust:
+      - "data-conformance/tests/sync_review.rs::data_bind_row_diff_lists_rows_and_the_bindings_they_reach__feat__data_bind_row_diff"
+      - "data-conformance/tests/sync_review.rs::data_bind_row_diff_honours_a_declared_key__feat__data_bind_row_diff"
+    vitest:
+      - "packages/data-bundle/src/__tests__/sync-panel.test.ts"
+      - "packages/data-bundle/src/__tests__/review.test.ts"
+      - "packages/data-bundle/test/sync-review-real-core.spec.ts"
+
+
+- id: data.bind.sync-review
+  title: Sync states per binding — Error on a failed resolve, accept-source re-links an override (§8)
+  spec: plugin-data data-bind/src/lib.rs (resolve_at) + data-js DataSession pin/relink
+  status: implemented
+  provenance:
+    [
+      "resolve_at sets Error for a binding that cannot resolve unless it is Pinned/Overridden (the frozen states keep their status); a later successful resolve re-links",
+      "accept-source = relink (Stale) then resolve (Linked) with the source value",
+    ]
+  tests:
+    rust:
+      - "data-conformance/tests/sync_review.rs::data_bind_unresolvable_binding_is_error_unless_frozen__feat__data_bind_sync_review"
+      - "data-conformance/tests/sync_review.rs::data_bind_accept_source_relinks_an_overridden_binding__feat__data_bind_sync_review"
+    vitest:
+      - "packages/data-bundle/src/__tests__/sync-panel.test.ts"
+      - "packages/data-bundle/src/__tests__/review.test.ts"
+      - "packages/data-bundle/test/sync-review-real-core.spec.ts"
+
+
+- id: data.rule.authoring
+  title: Rule authoring — condition check, firing preview that agrees with the applied rule (§9.5)
+  spec: plugin-data data-bind evaluate_condition + data-js preview_condition / check_expression
+  status: implemented
+  provenance:
+    [
+      "preview_condition evaluates the same condition evaluate_rule runs (shared condition_fires), so the preview and the applied rule fire on the same records",
+      "check_expression reports parse errors, the fields an expression reads, and those the query's result lacks",
+    ]
+  tests:
+    rust:
+      - "data-conformance/tests/sync_review.rs::data_rule_preview_agrees_with_the_applied_rule__feat__data_rule_authoring"
+    vitest:
+      - "packages/data-bundle/src/__tests__/sync-panel.test.ts"
+      - "packages/data-host-model/src/__tests__/fields.test.ts"
+      - "packages/data-bundle/test/sync-review-real-core.spec.ts"

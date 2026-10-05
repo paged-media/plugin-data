@@ -85,11 +85,13 @@ export {
   placeableUri,
   placeImageMutation,
   ruleMutations,
+  paragraphRanges,
   createRuleCellStyle,
   type PlaceholderField,
   type FieldRefresh,
   type IdmlFit,
   type RuleTarget,
+  type ParagraphRange,
 } from "./fields";
 
 export { toRuleApplication, type RuleResult, type RuleApplication } from "./rule";

@@ -146,6 +146,11 @@ export async function bootCountedEngine(): Promise<CountedEngine> {
           log.cellsIn += (rs?.row_count ?? 0) * (rs?.columns?.length ?? 0);
           log.bytesIn += JSON.stringify(rs).length;
         }
+        if (prop.startsWith("push_")) {
+          // The column door: typed buffers, counted by their byte length
+          // (cellsIn counts per-cell objects, and the door sends none).
+          for (const a of args) if (ArrayBuffer.isView(a)) log.bytesIn += a.byteLength;
+        }
         const out = Reflect.apply(value, obj, args) as unknown;
         if (OUT_METHODS.has(prop) && out != null) {
           log.bytesOut += JSON.stringify(out).length;
@@ -231,6 +236,12 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
       const rs = await inner.query(sql);
       log.rowsOut += rs.row_count;
       return rs;
+    },
+    async queryColumns(sql) {
+      log.queries += 1;
+      const batch = await inner.queryColumns(sql);
+      log.rowsOut += batch.row_count;
+      return batch;
     },
     close: () => inner.close(),
   };

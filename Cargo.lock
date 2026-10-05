@@ -479,6 +479,7 @@ version = "0.0.0"
 dependencies = [
  "compact_str",
  "serde",
+ "serde_json",
  "serde_yaml",
  "smallvec",
  "thiserror",
@@ -516,6 +517,7 @@ dependencies = [
  "data-bind",
  "data-core",
  "data-dataset",
+ "data-expr",
  "data-lower",
  "data-query",
  "data-sources",

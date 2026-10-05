@@ -54,8 +54,8 @@ use proptest::prelude::*;
 
 // ── generators ──────────────────────────────────────────────────────────────
 
-/// Any value kind a result can carry (Date/DateTime non-negative: see
-/// `defect_dp1_*`), including NaN, ±0 and ±∞.
+/// Any value kind a result can carry, including NaN, ±0, ±∞ and dates and
+/// times either side of 1970.
 fn value() -> impl Strategy<Value = Value> {
     prop_oneof![
         Just(Value::Null),
@@ -69,8 +69,8 @@ fn value() -> impl Strategy<Value = Value> {
         ]
         .prop_map(Value::Number),
         "\\PC{0,6}".prop_map(|s| Value::text(&s)),
-        (0i32..40_000).prop_map(Value::Date),
-        (0i64..4_000_000_000_000).prop_map(Value::DateTime),
+        (-40_000i32..40_000).prop_map(Value::Date),
+        (-4_000_000_000_000i64..4_000_000_000_000).prop_map(Value::DateTime),
     ]
 }
 
@@ -142,7 +142,7 @@ proptest! {
     fn data_prop_stabilize_follows_value_order__feat__data_query_seam(
         nums in prop::collection::vec(any::<f64>(), 0..12),
         texts in prop::collection::vec("\\PC{0,5}", 0..12),
-        days in prop::collection::vec(0i32..40_000, 0..12),
+        days in prop::collection::vec(-40_000i32..40_000, 0..12),
     ) {
         let col = |v: Vec<Value>| record_set(&[("k", FieldType::Text)], vec![v]);
         let keys = ["k".to_string()];
@@ -185,18 +185,9 @@ proptest! {
         let key = |r: &RecordSet, i: usize| r.value(i, 0).unwrap().as_display();
         let mut applied: BTreeMap<String, String> =
             (0..o.row_count).map(|i| (key(&o, i), format!("{:?}", o.value(i, 1)))).collect();
-        // `removed` carries diff's internal key encoding (DP-3), so learn each
-        // old row's encoded key from a one-row diff against nothing.
-        let encoded: BTreeMap<String, String> = old
-            .iter()
-            .map(|(k, v)| {
-                let one = make(&BTreeMap::from([(*k, *v)]));
-                (diff(&one, &make(&BTreeMap::new()), &["id".to_string()]).removed[0].clone(), format!("k{k}"))
-            })
-            .collect();
-        for k in &delta.removed {
-            let raw = encoded.get(k).unwrap_or_else(|| panic!("removed key {k} is no old row's key"));
-            prop_assert!(applied.remove(raw).is_some());
+        // `removed` names old rows by index (DP-3, fixed).
+        for &i in &delta.removed {
+            prop_assert!(applied.remove(&key(&o, i)).is_some());
         }
         for &i in delta.inserted.iter().chain(&delta.updated) {
             applied.insert(key(&n, i), format!("{:?}", n.value(i, 1)));
@@ -308,9 +299,14 @@ proptest! {
         let again = s.refresh_change_report();
         prop_assert_eq!((again.changed, again.added, again.removed), (0, 0, 0));
 
-        // Re-ingesting the same rows (same delivery order) is still no change;
-        // another delivery order is DP-4.
+        // Re-ingesting the same rows is still no change — in the same delivery
+        // order, and in the reverse one (DP-4, fixed).
         s.ingest_result(QueryId::from("q"), rs(&rows));
+        let after = s.refresh_change_report();
+        prop_assert_eq!((after.changed, after.added, after.removed), (0, 0, 0));
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        s.ingest_result(QueryId::from("q"), rs(&reversed));
         let after = s.refresh_change_report();
         prop_assert_eq!((after.changed, after.added, after.removed), (0, 0, 0));
     }
@@ -594,28 +590,22 @@ fn decode_qr(g: &BarcodeGeometry) -> Result<String, String> {
 
 // ── pinned defects ──────────────────────────────────────────────────────────
 
-/// DEFECT DP-1: `value_key` writes a Date/DateTime as big-endian
-/// two's-complement bytes, so a negative one (before 1970) compares as a huge
-/// unsigned value and stabilizes AFTER every later date. Record order, group
-/// order and record identity all follow it. (The property above therefore
-/// draws non-negative dates; this pin goes red when the order is fixed.)
+/// Dates and times before 1970 stabilize BEFORE later ones (was defect DP-1:
+/// `value_key` wrote them as big-endian two's-complement bytes, so a
+/// negative one compared as a huge unsigned value and sorted last).
 #[test]
-fn defect_dp1_pre_1970_dates_stabilize_after_later_ones__feat__data_query_seam() {
+fn data_query_pre_1970_dates_stabilize_first__feat__data_query_seam() {
     let col = |v: Vec<Value>| record_set(&[("k", FieldType::Text)], vec![v]);
     let keys = ["k".to_string()];
     let dates = stabilize(&col(vec![Value::Date(1), Value::Date(-1)]), &keys);
-    assert_eq!(
-        dates.columns[0],
-        vec![Value::Date(1), Value::Date(-1)],
-        "DP-1 fixed? 1969-12-31 now sorts first: drop this pin"
-    );
+    assert_eq!(dates.columns[0], vec![Value::Date(-1), Value::Date(1)]);
     let times = stabilize(
         &col(vec![Value::DateTime(1_000), Value::DateTime(-1_000)]),
         &keys,
     );
     assert_eq!(
         times.columns[0],
-        vec![Value::DateTime(1_000), Value::DateTime(-1_000)]
+        vec![Value::DateTime(-1_000), Value::DateTime(1_000)]
     );
 }
 
@@ -642,25 +632,26 @@ fn data_dp2_payload_f64_round_trips_through_json__feat__data_plugin_bundle() {
     );
 }
 
-/// DEFECT DP-3: `RowDelta.removed` holds diff's internal key encoding
-/// (`"<len>:<value>\u{1f}"`), not the old row's key values or index, so a change
-/// report cannot name the rows it removed.
+/// `RowDelta.removed` names the removed rows by their index in `old`, so a
+/// change report can show their values (was defect DP-3: it held diff's
+/// internal key encoding, `"3:k2\u{1f}"`).
 #[test]
-fn defect_dp3_diff_removed_keys_are_internal_encodings__feat__data_bind_engine() {
-    let old = record_set(&[("id", FieldType::Text)], vec![vec![Value::text("k2")]]);
-    let new = record_set(&[("id", FieldType::Text)], vec![vec![]]);
-    assert_eq!(
-        diff(&old, &new, &["id".to_string()]).removed,
-        vec!["3:k2\u{1f}".to_string()]
+fn data_bind_diff_removed_names_old_rows__feat__data_bind_engine() {
+    let old = record_set(
+        &[("id", FieldType::Text)],
+        vec![vec![Value::text("k1"), Value::text("k2")]],
     );
+    let new = record_set(&[("id", FieldType::Text)], vec![vec![Value::text("k1")]]);
+    let removed = diff(&old, &new, &["id".to_string()]).removed;
+    assert_eq!(removed, vec![1]);
+    assert_eq!(old.value(removed[0], 0), Some(&Value::text("k2")));
 }
 
-/// DEFECT DP-4: a variable binding reads record 0 of the DELIVERY order, not
-/// of the stabilized order, so the same rows delivered in another order (as
-/// DuckDB may, without ORDER BY) flip the value and the change report calls
-/// it a change. (Tables stabilize and stay unchanged.)
+/// A variable binding reads record 0 of the STABILIZED order, so the same rows
+/// delivered in another order (as DuckDB may, without ORDER BY) are no change
+/// (was defect DP-4: it read record 0 of the delivery order).
 #[test]
-fn defect_dp4_variable_follows_delivery_order__feat__data_bind_change_report() {
+fn data_bind_variable_ignores_delivery_order__feat__data_bind_change_report() {
     let mut s = DataSession::new(today());
     s.define_query(Query {
         id: QueryId::from("q"),
@@ -687,10 +678,7 @@ fn defect_dp4_variable_follows_delivery_order__feat__data_bind_change_report() {
     reversed.reverse();
     s.ingest_result(QueryId::from("q"), rs(&reversed));
     let report = s.refresh_change_report();
-    assert_eq!(
-        report.changed, 1,
-        "DP-4 fixed? same rows, other order, no change: drop this pin"
-    );
+    assert_eq!((report.changed, report.unchanged), (0, 1));
 }
 
 /// DB-1 (fixed): the EAN-13 encoder wrote G-parity symbols INVERTED (digit 0

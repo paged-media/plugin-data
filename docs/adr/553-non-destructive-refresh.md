@@ -88,3 +88,15 @@ Sync state is not in the saved payload; a session rebuilt from one starts every 
 - [ADR 552](552-binding-is-a-recipe.md) — what is saved and what is not
 - [ADR 557](557-variables-and-data-sets.md) — applying a data set marks bindings `Overridden`
 - [ADR 014](014-data-provider-arrow-seam.md) — the provider revision is a content hash of the stabilized rows
+
+## Amendment 2026-10-05 (wave 7)
+
+- `resolve_at` now assigns `Error`: a known binding that cannot resolve goes to `Error`
+  unless it is `Pinned` or `Overridden`, which keep their status. A later successful
+  resolve re-links it.
+- The Bindings panel reads `sync_state` per binding and offers pin, unpin (relink) and
+  accept-source (relink, then write the source value).
+- `diff` has a caller: `DataSession::row_diff` diffs each query's current result against
+  the result recorded by `mark_rows_applied` when the document was last written from it.
+  It is read-only and separate from the per-binding change report.
+

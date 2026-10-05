@@ -89,10 +89,18 @@ pub fn shape(records: &RecordSet, shape: &ResultShape) -> Shaped {
 
 /// Partition rows into groups keyed by the `by` fields, in stable first-seen
 /// order. Missing group fields contribute `Null` to the key.
+///
+/// O(n): each row's key is hashed into a bucket of the groups seen so far, and
+/// compared (`==`, as before) only with the groups in that bucket — not with
+/// every group. The hash agrees with `==`: `-0.0` hashes as `0.0`, and a NaN
+/// never equals anything, so it opens its own group exactly as the linear scan
+/// did.
 fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
     let cols: Vec<Option<usize>> = by.iter().map(|n| records.schema.index_of(n)).collect();
-    let mut order: Vec<Vec<Value>> = Vec::new();
     let mut groups: Vec<Group> = Vec::new();
+    let mut buckets: std::collections::HashMap<u64, smallvec::SmallVec<[usize; 1]>> =
+        std::collections::HashMap::new();
+    let mut compares = 0u64;
     for row in 0..records.row_count {
         let key: Vec<Value> = cols
             .iter()
@@ -101,16 +109,26 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
                 None => Value::Null,
             })
             .collect();
-        let found = order.iter().position(|k| k == &key);
-        // One count per key compared (the scan's length), added once per row.
-        perf::add(
-            Counter::GroupKeyCompares,
-            found.map_or(order.len(), |i| i + 1) as u64,
-        );
+        let mut h = FNV_OFFSET;
+        for v in &key {
+            match v {
+                Value::Number(n) if *n == 0.0 => hash_value(&mut h, &Value::Number(0.0)),
+                other => hash_value(&mut h, other),
+            }
+        }
+        let bucket = buckets.entry(h).or_default();
+        let mut found = None;
+        for &g in bucket.iter() {
+            compares += 1;
+            if groups[g].key == key {
+                found = Some(g);
+                break;
+            }
+        }
         match found {
-            Some(i) => groups[i].rows.push(row),
+            Some(g) => groups[g].rows.push(row),
             None => {
-                order.push(key.clone());
+                bucket.push(groups.len());
                 groups.push(Group {
                     key,
                     rows: vec![row],
@@ -118,6 +136,8 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
             }
         }
     }
+    // One count per key compared, added once per call.
+    perf::add(Counter::GroupKeyCompares, compares);
     groups
 }
 
@@ -127,33 +147,39 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
 /// (or, when `keys` is empty, by every column left-to-right). DuckDB result
 /// iteration is unordered without `ORDER BY`; this stabilizes it so record
 /// identity is stable across refreshes (the sync-diff precondition, §8).
+///
+/// The comparison is allocation-free: values compare in place by the same
+/// total, type-aware order [`value_key`] defines (type tag, then content). The
+/// sort-key columns come first; the tie-break then walks the REMAINING columns
+/// only (a key column already compared equal cannot decide it), so rows with
+/// identical content are equal and all others order by content — the order is
+/// permutation-invariant.
 pub fn order_rows(records: &RecordSet, keys: &[String]) -> Vec<usize> {
-    let key_cols: Vec<usize> = if keys.is_empty() {
-        (0..records.columns.len()).collect()
+    let ncols = records.columns.len();
+    let mut cols: Vec<usize> = if keys.is_empty() {
+        (0..ncols).collect()
     } else {
         keys.iter()
             .filter_map(|n| records.schema.index_of(n))
             .collect()
     };
-    let mut idx: Vec<usize> = (0..records.row_count).collect();
-    let ncols = records.columns.len();
-    idx.sort_by(|&a, &b| {
-        // Key columns first.
-        for &c in &key_cols {
-            let va = records.value(a, c).map(value_key).unwrap_or_default();
-            let vb = records.value(b, c).map(value_key).unwrap_or_default();
-            match va.cmp(&vb) {
-                std::cmp::Ordering::Equal => continue,
-                other => return other,
-            }
+    // Tie-break on FULL row content (not the original index): every column
+    // not already a key, left to right.
+    let mut is_key = vec![false; ncols];
+    for &c in &cols {
+        if let Some(k) = is_key.get_mut(c) {
+            *k = true;
         }
-        // Tiebreak on FULL row content (not the original index) so the order is
-        // permutation-invariant: rows with identical content are equal, others
-        // order by their content — stable identity across refreshes (§8).
-        for c in 0..ncols {
-            let va = records.value(a, c).map(value_key).unwrap_or_default();
-            let vb = records.value(b, c).map(value_key).unwrap_or_default();
-            match va.cmp(&vb) {
+    }
+    cols.extend((0..ncols).filter(|&c| !is_key[c]));
+    let columns: Vec<&[Value]> = cols
+        .iter()
+        .map(|&c| records.columns[c].as_slice())
+        .collect();
+    let mut idx: Vec<usize> = (0..records.row_count).collect();
+    idx.sort_by(|&a, &b| {
+        for col in &columns {
+            match cmp_values(col.get(a), col.get(b)) {
                 std::cmp::Ordering::Equal => continue,
                 other => return other,
             }
@@ -161,6 +187,34 @@ pub fn order_rows(records: &RecordSet, keys: &[String]) -> Vec<usize> {
         std::cmp::Ordering::Equal
     });
     idx
+}
+
+/// Compare two (possibly absent) values in the total order [`value_key`]
+/// defines, without building the keys. An absent value orders as `Null`.
+pub fn cmp_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    let (ta, na, ba) = key_parts(a);
+    let (tb, nb, bb) = key_parts(b);
+    ta.cmp(&tb).then(na.cmp(&nb)).then_with(|| ba.cmp(bb))
+}
+
+/// The borrowed parts of a value's sort key: `(type tag, fixed-width content
+/// as an unsigned integer, variable-width content bytes)`. Comparing the
+/// triple lexicographically is the same order as comparing [`value_key`]'s
+/// `(tag, big-endian bytes)`: within a tag the content is either one
+/// fixed-width big-endian word (bool, number, date, datetime — compared as
+/// the unsigned integer the bytes spell) or a byte string.
+#[inline]
+fn key_parts(v: Option<&Value>) -> (u8, u64, &[u8]) {
+    match v {
+        None | Some(Value::Null) => (0, 0, &[]),
+        Some(Value::Bool(b)) => (1, *b as u64, &[]),
+        Some(Value::Number(n)) => (2, order_f64(*n), &[]),
+        Some(Value::Date(d)) => (3, order_i64(*d as i64), &[]),
+        Some(Value::DateTime(ms)) => (3, order_i64(*ms), &[]),
+        Some(Value::Text(t)) => (4, 0, t.as_bytes()),
+        Some(Value::Bytes(b)) => (5, 0, b.as_slice()),
+        Some(Value::Error(e)) => (6, 0, e.code().as_bytes()),
+    }
 }
 
 /// Apply a row permutation, returning a new record set with rows reordered.
@@ -177,10 +231,35 @@ pub fn apply_order(records: &RecordSet, order: &[usize]) -> RecordSet {
     }
 }
 
-/// Stabilize a record set by the named keys (`order_rows` + `apply_order`).
-pub fn stabilize(records: &RecordSet, keys: &[String]) -> RecordSet {
+/// The stabilized row order of a record set by the named keys — the sort
+/// [`stabilize`] does, without copying the rows. Counted as one
+/// [`Counter::StabilizeCalls`].
+pub fn stable_order(records: &RecordSet, keys: &[String]) -> Vec<usize> {
     perf::bump(Counter::StabilizeCalls);
-    let order = order_rows(records, keys);
+    order_rows(records, keys)
+}
+
+/// The row that stabilizes FIRST (with no keys: by every column), found by
+/// one O(n) scan instead of a sort. It is `stable_order(records, &[])[0]` up
+/// to rows of identical content, which are interchangeable. `None` when the
+/// set is empty.
+pub fn first_stable_row(records: &RecordSet) -> Option<usize> {
+    let ncols = records.columns.len();
+    (0..records.row_count).min_by(|&a, &b| {
+        for c in 0..ncols {
+            let col = &records.columns[c];
+            match cmp_values(col.get(a), col.get(b)) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        std::cmp::Ordering::Equal
+    })
+}
+
+/// Stabilize a record set by the named keys (`stable_order` + `apply_order`).
+pub fn stabilize(records: &RecordSet, keys: &[String]) -> RecordSet {
+    let order = stable_order(records, keys);
     apply_order(records, &order)
 }
 
@@ -231,19 +310,75 @@ fn hash_value(h: &mut u64, v: &Value) {
 /// A stable content hash of a record set (schema + every value). Bit-stable —
 /// the basis for [`ResolveStamp`] invalidation (§8).
 pub fn content_hash(records: &RecordSet) -> u64 {
+    content_hashes(records).0
+}
+
+/// [`content_hash`] and, in the same pass, one hash per column (that column's
+/// values only, in row order) — the column-level change signal the change
+/// report uses to skip bindings that read no changed column. Counted as one
+/// [`Counter::ContentHashes`].
+pub fn content_hashes(records: &RecordSet) -> (u64, Vec<u64>) {
     perf::bump(Counter::ContentHashes);
     let mut h = FNV_OFFSET;
     for f in &records.schema.fields {
         fnv_bytes(&mut h, f.name.as_bytes());
         fnv_bytes(&mut h, &[0xff]);
-    }
-    fnv_bytes(&mut h, &records.row_count.to_le_bytes());
-    for col in &records.columns {
-        for v in col {
-            hash_value(&mut h, v);
+        // A declared decimal scale changes the display, so it is content;
+        // hashed only when present, so other results hash as before.
+        if let Some(s) = f.scale {
+            fnv_bytes(&mut h, &[0xfe, s]);
         }
     }
-    h
+    fnv_bytes(&mut h, &records.row_count.to_le_bytes());
+    let mut per_column = Vec::with_capacity(records.columns.len());
+    for col in &records.columns {
+        let mut ch = FNV_OFFSET;
+        if let Some(s) = records
+            .schema
+            .fields
+            .get(per_column.len())
+            .and_then(|f| f.scale)
+        {
+            fnv_bytes(&mut ch, &[0xfe, s]);
+        }
+        for v in col {
+            hash_value(&mut h, v);
+            hash_value(&mut ch, v);
+        }
+        per_column.push(ch);
+    }
+    (h, per_column)
+}
+
+/// An FNV-1a hasher over the same primitive the content hashes use — for the
+/// engine's own composite stamps (a binding's dependency stamp).
+#[derive(Debug, Clone, Copy)]
+pub struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Fnv(FNV_OFFSET)
+    }
+}
+
+impl Fnv {
+    /// Feed raw bytes.
+    pub fn bytes(&mut self, b: &[u8]) -> &mut Self {
+        fnv_bytes(&mut self.0, b);
+        self
+    }
+    /// Feed a `u64` (little-endian).
+    pub fn u64(&mut self, n: u64) -> &mut Self {
+        self.bytes(&n.to_le_bytes())
+    }
+    /// Feed a string, terminated so `"ab"+"c"` ≠ `"a"+"bc"`.
+    pub fn str(&mut self, s: &str) -> &mut Self {
+        self.bytes(s.as_bytes()).bytes(&[0xff])
+    }
+    /// The hash so far.
+    pub fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Hash a query's SQL + shape (the query half of the resolve stamp).
@@ -279,20 +414,31 @@ pub fn stamp(source_content_hash: u64, query: &Query, params: &[(String, Value)]
     }
 }
 
-/// A total, type-aware sort key for a value (used by `order_rows`/`group_by`).
-/// Orders by type tag, then by content; numbers by bits-preserving order.
-fn value_key(v: &Value) -> (u8, Vec<u8>) {
+/// A total, type-aware sort key for a value: orders by type tag, then by
+/// content; numbers by bits-preserving order. This DEFINES the stabilize
+/// order; [`order_rows`] compares in the same order without building it
+/// ([`cmp_values`]), and the property tests hold the two together. Each call
+/// allocates a fresh `Vec<u8>` (counted as [`Counter::KeyAllocs`]).
+pub fn value_key(v: &Value) -> (u8, Vec<u8>) {
     perf::bump(Counter::KeyAllocs);
     match v {
         Value::Null => (0, Vec::new()),
         Value::Bool(b) => (1, vec![*b as u8]),
         Value::Number(n) => (2, order_f64(*n).to_be_bytes().to_vec()),
-        Value::Date(d) => (3, (*d as i64).to_be_bytes().to_vec()),
-        Value::DateTime(ms) => (3, ms.to_be_bytes().to_vec()),
+        Value::Date(d) => (3, order_i64(*d as i64).to_be_bytes().to_vec()),
+        Value::DateTime(ms) => (3, order_i64(*ms).to_be_bytes().to_vec()),
         Value::Text(t) => (4, t.as_bytes().to_vec()),
         Value::Bytes(b) => (5, b.clone()),
         Value::Error(e) => (6, e.code().as_bytes().to_vec()),
     }
+}
+
+/// Map an `i64` to a `u64` whose unsigned order matches signed order (flip
+/// the sign bit), so a date before 1970 sorts before a later one. Plain
+/// two's-complement bytes put every negative value after every positive one
+/// (defect DP-1).
+fn order_i64(n: i64) -> u64 {
+    (n as u64) ^ (1 << 63)
 }
 
 /// Map an `f64` to a `u64` whose unsigned order matches numeric order

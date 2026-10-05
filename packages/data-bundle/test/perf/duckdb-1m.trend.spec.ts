@@ -31,10 +31,15 @@
 //     (the path the cited gate describes);
 //  3. full materialise — SELECT * of all 1M rows through recordset.ts (Arrow →
 //     `{t, v}` per cell), then the engine's ingest_result (serde decode of
-//     every cell) — the boundary price a refresh pays today for a 1M result.
+//     every cell) — the boundary price of the original seam;
+//  4. the column door (Wave 2) — the same SELECT * read as typed column
+//     buffers (arrowToColumns) and delivered with one copy per column
+//     (ingestColumnBatch), then the same result delivered AGAIN (a refresh
+//     whose data did not change: recognised, nothing decoded).
 
 import { describe, expect, it, vi } from "vitest";
 
+import { ingestColumnBatch } from "../../src/engine";
 import { bootCountedDuck, bootCountedEngine, HAVE_DUCK, HAVE_ENGINE } from "./harness";
 
 const RUN = process.env.PERF_DUCKDB_1M === "1";
@@ -80,6 +85,24 @@ describe.skipIf(!RUN || !HAVE_DUCK || !HAVE_ENGINE)("DuckDB 1M-row lane (trended
     const engineIngestMs = performance.now() - t;
     expect(engine.counters().ingest_cells).toBe(ROWS * 4);
 
+    t = performance.now();
+    const batch = await duck.handle.queryColumns("SELECT * FROM big");
+    const columnsMs = performance.now() - t;
+    const doorEngine = await bootCountedEngine();
+    doorEngine.engine.define_query({ id: "q", sql: "", params: [], shape: { shape: "recordStream" } });
+    doorEngine.reset();
+    t = performance.now();
+    expect(ingestColumnBatch(doorEngine.engine, "q", batch)).toBe("changed");
+    const doorIngestMs = performance.now() - t;
+    expect(doorEngine.counters().ingest_cells).toBe(ROWS * 4);
+    // The same data both ways.
+    expect(doorEngine.engine.result_token!("q")).toBe(engine.engine.result_token!("q"));
+    doorEngine.reset();
+    t = performance.now();
+    expect(ingestColumnBatch(doorEngine.engine, "q", batch)).toBe("unchanged");
+    const doorUnchangedMs = performance.now() - t;
+    expect(doorEngine.counters().ingest_cells).toBe(0);
+
     // eslint-disable-next-line no-console
     console.log(
       `PERF duckdb-${ROWS} ${JSON.stringify({
@@ -88,6 +111,11 @@ describe.skipIf(!RUN || !HAVE_DUCK || !HAVE_ENGINE)("DuckDB 1M-row lane (trended
         groupedQueryMs: Math.round(groupMs),
         materialiseMs: Math.round(materialiseMs),
         engineIngestMs: Math.round(engineIngestMs),
+        columnsMaterialiseMs: Math.round(columnsMs),
+        columnDoorIngestMs: Math.round(doorIngestMs),
+        columnDoorUnchangedMs: Math.round(doorUnchangedMs),
+        boundaryMs: Math.round(materialiseMs + engineIngestMs),
+        columnBoundaryMs: Math.round(columnsMs + doorIngestMs),
         groupedTotalMs: Math.round(ingestMs + groupMs),
       })}`,
     );

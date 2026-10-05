@@ -252,6 +252,13 @@ pub struct Field {
     pub ty: FieldType,
     #[serde(default = "default_true")]
     pub nullable: bool,
+    /// The declared decimal scale of a DECIMAL(p, s) column (digits after the
+    /// point), when the source has one. A bare reference to the field then
+    /// displays with exactly `s` digits (`1234.50`, not `1234.5`) — the value
+    /// itself is still an f64. Absent for every other type. (Additive
+    /// amendment, Wave 2: oracle defect DM-8.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
 }
 
 fn default_true() -> bool {
@@ -272,54 +279,6 @@ pub enum FieldType {
     Null,
 }
 
-/// The formatting locale for the display kernels (spec §9.1; v1 = en/de minimum,
-/// mirroring plugin-sheet's D-8). It affects ONLY the `data-expr` format
-/// functions' display output (`NUMBER`/`CURRENCY`/`PERCENT`/`DATEFMT`
-/// separators, default currency symbol/placement, default date pattern). The
-/// CANONICAL value form stays locale-free — re-resolution is idempotent
-/// (`value.rs`), and content hashing never sees a locale.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Locale {
-    /// English: `1,234.56`, `$` leading, `YYYY-MM-DD`.
-    #[default]
-    En,
-    /// German: `1.234,56`, `€` trailing, `DD.MM.YYYY`.
-    De,
-}
-
-impl Locale {
-    /// The decimal separator.
-    pub fn decimal_sep(self) -> char {
-        match self {
-            Locale::En => '.',
-            Locale::De => ',',
-        }
-    }
-    /// The thousands-grouping separator.
-    pub fn group_sep(self) -> char {
-        match self {
-            Locale::En => ',',
-            Locale::De => '.',
-        }
-    }
-    /// The default currency symbol + whether it TRAILS the amount
-    /// (`("€", true)` → `1.234,56 €`).
-    pub fn currency(self) -> (&'static str, bool) {
-        match self {
-            Locale::En => ("$", false),
-            Locale::De => ("€", true),
-        }
-    }
-    /// The default `DATEFMT` pattern when the caller supplies none.
-    pub fn date_pattern(self) -> &'static str {
-        match self {
-            Locale::En => "YYYY-MM-DD",
-            Locale::De => "DD.MM.YYYY",
-        }
-    }
-}
-
 /// A result schema: field names + types, in column order.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Schema {
@@ -336,6 +295,7 @@ impl Schema {
                     name,
                     ty,
                     nullable: true,
+                    scale: None,
                 })
                 .collect(),
         }
