@@ -16,7 +16,7 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-//! The engine workloads the Wave 1 perf harness measures — shared by the
+//! The engine workloads the perf harness measures — shared by the
 //! criterion benches (`benches/engine.rs`, wall clock, trended) and the count
 //! budgets (`tests/perf_counts.rs`, gated). One builder per workload, so the
 //! bench and the budget can never drift apart on what they run.

@@ -16,7 +16,7 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-//! Engine COUNT budgets (campaign Wave 1, feature `data.perf.gates`). The
+//! Engine COUNT budgets (feature `data.perf.gates`). The
 //! file name keeps it under the cockpit test-map's `data-conformance::perf`
 //! prefix.
 //!

@@ -18,9 +18,9 @@
 
 // PERF BUDGETS — the paged.data COMMANDS, against the real core host, the real
 // data-js wasm and (where the command queries) real DuckDB. Feature
-// `data.perf.gates` (campaign Wave 1).
+// `data.perf.gates`.
 //
-// THE RULES (the plugin-draw / image / sheets / web campaigns' rules):
+// THE RULES (the same rules as the plugin-draw, image, sheets and web budgets):
 //  · a budget is a COUNT — host door calls, mutates, batch ops, undo steps,
 //    wasm calls, cells across the boundary, engine resolves / sorts / sort-key
 //    allocations — never a duration;
@@ -240,7 +240,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     // AS FOUND: 100 separate steps — more than the engine's bounded undo
     // history reaches: the walk runs out after 89 undos, before it gets back to the mark,
     // so the user cannot undo back past the refresh at all. The pin is the
-    // reachable count; the one-batch refresh (Wave 2) brings it to 1, reached.
+    // reachable count; the one-batch refresh brings it to 1, reached.
     const walk = await undoStepsSince(h, mark);
     const m = { ...pre, undoSteps: walk.steps };
     report("W2.refresh-100-fields", m, { ms, ...bytes, detail: { undoReached: walk.reached } }, snap, engine);
@@ -396,7 +396,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   });
 
   // ── PROBE (not a budget): can the wire carry a refresh as ONE batch? ──────
-  // The Wave 2 candidate "refreshFields becomes one batched mutate" needs core
+  // The candidate "refreshFields becomes one batched mutate" needs core
   // to apply several setFieldValue ops, written back to front, in one batch.
   it("PROBE: core applies a back-to-front batch of setFieldValue as ONE undo step [data.perf.gates]", async () => {
     h = await openDataHost();

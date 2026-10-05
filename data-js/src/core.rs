@@ -277,7 +277,7 @@ pub struct ChangeReportOut {
     pub removed: usize,
 }
 
-/// The engine's work counters (campaign Wave 1 perf budgets): how many
+/// The engine's work counters (the perf budgets): how many
 /// resolves, sorts, sort-key allocations, fingerprints, diff rows and ingested
 /// cells the engine has spent since the last reset. `enabled` is false in a
 /// build without the `perf-counters` feature, where every count reads 0.

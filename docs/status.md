@@ -87,6 +87,22 @@ of work, with file and line references, is
   tests (one skipped: the oracle skeleton), 112 TypeScript tests in 22 files, of which one
   file boots the real engine and none yet the real DuckDB.
 
+- **Performance is measured since 2026-10-05, not yet improved.** Count budgets are pinned:
+  - Bundle side, against the real core host, the real data-js wasm and real DuckDB:
+    `packages/data-bundle/test/perf/`.
+  - Engine side: `data-conformance/tests/perf_counts.rs`, through the `perf-counters`
+    feature. The shipped wasm exports `perfCounters()`.
+  - Criterion benches trend the wall clock.
+
+  A 100-field refresh is 100 mutates and more undo steps than the bounded history reaches.
+  200 reflow events cost 200 full re-paginations. A 1-cell data change costs a re-resolve of
+  every binding.
+
+  The "1M-row DuckDB" gate the records cited now has a lane. It is opt-in and trended, not
+  gated, and measures a 1M-row CSV to a grouped RecordSet in 0.37 s. Bringing the full 1M rows
+  into the engine costs about 2.1 s. Numbers and the ranked fixes:
+  [`design/perf-baseline-2026-10-05.md`](design/perf-baseline-2026-10-05.md).
+
 ## Not built
 
 - Arrow IPC across the wasm boundary: values cross as JSON-shaped objects

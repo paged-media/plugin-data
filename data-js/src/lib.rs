@@ -453,7 +453,7 @@ mod wasm {
         serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    /// The engine's work counters since the last reset (campaign Wave 1 perf
+    /// The engine's work counters since the last reset (the perf
     /// budgets) — `{enabled, resolves, stabilize_calls, key_allocs,
     /// fingerprints, diff_rows, ingest_cells, content_hashes,
     /// group_key_compares}`. Global to the wasm instance, not per engine.

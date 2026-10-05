@@ -16,7 +16,7 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-//! Work counters for the perf budgets (campaign Wave 1).
+//! Work counters for the perf budgets.
 //!
 //! A budget is a COUNT, not a duration: the number of resolves a refresh
 //! costs, the sort keys `stabilize` allocates, the cells an ingest carries.

@@ -16,7 +16,7 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-//! Wall-clock benches for the paged.data engine (campaign Wave 1). TRENDED,
+//! Wall-clock benches for the paged.data engine.  TRENDED,
 //! not gated: the gated budgets are the counts in `tests/perf_counts.rs`,
 //! which run the same workloads (`data_conformance::perf_workloads`).
 //!

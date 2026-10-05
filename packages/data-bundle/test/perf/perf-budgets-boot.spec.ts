@@ -17,7 +17,7 @@
  */
 
 // PERF BUDGETS — paged.data's BOOT and its REFLOW subscription. Feature
-// `data.perf.gates` (campaign Wave 1). The rules are in
+// `data.perf.gates`. The rules are in
 // `perf-budgets-commands.spec.ts` and bind here too.
 
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -90,7 +90,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     await s.registerCsvSource("products_w6", productCsv(200));
     s.addQuery("q1", "SELECT sku, name, price FROM products_w6", "recordStream");
     await s.refreshData();
-    // Record flow has no session define method yet (Wave 4); define it on the
+    // Record flow has no session define method yet; define it on the
     // engine directly, the way the pipeline parts do.
     (engine.engine as unknown as { define_template(t: unknown): void }).define_template({
       id: "tmpl",
