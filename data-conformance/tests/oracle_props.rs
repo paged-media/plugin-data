@@ -326,6 +326,19 @@ proptest! {
         // UPC-A is EAN-13 with an implicit leading 0.
         prop_assert_eq!(decode_ean13(&g), Some(format!("0{}", g.text)));
     }
+
+    #[test]
+    fn data_prop_qr_decodes_back__feat__data_barcode_symbology(
+        payload in prop_oneof![
+            "[ -~]{1,213}",
+            "\\PC{1,60}",
+            prop::collection::vec(any::<char>(), 1..50).prop_map(|c| c.into_iter().collect::<String>()),
+        ].prop_filter("fits v10-M byte mode", |p| p.len() <= 213)
+    ) {
+        // Byte mode, level M, v1–v10: up to 213 bytes, so every version.
+        let g = encode(Symbology::Qr, &payload).unwrap();
+        prop_assert_eq!(decode_qr(&g), Ok(payload));
+    }
 }
 
 // ── independent decoders ────────────────────────────────────────────────────
@@ -553,18 +566,16 @@ fn data_db1_ean13_g_parity_symbols_decode__feat__data_barcode_symbology() {
     assert_eq!(&bits[start + 3 + 14..start + 3 + 21], "0100111");
 }
 
-/// DEFECT DB-2: QR symbols do not decode with an independent decoder. The data
-/// modules match a reference encoder (python `qrcode`, same version 1-M and
-/// mask 4) exactly; 9 modules differ, all in the format information and the
-/// dark module, so a conformant reader takes the wrong mask/level and fails
-/// Reed-Solomon (rqrr: DataEcc). The same harness decodes the reference matrix.
+/// DB-2 (fixed): QR symbols did not decode with an independent decoder. The
+/// data modules matched a reference encoder (python `qrcode`, same version 1-M
+/// and mask 4); the format information was written bit-reversed and the dark
+/// module was cleared, so a conformant reader took the wrong mask/level and
+/// failed Reed-Solomon (rqrr: DataEcc). The QR property above now decodes
+/// every payload; these are the payloads the pin carried.
 #[test]
-fn defect_db2_qr_symbols_do_not_decode__feat__data_barcode_symbology() {
+fn data_db2_qr_symbols_decode__feat__data_barcode_symbology() {
     for payload in ["A", "hello world", "https://paged.media/x?y=1"] {
         let g = encode(Symbology::Qr, payload).unwrap();
-        assert!(
-            decode_qr(&g).is_err(),
-            "DB-2 fixed? {payload:?} decodes: turn this into the QR round-trip property"
-        );
+        assert_eq!(decode_qr(&g).as_deref(), Ok(payload));
     }
 }

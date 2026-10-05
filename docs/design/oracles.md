@@ -221,6 +221,7 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 | the payload survives save → JSON → load → save unchanged | `data.plugin.bundle` |
 | a second resolve and a second change report without a data change are no-ops | `data.bind.change-report` |
 | EAN-13 (every first digit) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
+| QR (byte mode, level M, 1–213 bytes, so versions 1–10) decodes back with `rqrr` | `data.barcode.symbology` |
 
 QR is decoded with `rqrr`, an independent decoder (MIT OR Apache-2.0, a dev-dependency only).
 The harness was first validated on a reference matrix from python `qrcode`. Code-128 has no
@@ -232,8 +233,12 @@ independent decoder here, because no small, permissive, pure-Rust one exists.
   `1011000`, not `0100111`, so every EAN-13 whose first digit is not 0 was unscannable. G is now
   R reversed, per the GS1 table. The EAN-13 property draws every first digit, and
   `data_db1_*` keeps the GS1 worked example as a regression.
-- **DB-2.** QR symbols do not decode. Their data modules match a reference encoder with the same
-  version, level and mask, but 9 format-information and dark-module modules differ.
+- **DB-2 (fixed).** QR symbols did not decode. Their data modules matched a reference encoder
+  with the same version, level and mask, but the format information was written bit-reversed
+  and the dark module was cleared. Versions 7–10 also lacked their version information. All
+  three now follow ISO/IEC 18004. The QR property decodes every payload with `rqrr`. A data-barcode
+  unit test decodes every version (1–10) under every mask (0–7), and the matrices match python
+  `qrcode` module for module (checked once, 80 of 80).
 - **DP-1.** Dates and times before 1970 stabilize after later ones, because of big-endian
   two's-complement byte keys.
 - **DP-2.** An f64 in the payload drifts by one ulp through serde_json, which is built without

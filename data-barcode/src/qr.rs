@@ -122,6 +122,13 @@ const VERSION_M: [VersionEc; 10] = [
 /// the unit-box geometry (one rect per dark module, incl. a 4-module quiet
 /// zone). `text` is empty (QR carries no human-readable line).
 pub fn encode_qr(data: &str) -> Result<BarcodeGeometry, BarcodeError> {
+    encode_qr_masked(data, None)
+}
+
+/// [`encode_qr`] with the data mask forced (`Some(0..=7)`) instead of chosen by
+/// penalty — the tests use it to decode every mask, not only the ones the
+/// penalty happens to pick.
+fn encode_qr_masked(data: &str, force_mask: Option<u8>) -> Result<BarcodeGeometry, BarcodeError> {
     if data.is_empty() {
         return Err(BarcodeError::Empty);
     }
@@ -146,7 +153,7 @@ pub fn encode_qr(data: &str) -> Result<BarcodeGeometry, BarcodeError> {
     matrix.place_data_bits(&codewords_to_bits(&final_codewords));
 
     // ── Stage 4: choose the lowest-penalty mask, apply it, write format info.
-    let best_mask = matrix.choose_mask();
+    let best_mask = force_mask.unwrap_or_else(|| matrix.choose_mask());
     matrix.apply_mask_and_format(best_mask);
 
     // ── Stage 5: emit one unit-box rect per dark module (+ quiet zone). ──────
@@ -424,6 +431,27 @@ impl Matrix {
         // Reserve the format-information modules (filled later) as function so
         // the data fill skips them.
         self.reserve_format();
+        // Version information (v7+): two 6×3 blocks, independent of the mask,
+        // so they are written now.
+        self.place_version_info(version);
+    }
+
+    /// The 18-bit version information (ISO/IEC 18004 §7.10, Annex D) for v7+:
+    /// the 6-bit version then its BCH(18,6) remainder, NOT masked. Bit `i`
+    /// (0 = LSB) sits at column `n − 11 + i % 3`, row `i / 3` in the top-right
+    /// block, and transposed in the bottom-left block.
+    fn place_version_info(&mut self, version: usize) {
+        if version < 7 {
+            return;
+        }
+        let n = self.size;
+        let bits = bch_version(version as u32);
+        for i in 0..18 {
+            let bit = (bits >> i) & 1 == 1;
+            let (a, b) = (n - 11 + i % 3, i / 3);
+            self.set(a, b, bit, true); // top-right: x = n−11.., y = 0..6
+            self.set(b, a, bit, true); // bottom-left: x = 0..6, y = n−11..
+        }
     }
 
     /// A 7×7 finder pattern with its 1-module separator, top-left at (ox, oy).
@@ -493,8 +521,12 @@ impl Matrix {
             }
         }
         for i in 0..8 {
-            // Around the top-right + bottom-left finders.
+            // Right of the bottom of the top-right finder: 8 modules.
             self.set(n - 1 - i, 8, false, true);
+        }
+        for i in 0..7 {
+            // Beside the bottom-left finder: 7 modules. The 8th (row n − 8) is
+            // the dark module, which must stay dark (DB-2 overwrote it).
             self.set(8, n - 1 - i, false, true);
         }
     }
@@ -597,10 +629,12 @@ impl Matrix {
         let format = (ec_level_m << 3) | mask as u32;
         let bits = bch_format(format);
         let n = self.size;
-        // bits[0] is the MSB (bit 14). Placement per ISO/IEC 18004 §8.9.
-        // Around the top-left finder + split across top-right / bottom-left.
+        // Bit index `i` counts from the LSB (ISO/IEC 18004 §7.9.1, Figure 25):
+        // bit 0 sits at (8, 0) and (n − 1, 8), bit 14 (the EC level's MSB) at
+        // (0, 8) and (8, n − 1). Indexing from the MSB (DB-2) wrote the whole
+        // sequence reversed, so readers took the wrong level and mask.
         for i in 0..15 {
-            let bit = (bits >> (14 - i)) & 1 == 1;
+            let bit = (bits >> i) & 1 == 1;
             // First copy: top-left.
             let (x1, y1) = format_pos_a(i);
             let idx1 = self.idx(x1, y1);
@@ -788,7 +822,21 @@ fn bch_format(format: u32) -> u32 {
     combined ^ 0b101010000010010 // mask 0x5412
 }
 
-/// The first (top-left) format-bit position for bit index `i` (0 = MSB / bit 14).
+/// The 18-bit version information for `version` (7..=40): the version in the
+/// top 6 bits, then the BCH(18,6) remainder by G(x) = 0x1F25 (ISO/IEC 18004
+/// Annex D). Not masked.
+fn bch_version(version: u32) -> u32 {
+    let mut d = version << 12;
+    let g = 0x1F25u32;
+    for i in (0..6).rev() {
+        if (d >> (12 + i)) & 1 == 1 {
+            d ^= g << i;
+        }
+    }
+    (version << 12) | (d & 0xFFF)
+}
+
+/// The first (top-left) format-bit position for bit index `i` (0 = LSB).
 /// Per ISO/IEC 18004 §8.9 placement around the top-left finder.
 fn format_pos_a(i: usize) -> (usize, usize) {
     // Bits 0..=5 run down column 8 (rows 0..=5), bit 6 at (8,7), bit 7 at (8,8),
@@ -813,10 +861,11 @@ fn format_pos_a(i: usize) -> (usize, usize) {
     }
 }
 
-/// The second (top-right / bottom-left) format-bit position for bit index `i`.
+/// The second (top-right / bottom-left) format-bit position for bit index `i`
+/// (0 = LSB).
 fn format_pos_b(i: usize, n: usize) -> (usize, usize) {
     // Bits 0..=7 run leftward along row 8 from the right edge; bits 8..=14 run
-    // upward along column 8 from the bottom edge.
+    // down column 8 to the bottom edge (bit 14 at the last row).
     if i < 8 {
         (n - 1 - i, 8)
     } else {
@@ -871,6 +920,104 @@ mod tests {
         // For (EC=M=00, mask=000) the spec's format string is 101010000010010.
         let bits = bch_format(0b00000);
         assert_eq!(bits, 0b101010000010010);
+    }
+
+    #[test]
+    fn data_barcode_qr_format_info_matches_the_published_table() {
+        // ISO/IEC 18004 Table C.1, level M (EC bits 00), masks 0–7.
+        let want = [
+            0b101010000010010,
+            0b101000100100101,
+            0b101111001111100,
+            0b101101101001011,
+            0b100010111111001,
+            0b100000011001110,
+            0b100111110010111,
+            0b100101010100000,
+        ];
+        for (mask, w) in want.iter().enumerate() {
+            assert_eq!(bch_format(mask as u32), *w, "mask {mask}");
+        }
+    }
+
+    #[test]
+    fn data_barcode_qr_version_info_matches_the_published_table() {
+        // ISO/IEC 18004 Table D.1.
+        let want = [0x07C94, 0x085BC, 0x09A99, 0x0A4D3];
+        for (i, w) in want.iter().enumerate() {
+            assert_eq!(bch_version(7 + i as u32), *w, "version {}", 7 + i);
+        }
+    }
+
+    /// Rasterise a QR geometry and decode it with `rqrr`, an independent
+    /// decoder (4 px per module).
+    fn rqrr_decode(g: &BarcodeGeometry) -> Result<String, String> {
+        const PX: usize = 4;
+        let n = g.modules_x as usize;
+        let mut dark = vec![false; n * n];
+        for r in &g.rects {
+            let (x, y) = (
+                (r.x * n as f64).round() as usize,
+                (r.y * n as f64).round() as usize,
+            );
+            dark[y * n + x] = true;
+        }
+        let mut img = rqrr::PreparedImage::prepare_from_greyscale(n * PX, n * PX, |x, y| {
+            if dark[(y / PX) * n + x / PX] {
+                0
+            } else {
+                255
+            }
+        });
+        let grids = img.detect_grids();
+        let grid = grids.first().ok_or("no QR grid found")?;
+        let (meta, content) = grid.decode().map_err(|e| e.to_string())?;
+        // rqrr reports the version it read; it must be the one the size says.
+        let version = (n - 2 * QUIET as usize - 17) / 4;
+        if meta.version.0 != version {
+            return Err(format!("read version {} for {version}", meta.version.0));
+        }
+        Ok(content)
+    }
+
+    #[test]
+    fn data_barcode_qr_every_version_and_mask_decodes() {
+        // The largest payload each version holds (so the data fill reaches the
+        // last module) and a short one, under every mask.
+        for (i, ec) in VERSION_M.iter().enumerate() {
+            let version = i + 1;
+            let count_bits = if version <= 9 { 8 } else { 16 };
+            let max = (ec.data_codewords * 8 - 4 - count_bits) / 8;
+            for len in [1, max] {
+                let payload: String = (0..len)
+                    .map(|k| (b'!' + (k * 7 % 90) as u8) as char)
+                    .collect();
+                assert_eq!(
+                    pick_version(len).unwrap().0,
+                    if len == 1 { 1 } else { version }
+                );
+                for mask in 0..8u8 {
+                    let g = encode_qr_masked(&payload, Some(mask)).unwrap();
+                    assert_eq!(
+                        rqrr_decode(&g).as_deref(),
+                        Ok(payload.as_str()),
+                        "v{version} len {len} mask {mask}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn data_barcode_qr_dark_module_is_dark() {
+        // ISO/IEC 18004 §7.9.1: the module at row 4V + 9, column 8 is always
+        // dark (DB-2 reserved it for format info and cleared it).
+        for version in 1..=10usize {
+            let mut m = Matrix::new(17 + 4 * version);
+            m.place_function_patterns(version);
+            m.apply_mask_and_format(0);
+            assert!(m.dark[m.idx(8, 4 * version + 9)], "v{version}");
+        }
     }
 
     #[test]
