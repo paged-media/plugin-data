@@ -229,6 +229,42 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
     expect((await ours(h)).map((p) => p.value)).toEqual(["x", "x", "x"]);
   });
 
+  it("previewRecord re-uses its field read only while its own write is the only change [data.bind.preview-step]", async () => {
+    h = await openRealHost();
+    const host = h.host;
+    let reads = 0;
+    const read = host.document.placeholders.bind(host.document);
+    (host.document as { placeholders: unknown }).placeholders = async () => {
+      reads += 1;
+      return read();
+    };
+    const records = ["ALPHA", "B", "GAMMA-LONG"];
+    const engine = fakeEngine({
+      resolve_lowered_at: (id: string, record: number) =>
+        id === "v_name" ? { kind: "variable", target: "anchor", text: records[record], hidden: false } : null,
+    });
+    const s = await sessionOver(h, engine);
+    s.addVariableBinding("v_name", "anchor", "q", "name");
+    await s.previewRecord("v_name", 0); // places the field
+    reads = 0;
+    // Steps with nothing else happening: one read, then the cached address.
+    for (const r of [1, 2, 1]) await s.previewRecord("v_name", r);
+    expect(reads).toBe(1);
+    expect((await ours(h)).map((p) => p.value)).toEqual(["B"]);
+
+    // A second copy of the field in the SAME story: a write to the first
+    // moves the second, so every step reads again.
+    const [only] = await ours(h);
+    await host.document.mutate({
+      op: "insertField",
+      args: { storyId: only!.storyId, offset: 0, field: { placeholder: { plugin: PLUGIN, key: "v_name", value: "B" } } },
+    });
+    reads = 0;
+    for (const r of [2, 0, 2]) await s.previewRecord("v_name", r);
+    expect(reads).toBe(3);
+    expect((await ours(h)).map((p) => p.value)).toEqual(["GAMMA-LONG", "GAMMA-LONG"]);
+  });
+
   // DEFECT (core 0.67, paged-mutate): `insertText` at a placeholder run's
   // START goes INTO that run, so the inserted text becomes part of the field.
   // `setFieldValue` then replaces the run's text with the new display and the

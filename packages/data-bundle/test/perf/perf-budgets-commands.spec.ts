@@ -267,13 +267,18 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // ── W3: preview-step 20 records ───────────────────────────────────────────
   // AS FOUND: every step re-reads ALL placeholders (the offset is valid only
   // until the next edit) and writes one setFieldValue — one undo step per step.
+  // Wave 2: the field read is re-used while the document-change count shows
+  // the preview's own write as the only change (one copy per story, so the
+  // write moved no address): one read for the 20 steps. hostCalls 40 → 21,
+  // reads and fields read 20 → 1. One write per step stays — each step is
+  // its own preview state, one undo step each.
   const W3: Measured = {
-    hostCalls: 40,
-    hostReads: 20,
+    hostCalls: 21,
+    hostReads: 1,
     mutates: 20,
     mutationOps: 20,
     undoSteps: 20,
-    placeholdersRead: 20,
+    placeholdersRead: 1,
     wasmCalls: 20,
     cellsIn: 0,
     resolves: 20,

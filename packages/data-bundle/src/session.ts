@@ -809,6 +809,18 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     }
   }
 
+  /** Document changes seen so far (every applied mutate, undo and redo).
+   *  A field address read at one count is valid only at that count. */
+  let docChanges = 0;
+  /** The preview's last field read, reusable while nothing but its own write
+   *  changed the document (see `previewRecord`). */
+  let previewFields: {
+    binding: string;
+    changes: number;
+    doc: number;
+    fields: PlaceholderField[];
+  } | null = null;
+
   /** Set while `lowerAll` runs: what its lowerings share (the active page). */
   let lowerCtx: LowerContext | undefined;
 
@@ -1343,6 +1355,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   if (typeof host.document?.onDidChange === "function") {
     hostSubs.push(
       host.document.onDidChange((ev) => {
+        docChanges += 1;
         // Undo/redo can take a placed field away or bring it back; a stale
         // "placed" would make Lower skip placing it again.
         if (ev.kind === "undoApplied" || ev.kind === "redoApplied") void reconcilePlaced();
@@ -2100,18 +2113,37 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         if (lowered?.kind === "variable") {
           const v = lowered as { hidden?: boolean; text?: string };
           const value = v.hidden ? null : (v.text ?? null);
-          // Re-read the field addresses on every step: an offset is valid only
-          // until the next edit, so a cached one writes into whatever now sits
-          // there (measured: another plugin's field, test/field-offsets-real-core).
-          const fields = await readOwnFields("preview", bindingId);
+          // An offset is valid only until the next edit, so a cached one writes
+          // into whatever now sits there (measured: another plugin's field,
+          // test/field-offsets-real-core). The addresses are re-read unless
+          // the ONLY change since the last read is this preview's own write:
+          // the document-change count moved by exactly that one mutate, and
+          // each story holds one copy of the field, so the write moved no
+          // address the next step uses.
+          const reuse =
+            previewFields?.binding === bindingId &&
+            previewFields.changes === docChanges &&
+            previewFields.doc === docEpoch;
+          const fields = reuse ? previewFields!.fields : await readOwnFields("preview", bindingId);
+          previewFields = null;
           if (fields === null) return;
           if (fields.length > 0) {
-            await writeFields(
+            const stale = fields.filter((f) => f.value !== value);
+            const before = docChanges;
+            const written = await writeFields(
               "preview",
-              fields
-                .filter((f) => f.value !== value)
-                .map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
+              stale.map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
             );
+            const oneCopyPerStory = new Set(fields.map((f) => f.storyId)).size === fields.length;
+            const onlyOurWrite = stale.length === 0 || (written === stale.length && docChanges === before + 1);
+            if (oneCopyPerStory && onlyOurWrite) {
+              previewFields = {
+                binding: bindingId,
+                changes: docChanges,
+                doc: docEpoch,
+                fields: fields.map((f) => ({ ...f, value })),
+              };
+            }
           } else if (!placedVariables.has(bindingId)) {
             // Not in the document yet: place it once (the normal lower lane).
             const placed = await commitLoweredVariable(host, lowered as never, bindingId);
