@@ -67,7 +67,16 @@ import {
   type PersistedSession,
   type PersistedTargets,
 } from "./persist";
-import type { LowerStamp } from "./lower";
+import type { LowerStamp, LoweredTableAt } from "./lower";
+import { commitRecordFlow } from "./flow-writer";
+import {
+  mergeRecords as writeMerge,
+  readMergeTemplate,
+  type MergeResult,
+  type MergeTemplate,
+  type RecordsPerPage,
+} from "./merge";
+import { documentElements, planRelower, type RelowerTarget } from "./relower";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
 import {
   formatOfFile,
@@ -421,6 +430,24 @@ export interface RecordFlowPreview {
   blocks: { kind: "header" | "record" | "footer"; text: string }[];
 }
 
+/** What `mergeRecords` takes (see `merge.ts`). */
+export interface SessionMergeOptions {
+  query: string;
+  recordsPerPage?: RecordsPerPage;
+  removeBlankLines?: boolean;
+  /** `keep` (default): the template page stays, the output goes on new pages
+   *  after it. `consume`: the template page holds the first output page. */
+  template?: "consume" | "keep";
+  /** The template page (default: the active page). */
+  pageId?: string;
+  /** Image placeholders: rectangle id → field (`photo` or `@photo`). */
+  imageFields?: Record<string, string>;
+  /** Where relative image references resolve. */
+  imageBase?: string;
+  /** Labels the output so a re-merge replaces it (default `merge-<query>`). */
+  mergeId?: string;
+}
+
 /** The session API the panels + commands drive. */
 export interface DataSourceSession extends ReviewSession {
   getState(): SessionState;
@@ -736,6 +763,10 @@ export interface DataSourceSession extends ReviewSession {
    *  is a separate step). Needs the query's data (`refreshData`). Returns null
    *  and reports a diagnostic when it cannot resolve. */
   previewRecordFlow(id: string): Promise<RecordFlowPreview | null>;
+  /** Wave 5 — InDesign-style Data Merge of a query's records into the
+   *  document through a record template read off a page (`merge.ts`). A
+   *  second merge with the same id replaces the first run's output. */
+  mergeRecords(options: SessionMergeOptions): Promise<MergeResult>;
   /** Pin a binding (a refresh leaves its content alone) or link it again.
    *  Saved with the session. */
   setPinned(id: string, pinned: boolean): void;
@@ -815,6 +846,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   const pendingCsv = new Map<string, string>();
   // Where table / record-flow bindings were last lowered (checked on restore).
   const loweredInto = new Map<string, ElementId>();
+  // Update in place (Wave 5): where each table binding's table is, and every
+  // module each barcode binding drew last, so a re-lower or a preview step
+  // replaces them instead of adding a duplicate.
+  const tableAt = new Map<string, LoweredTableAt>();
+  const barcodeMinted = new Map<string, ElementId[]>();
+  // The template each merge read last: a consumed template is gone from its
+  // page, and a re-merge reuses it.
+  const mergeTemplates = new Map<string, MergeTemplate>();
   // Definitions made before the engine booted, replayed (in order) on boot.
   const pendingDefs: { binding?: string; run: (e: DataEngineLike) => void }[] = [];
   // A saved engine recipe to load as the engine boots (set by restore).
@@ -940,6 +979,33 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
   /** Set while `lowerAll` runs: what its lowerings share (the active page). */
   let lowerCtx: LowerContext | undefined;
+
+  /** What a re-lower of `target` must clear (relower.ts): one tree read (and
+   *  a pages read for a flow or a merge). A host without the tree read clears only what this
+   *  session remembers minting. */
+  async function relowerPlan(target: RelowerTarget, minted?: readonly ElementId[]) {
+    let elements: ReturnType<typeof documentElements> = [];
+    let pages: string[] = [];
+    try {
+      elements = documentElements((await host.document.tree()) as never);
+      // Only a flow or a merge adds pages that a re-lower may remove.
+      if (target.kind === "merge" || target.kind === "recordFlow") {
+        pages = (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
+      }
+    } catch {
+      // no tree read: fall back to the remembered ids below
+      elements = (minted ?? []).map((element) => ({ element, page: -1, data: null }));
+    }
+    return planRelower(elements, target, { pages: pages as never, minted });
+  }
+
+  /** The page a lowering starts on: the active page, else the first. */
+  async function startPage(): Promise<string | null> {
+    const meta = await host.document.meta();
+    if (meta.activePage) return meta.activePage as string;
+    const pages = await host.document.collection<{ selfId: string }>("pages");
+    return pages[0]?.selfId ?? null;
+  }
 
   /** The recipe `buildPersisted` serialised last (reused by `stampFor`). */
   let lastPayload: unknown;
@@ -2431,16 +2497,24 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         const e = await ensureEngine();
         // A rule is not a resolvable lowering — it applies a style decision over
         // a scope (D-13); route it through applyRule, not resolve_lowered.
-        // A record flow is defined and previewed; writing it into frames is
-        // the merge step, which this session does not have yet. Say so rather
-        // than failing the whole Lower on it.
         if (bindingKinds.get(id) === "recordFlow") {
-          report({
-            level: "info",
-            source: "flow",
-            binding: id,
-            message: "a record flow is previewed only — placing it into frames is not built yet",
-          });
+          // Wave 5: the paginated flow becomes frames, one per page from the
+          // active page on; a re-lower replaces the previous frames and the
+          // pages it added (relower.ts) in the same first batch.
+          const page = await startPage();
+          if (!page) {
+            report({ level: "error", source: "flow", binding: id, message: "no page to lower the record flow onto" });
+            return;
+          }
+          const plan = await relowerPlan({ kind: "recordFlow", binding: id });
+          const res = await commitRecordFlow(host, e, id, page as never, plan.remove);
+          for (const d of res.diagnostics) report({ level: res.ok ? "warn" : "error", source: "flow", binding: id, message: d });
+          if (res.ok && res.frames[0]) {
+            loweredInto.set(id, res.frames[0]);
+            markDirty();
+          }
+          state.status = res.ok ? "ready" : "error";
+          state.message = `Record flow "${id}": ${res.frames.length} frame(s) on ${res.pages.length} page(s).`;
           return;
         }
         if (bindingKinds.get(id) === "rule") {
@@ -2469,14 +2543,31 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
             }
           }
           const bc = e.lower_barcode(id, boxW, boxH) as LoweredBarcode | null;
-          if (bc) await commitLoweredBarcode(host, bc, tgt?.elementId ?? null, await stampFor(id));
+          if (bc) {
+            const plan = await relowerPlan({ kind: "barcode", binding: id }, barcodeMinted.get(id));
+            await commitLoweredBarcode(host, bc, tgt?.elementId ?? null, await stampFor(id), {
+              clear: plan.remove,
+              onMinted: (ids) => barcodeMinted.set(id, ids),
+            });
+          }
           state.status = "ready";
           state.message = `Resolved + lowered barcode "${id}".`;
           return;
         }
         const lowered = e.resolve_lowered(id) as { kind?: string } | null;
         if (lowered?.kind === "table") {
-          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id), lowerCtx);
+          const plan = await relowerPlan({ kind: "table", binding: id });
+          const known = tableAt.get(id);
+          const inPlace =
+            known && plan.reuse && plan.reuse.id === known.frame.id ? known : undefined;
+          // A labelled frame whose table we cannot address goes, too.
+          const clear = [...plan.remove];
+          if (plan.reuse && !inPlace) clear.push({ op: "deleteFrame", args: { frameId: plan.reuse.id as string } });
+          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id), lowerCtx, {
+            inPlace,
+            clear,
+            onTable: (at) => tableAt.set(id, at),
+          });
           if (frameId) {
             loweredInto.set(id, { kind: "textFrame", id: frameId } as ElementId);
             markDirty();
@@ -2622,7 +2713,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
               ? lowerAt.call(e, bindingId, record, boxW, boxH)
               : e.lower_barcode(bindingId, boxW, boxH)
           ) as LoweredBarcode | null;
-          if (bc) await commitLoweredBarcode(host, bc, tgt?.elementId ?? null);
+          if (bc) {
+            // Update in place: the previous step's symbol goes in the same batch.
+            const plan = await relowerPlan({ kind: "barcode", binding: bindingId }, barcodeMinted.get(bindingId));
+            await commitLoweredBarcode(host, bc, tgt?.elementId ?? null, await stampFor(bindingId), {
+              clear: plan.remove,
+              onMinted: (ids) => barcodeMinted.set(bindingId, ids),
+            });
+          }
           state.status = "ready";
           state.message = `Preview: barcode "${bindingId}" against record ${record}.`;
           return;
@@ -3050,6 +3148,66 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       bindingKinds.set(id, "recordFlow");
       if (!bindingIds.includes(id)) bindingIds.push(id);
       markDirty();
+    },
+
+    async mergeRecords(options) {
+      const fail = (message: string): MergeResult => {
+        report({ level: "error", source: "flow", message: `merge: ${message}` });
+        state.status = "error";
+        state.message = `Merge failed: ${message}`;
+        emit();
+        return { ok: false, plan: null, pages: [], records: [], overset: [], mutateCalls: 0, diagnostics: [message] };
+      };
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch (err) {
+        return fail(`engine unavailable: ${errText(err)}`);
+      }
+      if (!e.plan_merge || !e.merge_words || !e.merge_overset) {
+        return fail("this engine build has no merge lane — rebuild the data-js wasm");
+      }
+      if (!queries.has(options.query)) return fail(`no query "${options.query}"`);
+      // The merge reads the query's result as delivered: run it if it has none.
+      if ((e.query_record_count?.(options.query) ?? 0) === 0) await this.refreshData();
+
+      const mergeId = options.mergeId ?? `merge-${options.query}`;
+      const mode = options.template ?? "keep";
+      const pageId = options.pageId ?? (await startPage());
+      if (!pageId) return fail("no template page");
+      // A consumed template is gone from its page; a re-merge reuses the one
+      // read last time.
+      let template = mode === "consume" ? (mergeTemplates.get(mergeId) ?? null) : null;
+      const templatePresent = template === null;
+      if (!template) {
+        const read = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields });
+        if (!read.template) return fail(read.diagnostics.join("; ") || "no template on the page");
+        template = read.template;
+      }
+      // Replace the previous run of this merge in the first batch.
+      const plan = await relowerPlan({ kind: "merge", merge: mergeId });
+      const engineForMerge = e as Required<Pick<DataEngineLike, "plan_merge" | "merge_words" | "merge_overset">>;
+      const result = await writeMerge(host, engineForMerge, template, {
+        query: options.query,
+        recordsPerPage: options.recordsPerPage ?? { mode: "single" },
+        removeBlankLines: options.removeBlankLines ?? false,
+        template: mode,
+        imageBase: options.imageBase,
+        mergeId,
+        clear: plan.remove,
+        templatePresent,
+      });
+      if (result.ok) mergeTemplates.set(mergeId, template);
+      for (const d of result.diagnostics) {
+        report({ level: result.ok ? "warn" : "error", source: "flow", message: d });
+      }
+      state.status = result.ok ? "ready" : "error";
+      state.message = result.ok
+        ? `Merged ${result.records.length} record(s) onto ${result.pages.length} page(s)` +
+          (result.overset.length ? `, ${result.overset.length} overset.` : ".")
+        : "Merge failed.";
+      emit();
+      return result;
     },
 
     async previewRecordFlow(id) {

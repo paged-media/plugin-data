@@ -39,6 +39,7 @@ const ENTRIES: [path: string, suffix: string, group: string][] = [
   ["Data/Query…", "editQuery", "panel"],
   ["Data/Refresh from sources", "resolveBindings", "resolve"],
   ["Data/Place bindings on the page", "lowerBinding", "resolve"],
+  ["Data/Merge records into the document", "mergeRecords", "resolve"],
   ["Data/Capture current values as a data set", "captureDataSet", "dataset"],
   ["Data/Apply a data set…", "applyDataSet", "dataset"],
 ];

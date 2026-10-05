@@ -244,19 +244,34 @@ describe("data_bind_preview_step session lane (§9)", () => {
     expect(resolved).toBe(0);
   });
 
-  // DEFECT (deferred, plugin-only gap; plan item "re-lowering duplicates"):
-  // every barcode preview step draws a NEW symbol through insertPath and never
-  // removes the previous one, so stepping N records leaves N overlapping
-  // symbols in the frame. Removing the old one needs the minted ids of the
-  // last draw (MutationOutcome reports only the final createdId in the pinned
-  // plugin-api 0.2.33). Flip to `it` when the step replaces its symbol.
-  it.fails("DEFECT a barcode preview step replaces the previous symbol instead of adding one [data.bind.preview-step]", async () => {
+  // Update in place (Wave 5; was a pinned DEFECT): a barcode preview step
+  // removes the previous symbol's modules in the batch that draws the new
+  // one, so stepping N records leaves ONE symbol, at one undo step per step.
+  it("a barcode preview step replaces the previous symbol instead of adding one [data.bind.preview-step]", async () => {
     const fake = fakeHost();
+    // The host reports every module a drawing batch minted.
+    let next = 0;
+    const live = new Set<string>();
+    const mutate = fake.host.document.mutate;
+    (fake.host.document as { mutate: unknown }).mutate = async (m: Mutation) => {
+      const out = (await mutate(m)) as Record<string, unknown>;
+      if (m.op !== "batch") return out;
+      const ops = (m.args as { ops: Mutation[] }).ops;
+      for (const o of ops) if (o.op === "deleteFrame") live.delete(o.args.frameId);
+      const minted = ops
+        .filter((o) => o.op === "insertPath")
+        .map(() => ({ handle: null, element: { kind: "polygon", id: `mod${next++}` }, storyId: null }));
+      for (const x of minted) live.add(x.element.id);
+      return { ...out, minted };
+    };
     const engine = fakeEngine({
       lower_barcode_at: () => ({
         target: "rect-1",
         symbology: "code128",
-        modules: [{ xPt: 0, yPt: 0, wPt: 1, hPt: 10 }],
+        modules: [
+          { xPt: 0, yPt: 0, wPt: 1, hPt: 10 },
+          { xPt: 2, yPt: 0, wPt: 1, hPt: 10 },
+        ],
         text: "",
       }),
     } as Partial<DataEngineLike>);
@@ -264,8 +279,13 @@ describe("data_bind_preview_step session lane (§9)", () => {
     s.addBarcodeBinding("bc1", "rect-1", "q_all", "code128", "sku", { missing: "skip" });
     await s.previewRecord("bc1", 0);
     await s.previewRecord("bc1", 1);
-    const drawn = fake.mutations.filter((m) => m.op === "batch").length;
-    const removed = fake.mutations.filter((m) => m.op === "deleteFrame").length;
-    expect(drawn - removed).toBe(1);
+    await s.previewRecord("bc1", 2);
+    const batches = fake.mutations.filter((m) => m.op === "batch");
+    expect(batches.length).toBe(3);
+    // The second step removed exactly the first step's two modules.
+    const removed = (batches[1].args as { ops: Mutation[] }).ops.filter((o) => o.op === "deleteFrame");
+    expect(removed.map((o) => (o.args as { frameId: string }).frameId).sort()).toEqual(["mod0", "mod1"]);
+    // One symbol's worth of modules is left.
+    expect([...live].sort()).toEqual(["mod4", "mod5"]);
   });
 });

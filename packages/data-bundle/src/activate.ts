@@ -172,6 +172,22 @@ export function activate(host: BundleHost): BundleHandle {
     handler: () => session.lowerAll(),
   });
   host.contribute.command({
+    id: "media.paged.data.command.mergeRecords",
+    title: "Merge records into the document (Data Merge)",
+    category: "Data",
+    // Payload: SessionMergeOptions; without one, the first query merges
+    // Single Record through the <<field>> frames on the active page.
+    handler: (_paged, payload) => {
+      const p = (payload ?? {}) as Partial<import("./session").SessionMergeOptions>;
+      const query = p.query ?? session.getState().queries[0];
+      if (!query) {
+        host.log.warn("mergeRecords: no query to merge");
+        return null;
+      }
+      return session.mergeRecords({ ...p, query });
+    },
+  });
+  host.contribute.command({
     id: "media.paged.data.command.openDataset",
     title: "Open the dataset catalog & build panel",
     category: "Data",

@@ -214,6 +214,41 @@ export function makeBindingsPanel(
     const [bindField, setBindField] = useState("");
     const [bindSeq, setBindSeq] = useState(1);
     const [bindMsg, setBindMsg] = useState<string | null>(null);
+    // Wave 5 — Data Merge options.
+    const [mergeQuery, setMergeQuery] = useState("");
+    const [mergeMode, setMergeMode] = useState<"single" | "multiple">("single");
+    const [mergeArrange, setMergeArrange] = useState<"rows" | "columns">("rows");
+    const [mergeRowSpacing, setMergeRowSpacing] = useState(12);
+    const [mergeColSpacing, setMergeColSpacing] = useState(12);
+    const [mergeKeep, setMergeKeep] = useState(true);
+    const [mergeBlank, setMergeBlank] = useState(true);
+    const [mergeMsg, setMergeMsg] = useState<string | null>(null);
+
+    /** Merge the chosen query's records through the template on the active
+     *  page (every text frame with a <<field>>), InDesign Data Merge style. */
+    async function runMerge(): Promise<void> {
+      const query = mergeQuery || session.getState().queries[0];
+      if (!query) {
+        setMergeMsg("define a query first");
+        return;
+      }
+      const r = await session.mergeRecords({
+        query,
+        recordsPerPage:
+          mergeMode === "single"
+            ? { mode: "single" }
+            : { mode: "multiple", arrange: mergeArrange, rowSpacingPt: mergeRowSpacing, columnSpacingPt: mergeColSpacing },
+        removeBlankLines: mergeBlank,
+        template: mergeKeep ? "keep" : "consume",
+      });
+      setMergeMsg(
+        r.ok
+          ? `merged ${r.records.length} record(s) onto ${r.pages.length} page(s)` +
+              (r.overset.length ? ` — ${r.overset.length} overset` : "")
+          : `merge failed: ${r.diagnostics.join("; ")}`,
+      );
+      refresh();
+    }
     // §9 record-preview stepper: walk the demo query's records before a batch run.
     const [previewIndex, setPreviewIndex] = useState(0);
     const [recordTotal, setRecordTotal] = useState(0);
@@ -763,6 +798,59 @@ export function makeBindingsPanel(
             ) : null}
           </p>
         )}
+        <div style={row} data-data-merge>
+          <strong>Data Merge</strong>
+          <select data-data-merge-query value={mergeQuery} onChange={(e) => setMergeQuery(e.target.value)}>
+            <option value="">(first query)</option>
+            {session.getState().queries.map((q) => (
+              <option key={q} value={q}>
+                {q}
+              </option>
+            ))}
+          </select>
+          <select
+            data-data-merge-mode
+            value={mergeMode}
+            onChange={(e) => setMergeMode(e.target.value as "single" | "multiple")}
+          >
+            <option value="single">Single record per page</option>
+            <option value="multiple">Multiple records per page</option>
+          </select>
+          {mergeMode === "multiple" && (
+            <>
+              <select value={mergeArrange} onChange={(e) => setMergeArrange(e.target.value as "rows" | "columns")}>
+                <option value="rows">Rows first</option>
+                <option value="columns">Columns first</option>
+              </select>
+              <label>
+                row spacing{" "}
+                <input type="number" value={mergeRowSpacing} onChange={(e) => setMergeRowSpacing(Number(e.target.value))} style={{ width: 48 }} />
+              </label>
+              <label>
+                column spacing{" "}
+                <input type="number" value={mergeColSpacing} onChange={(e) => setMergeColSpacing(Number(e.target.value))} style={{ width: 48 }} />
+              </label>
+            </>
+          )}
+          <label>
+            <input type="checkbox" checked={mergeBlank} onChange={(e) => setMergeBlank(e.target.checked)} /> remove
+            blank lines
+          </label>
+          <label title="Keep the template page and put the merged records on new pages after it">
+            <input type="checkbox" checked={mergeKeep} onChange={(e) => setMergeKeep(e.target.checked)} /> keep template
+          </label>
+          <button
+            type="button"
+            data-data-merge-run
+            title="Merge every record through the <<field>> frames on this page (one document; a second merge replaces the first)"
+            onClick={() => {
+              void runMerge();
+            }}
+          >
+            Merge records
+          </button>
+        </div>
+        {mergeMsg && <p style={note} data-data-merge-msg>{mergeMsg}</p>}
         <div style={row}>
           <button type="button" onClick={wireDemo} title="The one-click table+variable demo wiring">
             Wire demo binding

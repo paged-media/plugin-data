@@ -84,6 +84,14 @@ function mintedFrame(
   );
 }
 
+/** The table id of a minted table element (`{ story_id, table_id }`). */
+function tableIdOf(created: ElementId): string {
+  const id = created.id as unknown;
+  if (typeof id === "string") return id;
+  if (id && typeof id === "object" && "table_id" in id) return String((id as { table_id: unknown }).table_id);
+  return "";
+}
+
 /** The active page id (meta first, else the first page). */
 async function activePageId(host: BundleHost): Promise<PageId | null> {
   const meta = await host.document.meta();
@@ -108,6 +116,23 @@ export interface LowerStamp {
   session: string | null;
 }
 
+/** Where a table binding's previous lowering lives, for an update in place. */
+export interface LoweredTableAt {
+  frame: ElementId;
+  storyId: string;
+  tableId: string;
+}
+
+/** How a re-lower replaces what an earlier lowering made (`relower.ts`). */
+export interface TableReplace {
+  /** Swap the table inside this frame and story. */
+  inPlace?: LoweredTableAt;
+  /** Removals (duplicates older lowerings left) that ride the same batch. */
+  clear?: Mutation[];
+  /** Told where the table now is, for the next update in place. */
+  onTable?: (at: LoweredTableAt) => void;
+}
+
 /** Commit a lowered dynamic table to a fresh page frame as ONE batch — one
  *  rebuild and one undo step: the frame, the native table in its story, every
  *  cell, and the binding label. The batch names what it mints (C-15
@@ -124,7 +149,32 @@ export async function commitLoweredTable(
   table: LoweredTable,
   stamp?: LowerStamp,
   ctx?: LowerContext,
+  replace?: TableReplace,
 ): Promise<string | null> {
+  const envelopeEarly = makeEnvelope({ kind: "table", region: table.region, ...(stamp ?? {}) });
+  // UPDATE IN PLACE (Wave 5): the table this binding lowered before is
+  // swapped inside its own frame and story — deleteTable, insertTable, cells,
+  // label — as one batch, so the user's frame (moved, resized) stays and no
+  // duplicate appears. Duplicates older lowerings left go in the same batch.
+  if (replace?.inPlace) {
+    const { frame, storyId, tableId } = replace.inPlace;
+    const ops: Mutation[] = [
+      ...(replace.clear ?? []),
+      { op: "deleteTable", args: { storyId, tableId } },
+      tableInsertMutation(storyId, tableInsertSpec(table)),
+      { op: "bindCreated", args: { handle: "table" } } as Mutation,
+      ...tableCellInserts(table, storyId, "$h:table"),
+      bindingMetadata(frame, envelopeEarly),
+    ];
+    const outcome = await host.document.mutate({ op: "batch", args: { ops } });
+    if (outcome.applied) {
+      const t = (outcome.minted ?? []).find((m) => m.element.kind === "table")?.element;
+      const id = t ? tableIdOf(t) : "";
+      if (id) replace.onTable?.({ frame, storyId, tableId: id });
+      return frame.id as string;
+    }
+    host.log.warn(`lower: replacing the table in place was refused (${String(errorText(outcome.error))}) — placing it afresh`);
+  }
   const pageId = await pageFor(host, ctx);
   if (!pageId) {
     host.log.warn("lower: no page to place the data table into");
@@ -150,16 +200,19 @@ export async function commitLoweredTable(
     ...tableCellInserts(table, FRAME, "$h:table"),
     label,
   ];
+  if (replace?.clear?.length) native.unshift(...replace.clear);
+  const tableChild = TABLE_CHILD + (replace?.clear?.length ?? 0);
   let outcome = await host.document.mutate({ op: "batch", args: { ops: native } });
   if (!outcome.applied) {
     const child = failedBatchChild(outcome.error);
-    if (child !== TABLE_CHILD) {
+    if (child !== tableChild) {
       host.log.warn(`lower: the table batch was rejected (${String(errorText(outcome.error))})`);
       return null;
     }
     // FALLBACK — no native table: the §2.2 degradation (D-02 fallback).
     host.log.info("lower: insertTable unsupported — degrading to tab-text + drawn rules (D-02)");
     const degraded: Mutation[] = [
+      ...(replace?.clear ?? []),
       ...head,
       ...table.rules.map(
         (r): Mutation => ({
@@ -182,12 +235,16 @@ export async function commitLoweredTable(
       return null;
     }
   }
-  const frame = mintedFrame(outcome, "frame")?.element ?? null;
+  const minted = mintedFrame(outcome, "frame");
+  const frame = minted?.element ?? null;
   const frameId = frame ? frameIdOf(frame) : null;
   if (!frame || !frameId) {
     host.log.warn("lower: the batch applied but did not report the frame it minted");
     return null;
   }
+  const t = (outcome.minted ?? []).find((m) => m.element.kind === "table")?.element;
+  const tableId = t ? tableIdOf(t) : "";
+  if (tableId && minted?.storyId) replace?.onTable?.({ frame, storyId: minted.storyId, tableId });
   await host.selection.set([frame]);
   return frameId;
 }
@@ -560,8 +617,14 @@ export async function commitLoweredBarcode(
   barcode: LoweredBarcode,
   elementId?: string | null,
   stamp?: LowerStamp,
+  replace?: BarcodeReplace,
 ): Promise<number> {
   if (barcode.modules.length === 0) {
+    // An empty value still takes the old symbol away.
+    if (replace?.clear?.length) {
+      const o = await host.document.mutate({ op: "batch", args: { ops: replace.clear } });
+      if (o.applied) replace.onMinted?.([]);
+    }
     host.log.info(
       `barcode "${barcode.target}" resolved to no value (missing policy) — nothing drawn`,
     );
@@ -594,7 +657,9 @@ export async function commitLoweredBarcode(
     target: barcode.target,
     symbology: barcode.symbology,
   });
-  const ops = barcodeToMutations(barcode, placement, envelope);
+  // UPDATE IN PLACE (Wave 5): the previous symbol's modules are removed in
+  // the same batch the new one is drawn in — one undo step, never a pile.
+  const ops = [...(replace?.clear ?? []), ...barcodeToMutations(barcode, placement, envelope)];
   if (ops.length === 0) return 0;
 
   const outcome = await host.document.mutate({ op: "batch", args: { ops } });
@@ -602,12 +667,21 @@ export async function commitLoweredBarcode(
     host.log.warn(`barcode "${barcode.target}": insertPath batch rejected`);
     return 0;
   }
+  replace?.onMinted?.((outcome.minted ?? []).map((m) => m.element));
   host.log.info(
     `barcode "${barcode.target}" (${barcode.symbology}) drawn as ${barcode.modules.length} ` +
       "vector modules" +
       (barcode.text ? ` (HRI "${barcode.text}")` : ""),
   );
   return barcode.modules.length;
+}
+
+/** How a barcode re-lower replaces its previous symbol (`relower.ts`). */
+export interface BarcodeReplace {
+  /** Removes the previous symbol's modules; rides the drawing batch. */
+  clear?: Mutation[];
+  /** Told every element the new symbol minted (all its modules). */
+  onMinted?: (ids: ElementId[]) => void;
 }
 
 /** Apply a data-driven formatting rule to the document (D-13, spec §9.5). The

@@ -50,9 +50,11 @@ The ENGINE is far ahead of what a user can reach from the panels:
 - PERSISTENCE + REACHABILITY (wave 4, 2026-10-05): the session (sources,
   queries, bindings, data sets, imported CSV) is saved as the `session`
   container part and restored on open (`src/persist.ts`, `load_payload`); the
-  Bindings panel defines every binding kind, over `SELECT *`. Still open: record
-  flow defines and previews but has no writer, so it never becomes document
-  content. SOURCES + QUERY (wave 6): local import of CSV/TSV/JSON/Parquet/XLSX
+  Bindings panel defines every binding kind, over `SELECT *`. MERGE (wave 5):
+  InDesign-style Data Merge (`data-lower/src/merge.rs` planner + `src/merge.ts`
+  writer) matches all 8 InDesign recordings on real core; record flow writes
+  frames (`src/flow-writer.ts`); tables/barcodes re-lower in place
+  (`src/relower.ts`). SOURCES + QUERY (wave 6): local import of CSV/TSV/JSON/Parquet/XLSX
   (XLSX via `data-xlsx`/calamine — DuckDB-WASM 1.29.0 has no offline reader),
   saved with the document; a Data query panel (SQL + builders + preview);
   every query passes a DuckDB-parser guard (`src/query/sql.ts`: one SELECT over
@@ -60,7 +62,8 @@ The ENGINE is far ahead of what a user can reach from the panels:
   Remote sources fetch only consented origins AND only origins the editor
   build lists (editor ADR 218, `PAGED_DATA_ORIGINS`; RFI D-03 residual).
   Still not built: SQLite/DB-attach execution (sqlite_scanner cannot open
-  DuckDB-WASM's registered files), worker-hosted DuckDB, merge to a document.
+  DuckDB-WASM's registered files), worker-hosted DuckDB, merge to a NEW
+  document (no plugin door creates one; merges go into the current document).
 
 ## Project State & Feature Matrix (cockpit)
 
@@ -152,8 +155,7 @@ Rules for every code change in this repo:
   factories closing over `BundleHost`; styling = the token layer (`--pg-*`,
   `--status-*`, `--font-mono`, `--space-*`, `--radius-*`).
 - **Reserved seams stay honest.** What the engine can do but a user cannot
-  reach (record flow into the document, merge to a document,
-  DB-attach execution, worker-hosted DuckDB) is said so in the manifest,
+  reach (merge to a new document, DB-attach execution, worker-hosted DuckDB) is said so in the manifest,
   the UI, `docs/status.md` and the RFI. Never fake it, and never leave a
   "not yet" message standing after the door exists.
 - **CLEAN-ROOM (§3).** `references/` (any reference engine, IF ever mounted) is

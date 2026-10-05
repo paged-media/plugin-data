@@ -103,6 +103,14 @@ export interface DataEngineLike {
   /** §9.9: the serialized byte size of the variable half of the payload — the
    *  D-08 budget check. Optional (see `variables`). */
   data_set_payload_bytes?(): number;
+  /** Wave 5 Data Merge: plan a merge of a query's records (in delivered
+   *  order) through a record template (`MergeSpec` → `MergePlan`). Optional:
+   *  absent on a wasm artifact built before the merge lane. */
+  plan_merge?(query: string, spec: unknown): unknown;
+  /** Wave 5: the distinct words of a merge plan's texts per template frame. */
+  merge_words?(plan: unknown, frames: number): unknown;
+  /** Wave 5: per record, per frame, is the merged text overset (DM-7)? */
+  merge_overset?(plan: unknown, metrics: unknown): unknown;
   publish_provider(query: string, providerId: string, category: string): unknown;
   governed_catalog(query: string, metadata: unknown): unknown;
   plan_batch(query: string, mode: unknown): unknown;

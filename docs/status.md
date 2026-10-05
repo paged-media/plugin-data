@@ -107,10 +107,14 @@ of work, with file and line references, is
   extensions and the editor's importer registry gives a contested extension to the first
   bundle that registers it; paged.data loads first, so claiming them would take the import
   away from the spreadsheet plugin. They are imported from Data sources ▸ Import file….
-- **Tables and barcodes are written again on every lower** and on every preview step.
-  Nothing removes or updates the earlier frame or paths. A table goes into a new frame at a
-  fixed inset on the active page, with column widths estimated from character counts. The
-  bundle sets no paint on barcode paths; they take the document's defaults for new objects.
+- **Tables and barcodes are updated in place** (Wave 5, `src/relower.ts`). A re-lower swaps a
+  table inside its own frame and story (deleteTable, insertTable, cells, label: one batch); a
+  barcode re-lower or preview step removes the previous symbol's modules in the batch that
+  draws the new one. The table's address and the modules come from what the session saw
+  minted; after a reopen only the labels are known, so a table frame is replaced rather than
+  reused and only a barcode's labelled last module is found. A new table still goes into a
+  new frame at a fixed inset on the active page, with column widths estimated from character
+  counts.
 - **Sync review limits.** Accepting the source of a table only re-links it: a table is
   written again as a whole when lowered ([ADR 551](adr/551-compiled-to-native-content.md)),
   so the panel says to lower it. Nothing marks a field `Overridden` when a user types into
@@ -119,11 +123,28 @@ of work, with file and line references, is
   reopened document starts with every row new. Which bindings a change reaches is read
   from the fields their expressions name; a per-record binding is reported whenever rows
   are added or removed, because the record it shows can move.
-- **Record flow stops at a data structure.** The panel defines a record flow and previews
-  its records; the paginator returns frames and blocks, and no code writes them to the
-  document, and no page or frame is created on overflow. "Lower to document" reports a
-  record flow as preview-only. A record's height is its field count times a line height,
-  not a measured layout ([ADR 554](adr/554-record-flow-pagination.md)).
+- **Record flow writes frames** (Wave 5, `src/flow-writer.ts`). Lowering a record flow
+  places one text frame per paginated frame in the active page's margin box, adding pages
+  after it as the flow needs them. The frames are not threaded, so the paginator's breaks
+  hold. A re-lower replaces the frames and the pages it added. A record's height is still its
+  field count times a line height, not a measured layout
+  ([ADR 554](adr/554-record-flow-pagination.md)).
+- **Data Merge** (Wave 5, `src/merge.ts`; `docs/design/oracles.md` §2). The merge reads the
+  `<<field>>` text frames (and the chosen image rectangles) of a page and merges every record,
+  Single or Multiple Records, matching InDesign on all 8 recorded fixtures. The limits:
+  - It merges into the current document, keeping the template page or consuming it. No
+    plugin door creates a second document, so there is no "merge to a new document", and
+    `runRecordFlowBatch` returns paginated units, not documents.
+  - Merged frames are minted fresh: core refuses to copy a frame whose story holds a
+    hyperlink (every Data Merge placeholder is one), and a duplicated page shares its frames'
+    stories. Story-level formatting is copied; formatting that varies inside the template
+    story is not.
+  - A merge that needs new pages takes two undo steps (pages, then content), because a page
+    minted in a batch cannot be named. A merge that fits the template page takes one.
+  - Added pages have zero margins (insertPage and duplicatePage do not carry them).
+  - Core's IDML import misreads a template whose lines are bare placeholders: the paragraph
+    mark lands two characters into the next placeholder (pinned in
+    `test/merge-real-core.spec.ts`).
 - **A table lower is four undo steps** (frame, table, cell fill, label), measured by
   `test/persist-real-core.spec.ts`.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.

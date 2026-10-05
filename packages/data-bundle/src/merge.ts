@@ -423,6 +423,9 @@ export interface MergeWriteOptions {
   /** Mutations that clear a previous run of this merge (`relower.ts`); they
    *  ride the first batch, so a re-merge is no extra undo step. */
   clear?: Mutation[];
+  /** False when a consumed template's frames are already gone (a re-merge
+   *  over the stored template): nothing of the template is left to remove. */
+  templatePresent?: boolean;
 }
 
 /** The page mutations: what has to exist before anything can be placed.
@@ -430,14 +433,14 @@ export interface MergeWriteOptions {
 export function pageMutations(
   plan: Pick<MergePlan, "pageCount">,
   template: MergeTemplate,
-  opts: Pick<MergeWriteOptions, "template" | "clear">,
+  opts: Pick<MergeWriteOptions, "template" | "clear" | "templatePresent">,
 ): Mutation | null {
   const ops: Mutation[] = [];
   if (opts.template === "consume") {
     if (plan.pageCount <= 1) return null;
     ops.push(...(opts.clear ?? []));
     // Remove the merge frames first so the page copies come out empty.
-    ops.push(...removeTemplateFrames(template));
+    if (opts.templatePresent !== false) ops.push(...removeTemplateFrames(template));
     for (let i = 1; i < plan.pageCount; i++) {
       ops.push({ op: "duplicatePage", args: { page: template.pageId } });
     }
@@ -471,7 +474,7 @@ export function contentMutation(
 ): Mutation {
   const ops: Mutation[] = [];
   if (opts.template === "consume" && plan.pageCount <= 1) {
-    ops.push(...(opts.clear ?? []), ...removeTemplateFrames(template));
+    ops.push(...(opts.clear ?? []), ...(opts.templatePresent !== false ? removeTemplateFrames(template) : []));
   }
   const fit = opts.fit ?? "Proportionally";
   for (const rec of plan.records) {
@@ -596,8 +599,9 @@ export async function mergeRecords(
       ? after.slice(at, at + plan.pageCount)
       : after.slice(at + 1, at + 1 + plan.pageCount)
   ) as PageId[];
-  const added = after.filter((p) => !before.includes(p)).length;
-  if (pages.length !== plan.pageCount || added !== (wopts.template === "consume" ? plan.pageCount - 1 : plan.pageCount)) {
+  // (Not "the ids that are new": a re-merge deletes the pages it added before
+  // adding them again, and core may hand the same ids out again.)
+  if (pages.length !== plan.pageCount || (pagesOp === null && after.length !== before.length)) {
     return failed([...diagnostics, `merge: expected ${plan.pageCount} output pages, found ${pages.length}`], mutateCalls, plan);
   }
 

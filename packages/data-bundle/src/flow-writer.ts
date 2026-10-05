@@ -111,7 +111,6 @@ export async function commitRecordFlow(
   if (used === 0) return { ok: true, frames: [], pages: [], mutateCalls: 0, overflow: flow.overflow, diagnostics };
 
   let mutateCalls = 0;
-  const before = pages.map((p) => p.selfId);
   let pending = [...clear];
   if (used > 1) {
     const ops: Mutation[] = [...pending];
@@ -126,7 +125,9 @@ export async function commitRecordFlow(
   const after = (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
   const at = after.indexOf(pageId);
   const out = after.slice(at, at + used) as PageId[];
-  if (out.length !== used || out.slice(1).some((p) => before.includes(p))) {
+  // (Not "the ids are new": a re-lower deletes the pages it added before adding
+  // them again, and core may hand the same ids out again.)
+  if (out.length !== used) {
     return { ok: false, frames: [], pages: out, mutateCalls, overflow: flow.overflow, diagnostics: [...diagnostics, "flow: the added pages are not where expected"] };
   }
 

@@ -169,8 +169,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // Wave 6 (sources and query): +5 — contribute.panel (Data query),
   // supports("contribute.importer@1"), contribute.importer (JSON/Parquet),
   // contribute.command (editQuery), contribute.menu (Data ▸ Query…).
+  // Wave 5 (Data Merge): +2 — contribute.command (mergeRecords),
+  // contribute.menu (Data ▸ Merge records into the document).
   const W7: Measured = {
-    hostCalls: 31,
+    hostCalls: 33,
     hostReads: 1,
     mutates: 0,
     mutationOps: 0,

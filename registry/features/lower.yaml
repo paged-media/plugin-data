@@ -56,15 +56,29 @@
       [
         "packages/data-bundle/src/__tests__/merge.test.ts",
         "packages/data-bundle/test/merge-real-core.spec.ts",
+        "packages/data-bundle/test/perf/perf-budgets-merge.spec.ts",
       ]
 
 - id: data.lower.relower-in-place
   title: Re-lower updates in place — a table reuses its frame, barcode/flow/merge content is replaced, not duplicated
   spec: plugin-data packages/data-bundle/src/relower.ts
   status: implemented
-  provenance: ["pure planner over the scene tree's labels plus the session's minted record; the session wiring is Wave 5 phase B"]
+  provenance: ["pure planner over the scene tree's labels plus the session's minted record; the session swaps a table inside its own frame (deleteTable+insertTable, one batch), replaces a barcode's modules on re-lower and on every preview step, and replaces a record flow's or merge's frames and added pages"]
   tests:
-    vitest: ["packages/data-bundle/src/__tests__/relower.test.ts"]
+    vitest:
+      [
+        "packages/data-bundle/src/__tests__/relower.test.ts",
+        "packages/data-bundle/src/__tests__/preview.test.ts",
+        "packages/data-bundle/test/relower-real-core.spec.ts",
+      ]
+
+- id: data.lower.recordflow-writer
+  title: Record flow writes frames — one text frame per paginated frame, pages added as the flow needs (Wave 5)
+  spec: plugin-data packages/data-bundle/src/flow-writer.ts
+  status: implemented
+  provenance: ["the paginator's frames become labelled, unthreaded text frames in the start page's margin box (the engine's breaks hold); pages added after it (2 undo steps when pages are added); a re-lower replaces frames and added pages"]
+  tests:
+    vitest: ["packages/data-bundle/test/relower-real-core.spec.ts"]
 
 - id: data.lower.pagination
   title: Pagination convergence — repeated/continued headers, tall-record handling

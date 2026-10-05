@@ -129,9 +129,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   // Wave 6 (query guard): +1 DuckDB statement — the first refresh asks DuckDB's
   // parser about the query once (`json_serialize_sql`, query/sql.ts guardQuery).
+  // Wave 5 (update in place): +1 read — document.tree, to find a table this
+  // binding lowered before and swap it inside its own frame.
   const W1_LOWER: Measured = {
-    hostCalls: 7,
-    hostReads: 2,
+    hostCalls: 8,
+    hostReads: 3,
     mutates: 1,
     mutationOps: 1506,
     undoSteps: 1,
@@ -334,9 +336,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // cost is the module count (one path per dark module). 673 since the DB-2
   // fix (format information, dark module): the symbol, not the work, changed.
   // Wave 4 (persistence): +1 parts.write, +1 log; +1 payload +1 sync_report to build the session part.
+  // Wave 5 (update in place): +1 read — document.tree, to find the previous
+  // symbol's modules by their label and remove them in the same batch.
   const W4: Measured = {
-    hostCalls: 8,
-    hostReads: 4,
+    hostCalls: 9,
+    hostReads: 5,
     mutates: 1,
     mutationOps: 673,
     undoSteps: 1,

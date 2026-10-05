@@ -137,7 +137,7 @@ describe("data_plugin_bundle_activate", () => {
     expect(fake.panels[2].title).toBe("Dataset preview");
   });
 
-  it("registers the eight commands under their declared ids", () => {
+  it("registers the nine commands under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
     expect(fake.commands.map((c) => c.id)).toEqual([
@@ -145,6 +145,7 @@ describe("data_plugin_bundle_activate", () => {
       "media.paged.data.command.defineBinding",
       "media.paged.data.command.resolveBindings",
       "media.paged.data.command.lowerBinding",
+      "media.paged.data.command.mergeRecords",
       "media.paged.data.command.openDataset",
       "media.paged.data.command.captureDataSet",
       "media.paged.data.command.applyDataSet",
