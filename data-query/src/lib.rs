@@ -89,10 +89,18 @@ pub fn shape(records: &RecordSet, shape: &ResultShape) -> Shaped {
 
 /// Partition rows into groups keyed by the `by` fields, in stable first-seen
 /// order. Missing group fields contribute `Null` to the key.
+///
+/// O(n): each row's key is hashed into a bucket of the groups seen so far, and
+/// compared (`==`, as before) only with the groups in that bucket — not with
+/// every group. The hash agrees with `==`: `-0.0` hashes as `0.0`, and a NaN
+/// never equals anything, so it opens its own group exactly as the linear scan
+/// did.
 fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
     let cols: Vec<Option<usize>> = by.iter().map(|n| records.schema.index_of(n)).collect();
-    let mut order: Vec<Vec<Value>> = Vec::new();
     let mut groups: Vec<Group> = Vec::new();
+    let mut buckets: std::collections::HashMap<u64, smallvec::SmallVec<[usize; 1]>> =
+        std::collections::HashMap::new();
+    let mut compares = 0u64;
     for row in 0..records.row_count {
         let key: Vec<Value> = cols
             .iter()
@@ -101,16 +109,26 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
                 None => Value::Null,
             })
             .collect();
-        let found = order.iter().position(|k| k == &key);
-        // One count per key compared (the scan's length), added once per row.
-        perf::add(
-            Counter::GroupKeyCompares,
-            found.map_or(order.len(), |i| i + 1) as u64,
-        );
+        let mut h = FNV_OFFSET;
+        for v in &key {
+            match v {
+                Value::Number(n) if *n == 0.0 => hash_value(&mut h, &Value::Number(0.0)),
+                other => hash_value(&mut h, other),
+            }
+        }
+        let bucket = buckets.entry(h).or_default();
+        let mut found = None;
+        for &g in bucket.iter() {
+            compares += 1;
+            if groups[g].key == key {
+                found = Some(g);
+                break;
+            }
+        }
         match found {
-            Some(i) => groups[i].rows.push(row),
+            Some(g) => groups[g].rows.push(row),
             None => {
-                order.push(key.clone());
+                bucket.push(groups.len());
                 groups.push(Group {
                     key,
                     rows: vec![row],
@@ -118,6 +136,8 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
             }
         }
     }
+    // One count per key compared, added once per call.
+    perf::add(Counter::GroupKeyCompares, compares);
     groups
 }
 

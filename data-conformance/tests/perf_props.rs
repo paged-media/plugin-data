@@ -28,6 +28,9 @@
 //!   records in it: the preview stepper's record N is the same record
 //!   whatever order the rows were delivered in, and a cached re-resolve is
 //!   the same content as a cold one.
+//! - `group_by` finds a row's group through a hash bucket, not a scan of
+//!   every group: the groups (keys, rows, first-seen order) are the linear
+//!   scan's, NaN and signed zero included.
 //! - The change report re-resolves only bindings whose dependency stamp
 //!   moved: after ANY sequence of data changes its snapshot equals the full
 //!   re-resolve of every binding.
@@ -40,7 +43,7 @@ use data_core::{
     TemplateRef, Value, ValueError,
 };
 use data_js::core::DataSession;
-use data_query::{cmp_values, order_rows, stabilize, value_key};
+use data_query::{cmp_values, order_rows, shape, stabilize, value_key, Shaped};
 use proptest::prelude::*;
 
 /// Any value, every variant — including the ones that share a sort tag
@@ -240,5 +243,39 @@ proptest! {
                 .collect();
             prop_assert_eq!(got, e.fingerprint_all());
         }
+    }
+
+    /// Hash-indexed `group_by` == the linear scan it replaced.
+    #[test]
+    fn data_perf_prop_group_by_matches_linear_scan(
+        rows in prop::collection::vec(
+            (
+                prop_oneof![Just(Value::Number(0.0)), Just(Value::Number(-0.0)), Just(Value::Number(f64::NAN)), Just(Value::Null), "[ab]".prop_map(Value::text)],
+                prop_oneof![Just(Value::Bool(true)), Just(Value::Null), (0i32..3).prop_map(Value::Date)],
+                any_value(),
+            )
+                .prop_map(|(a, b, c)| [a, b, c]),
+            0..40,
+        ),
+        by in prop_oneof![Just(vec!["a".to_string()]), Just(vec!["a".to_string(), "b".to_string()]), Just(vec!["zz".to_string()])],
+    ) {
+        let r = make(&rows);
+        let got = match shape(&r, &ResultShape::Grouped { by: by.clone() }) {
+            Shaped::Grouped(g) => g,
+            other => panic!("{other:?}"),
+        };
+        // The reference: the pre-Wave-2 linear scan.
+        let cols: Vec<Option<usize>> = by.iter().map(|n| r.schema.index_of(n)).collect();
+        let mut want: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+        for row in 0..r.row_count {
+            let key: Vec<Value> = cols.iter().map(|c| c.and_then(|c| r.value(row, c).cloned()).unwrap_or(Value::Null)).collect();
+            match want.iter().position(|(k, _)| k == &key) {
+                Some(i) => want[i].1.push(row),
+                None => want.push((key, vec![row])),
+            }
+        }
+        let got: Vec<String> = got.iter().map(|g| format!("{:?} {:?}", g.key, g.rows)).collect();
+        let want: Vec<String> = want.iter().map(|(k, rows)| format!("{k:?} {rows:?}")).collect();
+        prop_assert_eq!(got, want);
     }
 }

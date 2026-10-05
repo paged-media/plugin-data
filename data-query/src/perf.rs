@@ -54,7 +54,8 @@ pub enum Counter {
     IngestCells,
     /// A full-content hash of a record set (`content_hash`).
     ContentHashes,
-    /// A group-key comparison in `group_by` (the O(n·g) linear scan).
+    /// A group-key comparison in `group_by` (was an O(n·g) linear scan; now
+    /// only the groups in the row's hash bucket are compared).
     GroupKeyCompares,
 }
 

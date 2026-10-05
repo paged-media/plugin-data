@@ -197,12 +197,15 @@ fn data_perf_count_group_plan_2k_by_100() {
     show("group_plan_2k_by_100", &c);
     assert_eq!(plan.units.len(), 100);
     assert_eq!(plan.total_records, 2_000);
+    assert!(plan.units.iter().all(|u| u.record_indices.len() == 20));
     assert_eq!(c.stabilize_calls, 1);
-    // AS FOUND: group_by finds each row's group by a linear scan of the
-    // groups seen so far — O(n·g).
+    // AS FOUND: group_by found each row's group by a linear scan of the
+    // groups seen so far — O(n·g), 100 900 compares. A hash bucket per key
+    // now leaves one compare per row that joins an existing group (2 000 −
+    // 100 first-seen rows).
     assert_eq!(c.group_key_compares, BUDGET_GROUP_2K_COMPARES);
     assert_eq!(c.key_allocs, BUDGET_GROUP_2K_KEY_ALLOCS);
 }
-const BUDGET_GROUP_2K_COMPARES: u64 = 100_900;
+const BUDGET_GROUP_2K_COMPARES: u64 = 1_900;
 // Was 48 166 (the plan's stabilize building keys per comparison).
 const BUDGET_GROUP_2K_KEY_ALLOCS: u64 = 0;
