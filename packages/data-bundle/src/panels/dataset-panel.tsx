@@ -27,6 +27,9 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 
+import { DiagnosticsList } from "./diagnostics";
+import { useSessionSnapshot } from "./use-session";
+
 import type {
   BatchMode,
   BatchPlan,
@@ -70,7 +73,7 @@ export function makeDatasetPanel(
   session: DataSourceSession,
 ): () => ReactElement {
   return function DatasetPanel(): ReactElement {
-    const [snapshot, setSnapshot] = useState(session.getState());
+    const [snapshot, refreshSnapshot] = useSessionSnapshot(session);
     const [query, setQuery] = useState<string>("");
     const [catalog, setCatalog] = useState<GovernedCatalog | null>(null);
     const [plan, setPlan] = useState<BatchPlan | null>(null);
@@ -99,7 +102,7 @@ export function makeDatasetPanel(
         // schema, columns undocumented until a sidecar lands.
         const cat = await session.governedCatalog(selected, { columns: [] });
         setCatalog(cat);
-        setSnapshot(session.getState());
+        refreshSnapshot();
       } catch (e) {
         setError(String(e));
         setCatalog(null);
@@ -171,7 +174,7 @@ export function makeDatasetPanel(
     async function refreshPalette(): Promise<void> {
       setVariables(await session.variables());
       setDataSets(await session.listDataSets());
-      setSnapshot(session.getState());
+      refreshSnapshot();
     }
 
     async function capture(): Promise<void> {
@@ -196,7 +199,7 @@ export function makeDatasetPanel(
       setActiveSet(name);
       const result = await session.applyDataSet(name);
       setSkips(result.skipped);
-      setSnapshot(session.getState());
+      refreshSnapshot();
     }
 
     async function exportLibrary(): Promise<void> {
@@ -470,6 +473,15 @@ export function makeDatasetPanel(
             )}
           </>
         )}
+
+        <DiagnosticsList
+          diagnostics={snapshot.diagnostics}
+          sources={["variables"]}
+          onClear={() => {
+            session.clearDiagnostics();
+            refreshSnapshot();
+          }}
+        />
 
         {/* Developer knowledge (was user-facing copy) — the honest gates:
             the metadata sidecar is read from the source's metadata_sidecar

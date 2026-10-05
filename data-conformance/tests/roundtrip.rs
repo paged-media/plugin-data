@@ -106,3 +106,107 @@ fn data_plugin_payload_roundtrip() {
     assert!(!json.contains("hunter2"), "credential leaked: {json}");
     assert!(!json.contains("password"), "credential leaked: {json}");
 }
+
+/// `load_payload` (the bundle's restore path, `paged.data/session` part):
+/// replacing a live session's recipe in place yields the same recipe as
+/// `from_payload`, keeps the session's locale, and drops what the old recipe
+/// defined (no duplicated sources or bindings when a restore runs over a
+/// session that already has state).
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_plugin_load_payload_in_place__feat__data_plugin_persistence() {
+    let saved = build().payload();
+
+    let mut live = DataSession::new(0);
+    live.set_locale(data_core::Locale::De);
+    live.define_query(Query {
+        id: QueryId::from("stale"),
+        sql: "SELECT 1".into(),
+        params: vec![],
+        shape: ResultShape::Scalar,
+    });
+    live.load_payload(saved.clone());
+
+    assert_eq!(
+        live.payload(),
+        saved,
+        "load_payload restores the recipe exactly"
+    );
+    assert_eq!(
+        live.payload().queries.len(),
+        1,
+        "the old recipe is replaced, not merged"
+    );
+
+    // The locale survived the load: CURRENCY formats the German way.
+    let mut probe = DataSession::new(0);
+    probe.set_locale(data_core::Locale::De);
+    live.ingest_result(QueryId::from("q1"), price_rows());
+    probe.load_payload(saved);
+    probe.ingest_result(QueryId::from("q1"), price_rows());
+    let a = serde_json::to_string(&live.resolve_lowered(&BindingId::from("t1")).unwrap()).unwrap();
+    let b = serde_json::to_string(&probe.resolve_lowered(&BindingId::from("t1")).unwrap()).unwrap();
+    assert_eq!(a, b);
+    assert!(a.contains("€"), "the de locale survived load_payload: {a}");
+}
+
+fn price_rows() -> data_core::RecordSet {
+    use data_core::{Field, FieldType, RecordSet, Schema, Value};
+    RecordSet {
+        schema: Schema {
+            fields: vec![
+                Field {
+                    name: "sku".into(),
+                    ty: FieldType::Text,
+                    nullable: true,
+                },
+                Field {
+                    name: "price".into(),
+                    ty: FieldType::Float,
+                    nullable: true,
+                },
+            ],
+        },
+        columns: vec![vec![Value::Text("A-1".into())], vec![Value::Number(9.99)]],
+        row_count: 1,
+    }
+}
+
+/// Re-defining a source, query, template or binding under an existing id
+/// replaces it in the saved recipe. The panels re-define their query on every
+/// action, so an appending recipe grew with each click and every save.
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_plugin_redefine_replaces_in_the_payload__feat__data_plugin_persistence() {
+    let mut s = build();
+    let before = s.payload();
+    s.define_query(Query {
+        id: QueryId::from("q1"),
+        sql: "SELECT sku FROM pricing".into(),
+        params: vec![],
+        shape: ResultShape::RecordStream,
+    });
+    s.define_source(before.sources[0].clone());
+    s.define_binding(before.bindings[0].clone());
+    let after = s.payload();
+    assert_eq!(after.queries.len(), 1);
+    assert_eq!(
+        after.queries[0].sql, "SELECT sku FROM pricing",
+        "the newer definition wins"
+    );
+    assert_eq!(after.sources.len(), before.sources.len());
+    assert_eq!(after.bindings.len(), before.bindings.len());
+    assert_eq!(
+        after
+            .bindings
+            .iter()
+            .map(|b| b.id.to_string())
+            .collect::<Vec<_>>(),
+        before
+            .bindings
+            .iter()
+            .map(|b| b.id.to_string())
+            .collect::<Vec<_>>(),
+        "a replaced definition keeps its place"
+    );
+}

@@ -105,8 +105,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // as 1 500 `{t, v}` objects serde-decoded by the wasm — then mints a frame,
   // finds its story by hitTest (D-16), inserts the table and fills every cell
   // in one batch.
+  // Wave 4 (persistence): +1 consent read — the session snapshot reports remote-source consent.
   const W1_IMPORT: Measured = {
-    hostCalls: 0,
+    hostCalls: 1,
     hostReads: 0,
     mutates: 0,
     mutationOps: 0,
@@ -120,14 +121,15 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     fingerprints: 0,
     duckQueries: 0,
   };
+  // Wave 4 (persistence): +1 parts.write (the session part), +1 supports, +1 log; +1 payload +1 sync_report to build it (one payload, shared with the lowered label's definition hash).
   const W1_LOWER: Measured = {
-    hostCalls: 8,
+    hostCalls: 11,
     hostReads: 3,
     mutates: 4,
     mutationOps: 1506,
     undoSteps: 4,
     placeholdersRead: 0,
-    wasmCalls: 2,
+    wasmCalls: 4,
     cellsIn: 1500,
     resolves: 1,
     stabilizeCalls: 1,
@@ -299,14 +301,15 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // AS FOUND: the frame box is read once, the symbol is ONE batch of
   // insertPath modules (one undo step) — the batching is already right; the
   // cost is the module count (one path per dark module).
+  // Wave 4 (persistence): +1 parts.write, +1 log; +1 payload +1 sync_report to build the session part.
   const W4: Measured = {
-    hostCalls: 6,
+    hostCalls: 8,
     hostReads: 4,
     mutates: 1,
     mutationOps: 670,
     undoSteps: 1,
     placeholdersRead: 0,
-    wasmCalls: 1,
+    wasmCalls: 3,
     cellsIn: 0,
     resolves: 1,
     stabilizeCalls: 0,

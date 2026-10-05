@@ -338,25 +338,25 @@ impl DataSession {
 
     /// Register a data source (recipe; used for the §11 manifest + gate).
     pub fn define_source(&mut self, source: DataSource) {
-        self.sources.push(source);
+        upsert(&mut self.sources, source, |a, b| a.id == b.id);
     }
 
     /// Register a query.
     pub fn define_query(&mut self, query: Query) {
         self.engine.add_query(query.clone());
-        self.queries.push(query);
+        upsert(&mut self.queries, query, |a, b| a.id == b.id);
     }
 
     /// Register a binding definition.
     pub fn define_binding(&mut self, def: BindingDef) {
         self.engine.add_binding(def.id.clone(), def.binding.clone());
-        self.bindings.push(def);
+        upsert(&mut self.bindings, def, |a, b| a.id == b.id);
     }
 
     /// Register a per-record template (the "catalog cell", §9.4).
     pub fn define_template(&mut self, template: Template) {
         self.engine.add_template(template.clone());
-        self.templates.push(template);
+        upsert(&mut self.templates, template, |a, b| a.id == b.id);
     }
 
     /// Register a placeholder anchor.
@@ -842,6 +842,19 @@ impl DataSession {
         s
     }
 
+    /// Replace this session's recipe with a saved payload — the in-place twin
+    /// of [`DataSession::from_payload`], for a host that already holds a session
+    /// (the bundle restoring a document's `paged.data/session` part). The
+    /// injected `today` and the formatting locale are kept: neither is part of
+    /// the recipe. Everything derived from the old recipe goes with it: ingested
+    /// results, sync states and the change-report baseline start fresh, exactly
+    /// as they do for a session built by `from_payload`.
+    pub fn load_payload(&mut self, payload: DocumentPayload) {
+        let locale = self.engine.locale();
+        *self = DataSession::from_payload(payload, self.today);
+        self.engine.set_locale(locale);
+    }
+
     /// Session metadata.
     pub fn metadata(&self) -> SessionMeta {
         SessionMeta {
@@ -1090,6 +1103,16 @@ impl DataSession {
         serde_json::to_string(&self.variables)
             .map(|s| s.len())
             .unwrap_or(0)
+    }
+}
+
+/// Replace the item `same` as `item` in place, or append it. Definitions are
+/// keyed by id: re-defining one replaces it in the saved recipe and keeps its
+/// position, so a recipe does not grow each time a panel re-defines its query.
+fn upsert<T>(items: &mut Vec<T>, item: T, same: impl Fn(&T, &T) -> bool) {
+    match items.iter().position(|x| same(x, &item)) {
+        Some(i) => items[i] = item,
+        None => items.push(item),
     }
 }
 

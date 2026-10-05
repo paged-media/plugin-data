@@ -198,3 +198,14 @@ budget 1 (OVER budget); placeholdersRead: measured 200 vs budget 100 (OVER budge
 
 With the injection reverted it passes. A count that drops below its pin also fails, with
 "UNDER budget — lower the pin in this commit".
+
+## Re-pinned at the Wave 4 merge (persistence)
+
+Saving the session into the document is new work, so five budgets moved up
+by exactly its cost; each pin in `test/perf/` names the added calls. Per
+command: one `parts.write` of the session part, plus one `payload` and one
+`sync_report` to build it (the merge also removed a second `payload` call
+that hashed the lowered label's definition: `stampFor` now reuses the recipe
+the flush serialised). On open: `parts.read` and the document-switch,
+flush-before-save and client subscriptions. A burst of 200 reflows writes the
+session once.

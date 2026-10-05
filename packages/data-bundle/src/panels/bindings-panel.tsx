@@ -25,11 +25,53 @@
 // retired). The variable CARET position is still coarse (no caret-read door).
 
 import { useState, type CSSProperties, type ReactElement } from "react";
-import type { BundleHost } from "@paged-media/plugin-api";
-import type { IdmlFit } from "../../../data-host-model/src";
+import type { BundleHost, ElementId } from "@paged-media/plugin-api";
+import type { IdmlFit, RuleTarget, VisibilityTargetKind } from "../../../data-host-model/src";
 
-import type { BarcodeSymbology, ChangeReport, ColumnMapping, DataSourceSession } from "../session";
+import type {
+  BarcodeSymbology,
+  ChangeReport,
+  ColumnMapping,
+  DataSourceSession,
+  RecordFlowPreview,
+} from "../session";
 import { DiagnosticsList } from "./diagnostics";
+import { useSessionSnapshot } from "./use-session";
+
+/** The binding kinds the panel defines. */
+type BindKind = "variable" | "image" | "barcode" | "table" | "visibility" | "rule" | "recordFlow";
+
+const KIND_OPTIONS: { value: BindKind; label: string; field: string }[] = [
+  { value: "variable", label: "variable field", field: "field (column name)" },
+  { value: "image", label: "image", field: "field with the image path or URL" },
+  { value: "barcode", label: "barcode / QR", field: "field to encode" },
+  { value: "table", label: "table", field: "columns, comma-separated" },
+  { value: "visibility", label: "show / hide", field: "field or expression (true = shown)" },
+  { value: "rule", label: "style rule", field: "condition, e.g. stock < 5" },
+  { value: "recordFlow", label: "record flow (catalog)", field: "fields per record, comma-separated" },
+];
+
+/** The rule actions — each applies a document style by name. */
+const RULE_ACTIONS: { value: "characterStyle" | "paragraphStyle" | "tableStyle"; label: string }[] = [
+  { value: "characterStyle", label: "character style" },
+  { value: "paragraphStyle", label: "paragraph style" },
+  { value: "tableStyle", label: "cell style (table column)" },
+];
+
+const VISIBILITY_KINDS: readonly string[] = [
+  "textFrame",
+  "rectangle",
+  "oval",
+  "polygon",
+  "graphicLine",
+  "group",
+] satisfies VisibilityTargetKind[];
+
+const splitList = (v: string): string[] =>
+  v
+    .split(",")
+    .map((x) => x.trim())
+    .filter((x) => x !== "");
 
 /** The IDML FittingOnEmptyFrame choices an image binding offers (D-14). */
 const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
@@ -75,15 +117,22 @@ export function makeBindingsPanel(
   session: DataSourceSession,
 ): () => ReactElement {
   return function BindingsPanel(): ReactElement {
-    const [snapshot, setSnapshot] = useState(session.getState());
+    const [snapshot, refresh] = useSessionSnapshot(session);
     const [fit, setFit] = useState<IdmlFit>("Proportionally");
     const [symbology, setSymbology] = useState<BarcodeSymbology>("ean13");
     // Binding AUTHORING (editor-ui-coverage M — promoted past the demo
     // buttons): kind + source + field drive a real addBinding flow; the
     // demo wirings remain reachable through it (field "anchor" over the
     // first source is exactly what the old demo did).
-    const [bindKind, setBindKind] = useState<"variable" | "image" | "barcode">(
-      "variable",
+    const [bindKind, setBindKind] = useState<BindKind>("variable");
+    const [invert, setInvert] = useState(false);
+    const [ruleAction, setRuleAction] = useState<(typeof RULE_ACTIONS)[number]["value"]>(
+      "characterStyle",
+    );
+    const [ruleStyle, setRuleStyle] = useState("");
+    const [groupBy, setGroupBy] = useState("");
+    const [flowPreview, setFlowPreview] = useState<{ id: string; preview: RecordFlowPreview } | null>(
+      null,
     );
     const [bindField, setBindField] = useState("");
     const [bindSeq, setBindSeq] = useState(1);
@@ -96,7 +145,6 @@ export function makeBindingsPanel(
     const [chosen, setChosen] = useState<Set<string>>(new Set());
     // §8 change report: "what changed since last sync".
     const [changes, setChanges] = useState<ChangeReport | null>(null);
-    const refresh = () => setSnapshot(session.getState());
 
     /** Refresh the data, then show the per-binding change report (§8). */
     async function refreshAndReport(): Promise<void> {
@@ -199,10 +247,47 @@ export function makeBindingsPanel(
       refresh();
     }
 
-    // The AUTHORING flow the demos grew into: pick a kind + field, the
-    // binding lands on the first source's record stream; image/barcode
-    // target the selected rectangle (honest warnings otherwise).
-    function addBinding(): void {
+    /** Where a rule applies, from what the user has selected: a table cell
+     *  names its column; a text caret names its whole story. */
+    async function ruleTarget(): Promise<RuleTarget | null> {
+      const cell = host.selection.get().find((e) => e.kind === "tableCell");
+      if (cell) {
+        const id = cell.id as { story_id: string; table_id: string; col: number };
+        return {
+          kind: "tableColumn",
+          storyId: id.story_id,
+          tableId: id.table_id,
+          col: id.col,
+          headerRows: 1,
+        };
+      }
+      let caret: { storyId: string; offset: number } | null = null;
+      try {
+        caret = host.supports("text.caret@1") ? (host.text?.caret() ?? null) : null;
+      } catch {
+        caret = null;
+      }
+      if (!caret) return null;
+      let end = caret.offset;
+      try {
+        const story = await host.document.storyContent(caret.storyId);
+        if (story) {
+          end = story.paragraphs.reduce(
+            (n, p) => n + p.runs.reduce((m, r) => m + [...r.text].length, 0),
+            0,
+          );
+        }
+      } catch {
+        // no story read: the range ends at the caret
+      }
+      return { kind: "storyRange", storyId: caret.storyId, start: 0, end };
+    }
+
+    // The AUTHORING flow: pick a kind and its field(s); the binding reads the
+    // first source's record stream. Image, barcode and show/hide bind to the
+    // selected element; a style rule to the selected table cell or the story
+    // the caret is in. Every refusal says what is missing.
+    async function addBinding(): Promise<void> {
       const source = session.getState().sources[0];
       if (!source) {
         setBindMsg("import a CSV source first (Sources panel)");
@@ -210,35 +295,120 @@ export function makeBindingsPanel(
       }
       const field = bindField.trim();
       if (!field) {
-        setBindMsg("enter the field name to bind (a source column)");
+        setBindMsg(`enter the ${KIND_OPTIONS.find((k) => k.value === bindKind)!.field}`);
         return;
       }
       const q = "q_all";
-      session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
-      const id = `${bindKind}_${field}_${bindSeq}`;
-      setBindSeq(bindSeq + 1);
-      if (bindKind === "variable") {
-        // The chosen field IS the expression: a bare field reference, which the
-        // engine resolves per record (a column the DSL cannot reference bare
-        // shows up as a resolve diagnostic, never a silent blank).
-        session.addVariableBinding(id, field, q, field);
-        setBindMsg(`variable binding ${id} — Resolve + lower places the field`);
-      } else {
-        const target = host.selection.get().find((e) => e.kind === "rectangle");
-        if (!target) {
-          setBindMsg(`select a rectangle to bind the ${bindKind} into`);
-          return;
+      const id = `${bindKind}_${field.replace(/[^A-Za-z0-9_]+/g, "_")}_${bindSeq}`;
+      const selection = host.selection.get();
+      const rect = selection.find((e) => e.kind === "rectangle");
+
+      switch (bindKind) {
+        case "variable":
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          // The chosen field IS the expression: a bare field reference, which
+          // the engine resolves per record (a column the DSL cannot reference
+          // bare shows up as a resolve diagnostic, never a silent blank).
+          session.addVariableBinding(id, field, q, field);
+          setBindMsg(`variable binding ${id} — Lower places the field`);
+          break;
+        case "image":
+        case "barcode":
+          if (!rect) {
+            setBindMsg(`select a rectangle to bind the ${bindKind} into`);
+            return;
+          }
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          if (bindKind === "image") {
+            session.addImageBinding(id, rect.id as string, q, field, { fit });
+            setBindMsg(`image binding ${id} → the selected rectangle (${fit})`);
+          } else {
+            session.addBarcodeBinding(id, rect.id as string, q, symbology, field, {
+              missing: "skip",
+            });
+            setBindMsg(`barcode binding ${id} → the selected rectangle (${symbology})`);
+          }
+          break;
+        case "table": {
+          const cols = splitList(field);
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          session.addTableBinding(
+            id,
+            "data-region",
+            q,
+            cols.map((c) => ({ header: c, expr: c })),
+          );
+          setBindMsg(`table binding ${id} (${cols.length} column(s)) — Lower places the table`);
+          break;
         }
-        if (bindKind === "image") {
-          session.addImageBinding(id, target.id as string, q, field, { fit });
-          setBindMsg(`image binding ${id} → the selected rectangle (${fit})`);
-        } else {
-          session.addBarcodeBinding(id, target.id as string, q, symbology, field, {
-            missing: "skip",
+        case "visibility": {
+          const el = selection.find((e) => VISIBILITY_KINDS.includes(e.kind)) as
+            | (ElementId & { id: string })
+            | undefined;
+          if (!el) {
+            setBindMsg("select the frame, shape or group to show or hide");
+            return;
+          }
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          session.addVisibilityBinding(id, el.id, q, field, {
+            invert,
+            kind: el.kind as VisibilityTargetKind,
           });
-          setBindMsg(`barcode binding ${id} → the selected rectangle (${symbology})`);
+          setBindMsg(
+            `show/hide binding ${id} → the selected ${el.kind}${invert ? " (hidden when true)" : ""}`,
+          );
+          break;
+        }
+        case "rule": {
+          const style = ruleStyle.trim();
+          if (!style) {
+            setBindMsg("enter the name of the document style the rule applies");
+            return;
+          }
+          const target = await ruleTarget();
+          if (!target) {
+            setBindMsg("select a table cell, or put the text cursor in the story to style");
+            return;
+          }
+          if ((ruleAction === "tableStyle") !== (target.kind === "tableColumn")) {
+            setBindMsg(
+              ruleAction === "tableStyle"
+                ? "a cell style rule needs a selected table cell"
+                : "a character or paragraph rule needs the text cursor in a story",
+            );
+            return;
+          }
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          session.addRuleBinding(id, id, q, field, { action: ruleAction, name: style }, target);
+          setBindMsg(
+            `style rule ${id}: when ${field} → ${style} on the ${
+              target.kind === "tableColumn" ? "selected column" : "story"
+            } — Lower applies it`,
+          );
+          break;
+        }
+        case "recordFlow": {
+          const fields = splitList(field);
+          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          session.defineRecordFlow(
+            id,
+            q,
+            fields.map((f) => ({ expr: f })),
+            { groupBy: splitList(groupBy) },
+          );
+          setBindMsg(`record flow ${id} — Preview lists what it places`);
+          break;
         }
       }
+      setBindSeq(bindSeq + 1);
+      refresh();
+    }
+
+    /** Resolve a record flow and list what it would place (no document write). */
+    async function previewFlow(id: string): Promise<void> {
+      await session.refreshData();
+      const preview = await session.previewRecordFlow(id);
+      setFlowPreview(preview ? { id, preview } : null);
       refresh();
     }
 
@@ -248,20 +418,66 @@ export function makeBindingsPanel(
           <select
             data-data-bind-kind
             value={bindKind}
-            onChange={(e) => setBindKind(e.target.value as typeof bindKind)}
+            onChange={(e) => setBindKind(e.target.value as BindKind)}
           >
-            <option value="variable">variable field</option>
-            <option value="image">image</option>
-            <option value="barcode">barcode / QR</option>
+            {KIND_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
           <input
             data-data-bind-field
             type="text"
             value={bindField}
             onChange={(e) => setBindField(e.target.value)}
-            placeholder="field (column name)"
-            style={{ width: 130 }}
+            placeholder={KIND_OPTIONS.find((k) => k.value === bindKind)!.field}
+            style={{ width: 160 }}
           />
+          {bindKind === "visibility" && (
+            <label style={note}>
+              <input
+                data-data-bind-invert
+                type="checkbox"
+                checked={invert}
+                onChange={(e) => setInvert(e.target.checked)}
+              />{" "}
+              hide when true
+            </label>
+          )}
+          {bindKind === "rule" && (
+            <>
+              <select
+                data-data-bind-rule-action
+                value={ruleAction}
+                onChange={(e) => setRuleAction(e.target.value as typeof ruleAction)}
+              >
+                {RULE_ACTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                data-data-bind-rule-style
+                type="text"
+                value={ruleStyle}
+                onChange={(e) => setRuleStyle(e.target.value)}
+                placeholder="style name"
+                style={{ width: 110 }}
+              />
+            </>
+          )}
+          {bindKind === "recordFlow" && (
+            <input
+              data-data-bind-group-by
+              type="text"
+              value={groupBy}
+              onChange={(e) => setGroupBy(e.target.value)}
+              placeholder="group by (optional)"
+              style={{ width: 120 }}
+            />
+          )}
           {bindKind === "image" && (
             <label style={note}>
               fit:{" "}
@@ -289,7 +505,13 @@ export function makeBindingsPanel(
               </select>
             </label>
           )}
-          <button type="button" data-data-bind-add onClick={addBinding}>
+          <button
+            type="button"
+            data-data-bind-add
+            onClick={() => {
+              void addBinding();
+            }}
+          >
             Add binding
           </button>
         </div>
@@ -460,18 +682,55 @@ export function makeBindingsPanel(
             )}
           </div>
         )}
-        <div>
+        <div data-data-bindings>
           bindings:{" "}
           {snapshot.bindings.length === 0 ? (
             <span style={note}>none</span>
           ) : (
-            <span style={mono}>{snapshot.bindings.join(", ")}</span>
+            <ul style={{ margin: 0, paddingLeft: "var(--space-3, 12px)" }}>
+              {(session.listBindings() ?? []).map((b) => (
+                <li key={b.id} data-binding-kind={b.kind}>
+                  <span style={mono}>{b.id}</span> <span style={note}>({b.kind})</span>
+                  {b.kind === "recordFlow" && (
+                    <button
+                      type="button"
+                      data-data-flow-preview
+                      onClick={() => {
+                        void previewFlow(b.id);
+                      }}
+                    >
+                      Preview
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
+        {flowPreview && (
+          <div data-testid="flow-preview" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <strong>
+              {flowPreview.id}: {flowPreview.preview.total} record(s)
+            </strong>
+            {flowPreview.preview.blocks.slice(0, 50).map((b, i) => (
+              <span
+                key={i}
+                data-flow-block={b.kind}
+                style={b.kind === "record" ? mono : { ...note, fontWeight: 600 }}
+              >
+                {b.text}
+              </span>
+            ))}
+            {flowPreview.preview.blocks.length > 50 && (
+              <span style={note}>… {flowPreview.preview.blocks.length - 50} more</span>
+            )}
+            <span style={note}>Placing the flow into frames comes with merge.</span>
+          </div>
+        )}
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
         <DiagnosticsList
           diagnostics={snapshot.diagnostics}
-          sources={["refresh", "preview", "binding", "variables"]}
+          sources={["refresh", "preview", "binding", "flow"]}
           onClear={() => {
             session.clearDiagnostics();
             refresh();

@@ -47,15 +47,15 @@ The ENGINE is far ahead of what a user can reach from the panels:
   RecordSet to other consumers; never knows its consumers, §7.1). The
   governed-catalog KERNEL is built (schema + column-metadata sidecar), but
   nothing reads a sidecar from a source location yet (PARTIAL).
-- REACHABILITY GAPS (2026-10-05, see the analysis): nothing survives reopen
-  (sources, queries, bindings and data sets are session-only); the panels
-  define variable, image and barcode bindings only, over `SELECT *`; table,
-  rule and visibility bindings are session-only; record flow has no define
-  method and no writer, so it never becomes document content; local import is
-  CSV/TSV only. Remote sources declare `network: { origins: "consent" }` and
+- PERSISTENCE + REACHABILITY (wave 4, 2026-10-05): the session (sources,
+  queries, bindings, data sets, imported CSV) is saved as the `session`
+  container part and restored on open (`src/persist.ts`, `load_payload`); the
+  Bindings panel defines every binding kind, over `SELECT *`. Still open: record
+  flow defines and previews but has no writer, so it never becomes document
+  content; local import is CSV/TSV only. Remote sources declare `network: { origins: "consent" }` and
   fetch only consented origins, but the editor's CSP `connect-src 'self'`
   still blocks them in the browser (RFI D-03). Still not built: DB-attach
-  execution, OPFS persistence, worker-hosted DuckDB, merge to a document.
+  execution, worker-hosted DuckDB, merge to a document.
 
 ## Project State & Feature Matrix (cockpit)
 
@@ -147,8 +147,8 @@ Rules for every code change in this repo:
   factories closing over `BundleHost`; styling = the token layer (`--pg-*`,
   `--status-*`, `--font-mono`, `--space-*`, `--radius-*`).
 - **Reserved seams stay honest.** What the engine can do but a user cannot
-  reach (record flow into the document, merge to a document, persistence,
-  DB-attach execution, worker-hosted DuckDB, OPFS) is said so in the manifest,
+  reach (record flow into the document, merge to a document,
+  DB-attach execution, worker-hosted DuckDB) is said so in the manifest,
   the UI, `docs/status.md` and the RFI. Never fake it, and never leave a
   "not yet" message standing after the door exists.
 - **CLEAN-ROOM (§3).** `references/` (any reference engine, IF ever mounted) is

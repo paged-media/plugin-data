@@ -66,14 +66,15 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // stabilize sort of every record — with no debounce or coalescing: 200
   // resize events cost 200 full re-paginations, even though only the last one
   // is ever shown.
+  // Wave 4 (persistence): +1 parts.write +1 supports, +1 payload +1 sync_report — one session write for the whole burst.
   const W6: Measured = {
-    hostCalls: 400,
+    hostCalls: 402,
     hostReads: 400,
     mutates: 0,
     mutationOps: 0,
     undoSteps: null,
     placeholdersRead: 0,
-    wasmCalls: 200,
+    wasmCalls: 202,
     cellsIn: 0,
     resolves: 200,
     stabilizeCalls: 200,
@@ -143,9 +144,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // What activate costs the host, and that it boots NO wasm (both engines are
   // lazy: the first command pays). The engine and DuckDB boot times are the
   // first-command price, trended.
+  // Wave 4 (persistence): restore on open: +1 parts.read, onDidChange (document switch), onWillSave (flush before save), editor.client.subscribe, +1 log.
   const W7: Measured = {
-    hostCalls: 21,
-    hostReads: 0,
+    hostCalls: 26,
+    hostReads: 1,
     mutates: 0,
     mutationOps: 0,
     undoSteps: null,

@@ -260,6 +260,11 @@ impl ResolutionEngine {
         self.locale = locale;
     }
 
+    /// The formatting locale in effect (§9.1).
+    pub fn locale(&self) -> Locale {
+        self.locale
+    }
+
     /// Register a query (the recipe).
     pub fn add_query(&mut self, query: Query) {
         self.queries.insert(query.id.clone(), query);

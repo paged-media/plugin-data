@@ -32,6 +32,7 @@ export interface DataEngineLike {
   define_source(source: unknown): void;
   define_query(query: unknown): void;
   define_binding(def: unknown): void;
+  define_template(template: unknown): void;
   define_placeholder(placeholder: unknown): void;
   set_param(name: string, value: unknown): void;
   set_locale(locale: unknown): void;
@@ -111,6 +112,9 @@ export interface DataEngineLike {
   source_manifest(): unknown;
   authorize_report(): unknown;
   payload(): unknown;
+  /** Replace the recipe with a saved `payload()` (the session restore path).
+   *  Optional: a wasm artifact built before it lacks it (restore reports it). */
+  load_payload?(payload: unknown): void;
   metadata(): unknown;
   free(): void;
 }

@@ -20,8 +20,9 @@
 // the vendored DuckDB-WASM engine, define a query + binding, resolve through the
 // Rust engine, and lower to a page frame (variable replacement + single-region
 // dynamic table degraded to tab-text + rules, D-02). Remote/DB sources +
-// network consent, record flow, the data-provider contract, and OPFS
-// persistence are NOT implemented — the panels + BREAKAGE_LOG say so.
+// network consent, record flow, the data-provider contract are wired; the
+// session (sources, queries, bindings, data sets) is saved with the document as
+// this plugin's `session` container part and restored here.
 //
 // Wiring mirrors plugin-sheet: contributePanel for the two panels + the four
 // commands. The host tracks every registration; the session is the one thing
@@ -32,7 +33,7 @@ import { contributeMenu } from "./menu";
 import { contributePanel } from "@paged-media/plugin-sdk";
 
 import manifest from "../manifest.json";
-import { createSession } from "./session";
+import { createSession, type DataSourceSession } from "./session";
 import { makeSourcesPanel } from "./panels/sources-panel";
 import { makeBindingsPanel } from "./panels/bindings-panel";
 import { makeDatasetPanel } from "./panels/dataset-panel";
@@ -47,8 +48,34 @@ function todaySerial(): number {
   return Math.floor(Date.now() / 86_400_000);
 }
 
+/** The session each activation created, by host — for tests and scripts that
+ *  drive a loaded bundle (the panels hold the same object). */
+const sessions = new WeakMap<BundleHost, DataSourceSession>();
+
+export function sessionFor(host: BundleHost): DataSourceSession | undefined {
+  return sessions.get(host);
+}
+
 export function activate(host: BundleHost): BundleHandle {
   const session = createSession(host, todaySerial());
+  sessions.set(host, session);
+  // The document's saved session (the `session` container part) comes back
+  // in the background; the panels re-render when it lands. Opening a document
+  // boots the data engine only when the document carries a session, and never
+  // boots DuckDB or fetches a remote source by itself.
+  void session.restore();
+  // Activation runs once, at app start; documents come and go after it. On
+  // every load the client broadcasts `documentLoaded`: the session drops the
+  // previous document's state and restores the new one's.
+  let unsubscribeDocs: (() => void) | null = null;
+  try {
+    unsubscribeDocs = host.editor.client.subscribe((msg) => {
+      if (msg.kind === "documentLoaded") void session.documentOpened();
+    });
+  } catch {
+    // no raw client (a headless or older host): the activate-time restore
+    // is the only one
+  }
 
   contributePanel(host, {
     id: SOURCES_PANEL_ID,
@@ -188,6 +215,8 @@ export function activate(host: BundleHost): BundleHandle {
 
   return {
     dispose() {
+      unsubscribeDocs?.();
+      sessions.delete(host);
       session.dispose();
       menuSub.dispose();
     },

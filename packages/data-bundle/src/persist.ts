@@ -1,0 +1,163 @@
+// The data session as a `.paged` container part — the ONE schema, reader and
+// writer. Everything a user defines in the panels lives in the session, and
+// none of it is document content, so it persists as this plugin's own part
+// (`paged/media.paged.data/session.json`, declared in the manifest as the
+// `session` part type) and travels with the file.
+//
+// What the part holds (`PersistedSession`, v1):
+//   · `engine`  — the engine's recipe exactly as `DataEngine.payload()` returns
+//                 it: sources, queries, templates, bindings, the §9.9 variable
+//                 set (declarations + captured data sets). Credentials are
+//                 redacted by the engine before it gets here (§11/D-11).
+//                 Restored with `DataEngine.load_payload`.
+//   · `locale`  — the formatting locale (not part of the engine recipe).
+//   · `sync`    — the user's sync decisions (pinned / overridden bindings);
+//                 linked/stale/error are derived and are not saved.
+//   · `targets` — what only the host knows: the rectangle an image or barcode
+//                 binding fills, a visibility binding's element and kind, a
+//                 rule's query and host target, and the element a table was
+//                 lowered into (`lowered`), so a reopen can tell whether that
+//                 element is still there and still carries this binding.
+//   · `data`    — the imported CSV text per source. A small file is inline; a
+//                 large one (over INLINE_DATA_MAX_BYTES) is its own content-
+//                 addressed part `data/<hash>.csv` and the session names it by
+//                 `{ hash, bytes }`, so a session rewrite never rewrites the
+//                 data and two sessions with the same file share one part.
+//   · `remote`  — remote source descriptors (url, format, params, credential
+//                 REF). They restore INERT: nothing is fetched on open (§11).
+//
+// Undo: `host.parts` writes are not undoable, and the session is not document
+// content, so defining a binding is not an undo step either. What IS undoable
+// is everything the session writes INTO the document (placed fields, tables,
+// barcodes, styles, visibility) — those go through `mutate`, and the content
+// they create carries this plugin's metadata label naming the binding and the
+// hash of the session it was lowered under. A restore checks those labels
+// against the session (see `session.ts` `restore`).
+
+import type { ElementId } from "@paged-media/plugin-api";
+
+import type { IdmlFit, RuleTarget, VisibilityTargetKind } from "../../data-host-model/src";
+import type { RemoteFormat } from "./remote";
+
+/** The part the session is written to (relative to `paged/media.paged.data/`). */
+export const SESSION_PART = "session.json";
+/** The folder large imported data files are written to. */
+export const DATA_PART_DIR = "data/";
+/** Imported text up to this many UTF-8 bytes rides inline in the session part. */
+export const INLINE_DATA_MAX_BYTES = 64 * 1024;
+export const SESSION_VERSION = 1;
+
+/** One imported source's data: inline text, or a pointer to its own part. */
+export type PersistedData =
+  | { source: string; format: "csv"; text: string }
+  | { source: string; format: "csv"; ref: { hash: string; bytes: number } };
+
+export interface PersistedRemote {
+  name: string;
+  url: string;
+  format: RemoteFormat;
+  params: Record<string, string>;
+  credentialRef?: string;
+}
+
+export interface PersistedTargets {
+  image: Record<string, { elementId: string; fit?: IdmlFit }>;
+  barcode: Record<string, { elementId: string }>;
+  visibility: Record<string, { elementId: string; kind?: VisibilityTargetKind }>;
+  rule: Record<string, { query: string; target: RuleTarget }>;
+  /** The element each table / record-flow binding was last lowered into. */
+  lowered: Record<string, ElementId>;
+}
+
+export interface PersistedSession {
+  v: typeof SESSION_VERSION;
+  engine: unknown;
+  locale: "en" | "de";
+  sync: { binding: string; status: "pinned" | "overridden" }[];
+  targets: PersistedTargets;
+  data: PersistedData[];
+  remote: PersistedRemote[];
+}
+
+export function emptyTargets(): PersistedTargets {
+  return { image: {}, barcode: {}, visibility: {}, rule: {}, lowered: {} };
+}
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** Hex SHA-256 of `bytes`, shortened to 32 hex chars (128 bits) — a content
+ *  address, not a security boundary. */
+export async function contentHash(bytes: Uint8Array): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(digest).slice(0, 16), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export function dataPartPath(hash: string): string {
+  return `${DATA_PART_DIR}${hash}.csv`;
+}
+
+/** Decide how one imported text is stored: inline when small, else as a
+ *  content-addressed part (`write` is only called for a part not yet known). */
+export async function storeData(
+  source: string,
+  text: string,
+  writePart: (path: string, bytes: Uint8Array) => Promise<void>,
+  known: Set<string>,
+): Promise<PersistedData> {
+  const bytes = encoder.encode(text);
+  if (bytes.length <= INLINE_DATA_MAX_BYTES) return { source, format: "csv", text };
+  const hash = await contentHash(bytes);
+  const path = dataPartPath(hash);
+  if (!known.has(path)) {
+    await writePart(path, bytes);
+    known.add(path);
+  }
+  return { source, format: "csv", ref: { hash, bytes: bytes.length } };
+}
+
+/** Read one stored source's text back, or `null` when its part is missing. */
+export async function loadData(
+  d: PersistedData,
+  readPart: (path: string) => Promise<Uint8Array | null>,
+): Promise<string | null> {
+  if ("text" in d) return d.text;
+  const bytes = await readPart(dataPartPath(d.ref.hash));
+  return bytes ? decoder.decode(bytes) : null;
+}
+
+export function encodeSession(s: PersistedSession): Uint8Array {
+  return encoder.encode(JSON.stringify(s));
+}
+
+/** Parse a session part. Returns the session, or a reason it cannot be used. */
+export function decodeSession(bytes: Uint8Array): PersistedSession | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoder.decode(bytes));
+  } catch (err) {
+    return { error: `the saved data session is not valid JSON (${String(err)})` };
+  }
+  if (!parsed || typeof parsed !== "object") return { error: "the saved data session is empty" };
+  const v = (parsed as { v?: unknown }).v;
+  if (v !== SESSION_VERSION) {
+    return {
+      error:
+        typeof v === "number" && v > SESSION_VERSION
+          ? `the saved data session is version ${v}; this plugin reads version ${SESSION_VERSION} — update the plugin`
+          : "the saved data session has no version",
+    };
+  }
+  const p = parsed as Partial<PersistedSession>;
+  return {
+    v: SESSION_VERSION,
+    engine: p.engine ?? null,
+    locale: p.locale === "de" ? "de" : "en",
+    sync: Array.isArray(p.sync) ? p.sync : [],
+    targets: { ...emptyTargets(), ...(p.targets ?? {}) },
+    data: Array.isArray(p.data) ? p.data : [],
+    remote: Array.isArray(p.remote) ? p.remote : [],
+  };
+}
