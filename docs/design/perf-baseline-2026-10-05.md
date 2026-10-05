@@ -209,3 +209,58 @@ that hashed the lowered label's definition: `stampFor` now reuses the recipe
 the flush serialised). On open: `parts.read` and the document-switch,
 flush-before-save and client subscriptions. A burst of 200 reflows writes the
 session once.
+
+## After Wave 2 (TS)
+
+The bundle-side optimisations. Each pin moved in the commit that earned it, with a
+behaviour assertion beside it, and each was shown red with its change reverted.
+"Before" is the pin as of the Wave 4 merge.
+
+| Scenario | Count | Before | After Wave 2 (TS) | What earned it |
+|---|---|---:|---:|---|
+| W1 lower a 500-row table | host calls | 11 | 7 | frame, table, cells and label in one batch, addressed by core's batch handles (`$h:frame`, `$h:table`); the frame comes back in `minted`, so no `hitTest` |
+| | reads | 3 | 2 | |
+| | mutates | 4 | 1 | |
+| | undo steps | 4 | 1 | |
+| W2 refresh 100 fields | host calls | 102 | 3 | one back-to-front `setFieldValue` batch |
+| | mutates | 100 | 1 | |
+| | undo steps | 89 (see below) | 1, reached | |
+| | wasm calls | 200 | 1 | `refresh_field_values` decides every field in one call, Pinned/Overridden skipped before any resolve |
+| W3 preview 20 steps | host calls | 40 | 21 | the field read is re-used while the change count shows only the preview's own write |
+| | reads / fields read | 20 / 20 | 1 / 1 | |
+| W5 `lowerAll`, 20 variables | host calls | 240 | 102 | active page read once per command; frame + field in one batch per variable |
+| | reads | 120 | 2 | |
+| | mutates / undo steps | 40 / 40 | 20 / 20 | |
+| W6 200 reflow events | host calls | 402 | 4 | the burst is coalesced: one chain read and one pagination once it is quiet |
+| | reads | 400 | 2 | |
+| | wasm calls | 202 | 3 | |
+| | resolves / sorts | 200 / 200 | 1 / 1 | |
+| | sort keys | 665,600 | 3,328 | |
+
+`mutationOps` did not move: the counting host does not count `bindCreated` children,
+which name what the op before them minted and write nothing.
+
+`resolveElementId` (#9 in the ranked list) now reads the scene tree once per command
+into an index. No workload reaches it, so a unit test pins it instead of a budget.
+
+### Corrections to the Wave 1 record
+
+- **W2 did not run out of a bounded history.** The core history holds 1,000 steps. The
+  fixture inserted each separator space at a field's start, and core 0.67 puts text
+  inserted there INTO the field's run. `setFieldValue` then replaces the run's text, so
+  the space is lost, and undoing that write fails with "undo log empty" and drops the
+  record. The fixture now inserts the spaces first and each field into them. The core
+  defect is pinned with `it.fails` in `test/field-offsets-real-core.spec.ts`. Finding 2
+  ("the undo history is bounded") is withdrawn.
+- **D-16 is closed by core's handles.** A `storyId` of `$h:<name>` resolves to the story
+  a text frame minted, so the frame and what goes into it ride one batch.
+
+### Found while doing it (for Wave 8)
+
+- core: `insertText` at a placeholder run's start joins the run; a later field write
+  erases the text, and its undo fails ("undo log empty") and drops the history record.
+- core: `minted[].handle` is `null` even for an element a `bindCreated` named. The
+  bundle finds its frame by kind instead.
+- Variable placement in `lowerAll` is still one batch per variable (20 undo steps for
+  20 variables). One batch for the whole command is possible on the wire. It needs the
+  placements planned before any is sent.
