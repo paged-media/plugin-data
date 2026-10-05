@@ -371,6 +371,14 @@ mod wasm {
             to_js(&self.session.payload()).unwrap_or(JsValue::NULL)
         }
 
+        /// Replace the recipe with a saved payload (the shape `payload()`
+        /// returns) — restoring a document's persisted session. Keeps `today`
+        /// and the locale; ingested results and sync states start fresh.
+        pub fn load_payload(&mut self, payload: JsValue) -> Result<(), JsValue> {
+            self.session.load_payload(from_js(payload)?);
+            Ok(())
+        }
+
         /// Session metadata.
         pub fn metadata(&self) -> JsValue {
             to_js(&self.session.metadata()).unwrap_or(JsValue::NULL)
