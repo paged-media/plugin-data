@@ -32,3 +32,7 @@
       - "data-conformance/tests/locale.rs::data_i18n_locale_stamp_is_locale_free__feat__data_i18n_locale_table"
       - "data-conformance/tests/sync_review.rs::data_i18n_binding_locale_override__feat__data_i18n_locale_table"
       - "data-conformance/tests/sync_review.rs::data_i18n_format_patterns_and_catalog__feat__data_i18n_locale_table"
+    vitest:
+      - "packages/data-bundle/src/__tests__/sync-panel.test.ts"
+      - "packages/data-bundle/src/__tests__/review.test.ts"
+      - "packages/data-bundle/test/sync-review-real-core.spec.ts"
