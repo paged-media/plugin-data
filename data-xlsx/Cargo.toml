@@ -11,6 +11,6 @@ description = "paged.data XLSX reader: one worksheet of an imported .xlsx as a h
 workspace = true
 
 [dependencies]
-calamine = { version = "0.31", default-features = false }
+calamine = { version = "0.36", default-features = false }
 serde_json.workspace = true
 thiserror.workspace = true
