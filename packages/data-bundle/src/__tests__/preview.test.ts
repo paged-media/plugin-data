@@ -202,4 +202,46 @@ describe("data_bind_preview_step session lane (§9)", () => {
     expect(seen).toEqual([4]);
     expect(fake.mutations.find((m) => m.op === "batch")).toBeDefined();
   });
+
+  it("previewRecord on a table commits nothing: a table shows every record [data.bind.preview-step]", async () => {
+    const fake = fakeHost();
+    let resolved = 0;
+    const engine = fakeEngine({
+      resolve_lowered_at: () => {
+        resolved += 1;
+        return { kind: "table", region: "r", columns: [], rows: [], rules: [], text: "", bounds: { widthPt: 1, heightPt: 1 } };
+      },
+    });
+    const s = await sessionWith(fake.host, engine);
+    s.addTableBinding("t1", "region", "q_all", [{ header: "SKU", expr: "sku" }]);
+    await s.previewRecord("t1", 0);
+    await s.previewRecord("t1", 1);
+    expect(fake.mutations).toEqual([]);
+    expect(resolved).toBe(0);
+  });
+
+  // DEFECT (deferred, plugin-only gap; plan item "re-lowering duplicates"):
+  // every barcode preview step draws a NEW symbol through insertPath and never
+  // removes the previous one, so stepping N records leaves N overlapping
+  // symbols in the frame. Removing the old one needs the minted ids of the
+  // last draw (MutationOutcome reports only the final createdId in the pinned
+  // plugin-api 0.2.33). Flip to `it` when the step replaces its symbol.
+  it.fails("DEFECT a barcode preview step replaces the previous symbol instead of adding one [data.bind.preview-step]", async () => {
+    const fake = fakeHost();
+    const engine = fakeEngine({
+      lower_barcode_at: () => ({
+        target: "rect-1",
+        symbology: "code128",
+        modules: [{ xPt: 0, yPt: 0, wPt: 1, hPt: 10 }],
+        text: "",
+      }),
+    } as Partial<DataEngineLike>);
+    const s = await sessionWith(fake.host, engine);
+    s.addBarcodeBinding("bc1", "rect-1", "q_all", "code128", "sku", { missing: "skip" });
+    await s.previewRecord("bc1", 0);
+    await s.previewRecord("bc1", 1);
+    const drawn = fake.mutations.filter((m) => m.op === "batch").length;
+    const removed = fake.mutations.filter((m) => m.op === "deleteFrame").length;
+    expect(drawn - removed).toBe(1);
+  });
 });

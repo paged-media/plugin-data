@@ -264,7 +264,7 @@ export interface GovernedCatalog {
 
 /** The §7.1 data-provider publication payload the engine produces — a schema +
  *  the stabilized rows + an opaque content revision (etag) — ready to register
- *  with the core data-provider registry once that contract lands (D-09). */
+ *  with the host data-provider registry (`host.dataProviders`, D-09). */
 export interface DataProviderPublication {
   id: string;
   category: string;
