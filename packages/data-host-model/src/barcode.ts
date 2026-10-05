@@ -28,7 +28,7 @@
 // bytes have no asset-store door — so a barcode is NEVER lowered to an image.
 // The VECTOR lane is the honest path and is also crisper (resolution-free).
 
-import type { Mutation, PageId } from "@paged-media/plugin-api";
+import type { ElementId, Mutation, PageId } from "@paged-media/plugin-api";
 
 import { BINDING_KEY } from "./binding";
 import type { LoweredBarcode } from "./lowered";
@@ -57,6 +57,41 @@ function rectAnchors(
   return corners.map((p) => ({ anchor: p, left: p, right: p }));
 }
 
+/** The path a batch just minted: core resolves the `$created` sentinel to the
+ *  last element created in the batch (`insertPath` mints a Polygon). */
+const CREATED_PATH: ElementId = { kind: "polygon", id: "$created" } as ElementId;
+
+/** The swatches a module is painted with. A barcode is black on the paper it
+ *  sits on: `Color/Black` is in every IDML document's swatch list (never
+ *  `Color/Registration`, which prints on every separation plate and would
+ *  smear the bars in a CMYK job), and the stroke is `Swatch/None`, because a
+ *  fresh path takes core's default 1 pt black stroke, which widens every bar
+ *  by its weight and breaks the bar/space ratios a scanner reads. */
+export const BARCODE_FILL_SWATCH = "Color/Black";
+export const BARCODE_STROKE_SWATCH = "Swatch/None";
+
+/** The paint ops for the module path just created. */
+function modulePaint(): Mutation[] {
+  return [
+    {
+      op: "setElementProperty",
+      args: {
+        elementId: CREATED_PATH,
+        path: "frameFillColor",
+        value: { type: "colorRef", value: BARCODE_FILL_SWATCH },
+      },
+    },
+    {
+      op: "setElementProperty",
+      args: {
+        elementId: CREATED_PATH,
+        path: "frameStrokeColor",
+        value: { type: "colorRef", value: BARCODE_STROKE_SWATCH },
+      },
+    },
+  ];
+}
+
 /** Where the barcode lands on the page: the bound frame's page-coordinate
  *  top-left (the modules are content-space offsets from it, §9.6). */
 export interface BarcodePlacement {
@@ -67,15 +102,16 @@ export interface BarcodePlacement {
 }
 
 /** Translate a lowered barcode into one `insertPath` closed filled-rect per dark
- *  module, wrapped in a single undoable `batch` that also stamps the binding
- *  envelope onto the batch-created group/first path (so one undo removes the
+ *  module, each followed by its paint (black fill, no stroke — see
+ *  `BARCODE_FILL_SWATCH`), wrapped in a single undoable `batch` that also stamps
+ *  the binding envelope onto the last created path (so one undo removes the
  *  whole symbol). Pure: no host import beyond wire TYPES. An empty barcode
  *  (missing-policy skip) yields an EMPTY ops list — the caller draws nothing,
  *  never a placeholder. The page origin is added to each content-space module.
  *
  *  `bindingJson` is the binding envelope (`makeEnvelope`); when supplied it is
- *  written via `setPluginMetadata` onto the `$created` sentinel of the FIRST
- *  inserted path so the symbol round-trips with the document. */
+ *  written via `setPluginMetadata` onto the `$created` sentinel (the LAST
+ *  inserted path) so the symbol round-trips with the document. */
 export function barcodeToMutations(
   barcode: LoweredBarcode,
   placement: BarcodePlacement,
@@ -92,9 +128,11 @@ export function barcodeToMutations(
         open: false,
       },
     });
+    ops.push(...modulePaint());
   }
-  // Stamp the binding envelope onto the first created path ($created sentinel)
-  // so an undo of the whole batch also removes the binding metadata.
+  // Stamp the binding envelope onto the LAST created path ($created resolves
+  // to the most recent creation in the batch) so an undo of the whole batch
+  // also removes the binding metadata.
   if (bindingJson && ops.length > 0) {
     ops.push({
       op: "setPluginMetadata",
