@@ -33,6 +33,9 @@ const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 function fakeHost() {
   const mutations: Mutation[] = [];
+  // The placeholder fields the host holds — insertField adds one, setFieldValue
+  // updates it — so the session's fresh placeholders() read sees what it placed.
+  const fields: { storyId: string; offset: number; plugin: string; key: string; value: string | null }[] = [];
   const host = {
     manifest: { id: "media.paged.data", version: "0.0.1" },
     log: silent,
@@ -45,9 +48,18 @@ function fakeHost() {
         if (m.op === "insertTextFrame") {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
         }
+        if (m.op === "insertField" && typeof m.args.field === "object") {
+          const p = m.args.field.placeholder;
+          fields.push({ storyId: m.args.storyId, offset: m.args.offset, plugin: p.plugin, key: p.key, value: p.value ?? null });
+        }
+        if (m.op === "setFieldValue") {
+          const f = fields.find((x) => x.storyId === m.args.storyId && x.offset === m.args.offset);
+          if (!f) return { applied: false, error: "no placeholder field" };
+          f.value = m.args.value ?? null;
+        }
         return { applied: true, createdId: null, pageIds: [] };
       },
-      placeholders: async () => [],
+      placeholders: async () => fields.map((f) => ({ ...f })),
       frameChain: async () => [],
       elementGeometry: async (ids: { id: string }[]) =>
         ids.map((i) => ({ id: { kind: "textFrame", id: i.id }, pageId: "p1", bounds: [0, 0, 100, 200] })),
@@ -189,5 +201,47 @@ describe("data_bind_preview_step session lane (§9)", () => {
     await s.previewRecord("bc1", 4);
     expect(seen).toEqual([4]);
     expect(fake.mutations.find((m) => m.op === "batch")).toBeDefined();
+  });
+
+  it("previewRecord on a table commits nothing: a table shows every record [data.bind.preview-step]", async () => {
+    const fake = fakeHost();
+    let resolved = 0;
+    const engine = fakeEngine({
+      resolve_lowered_at: () => {
+        resolved += 1;
+        return { kind: "table", region: "r", columns: [], rows: [], rules: [], text: "", bounds: { widthPt: 1, heightPt: 1 } };
+      },
+    });
+    const s = await sessionWith(fake.host, engine);
+    s.addTableBinding("t1", "region", "q_all", [{ header: "SKU", expr: "sku" }]);
+    await s.previewRecord("t1", 0);
+    await s.previewRecord("t1", 1);
+    expect(fake.mutations).toEqual([]);
+    expect(resolved).toBe(0);
+  });
+
+  // DEFECT (deferred, plugin-only gap; plan item "re-lowering duplicates"):
+  // every barcode preview step draws a NEW symbol through insertPath and never
+  // removes the previous one, so stepping N records leaves N overlapping
+  // symbols in the frame. Removing the old one needs the minted ids of the
+  // last draw (MutationOutcome reports only the final createdId in the pinned
+  // plugin-api 0.2.33). Flip to `it` when the step replaces its symbol.
+  it.fails("DEFECT a barcode preview step replaces the previous symbol instead of adding one [data.bind.preview-step]", async () => {
+    const fake = fakeHost();
+    const engine = fakeEngine({
+      lower_barcode_at: () => ({
+        target: "rect-1",
+        symbology: "code128",
+        modules: [{ xPt: 0, yPt: 0, wPt: 1, hPt: 10 }],
+        text: "",
+      }),
+    } as Partial<DataEngineLike>);
+    const s = await sessionWith(fake.host, engine);
+    s.addBarcodeBinding("bc1", "rect-1", "q_all", "code128", "sku", { missing: "skip" });
+    await s.previewRecord("bc1", 0);
+    await s.previewRecord("bc1", 1);
+    const drawn = fake.mutations.filter((m) => m.op === "batch").length;
+    const removed = fake.mutations.filter((m) => m.op === "deleteFrame").length;
+    expect(drawn - removed).toBe(1);
   });
 });

@@ -187,6 +187,45 @@ pub fn encode(symbology: Symbology, data: &str) -> Result<BarcodeGeometry, Barco
     }
 }
 
+/// Widen a geometry's quiet zone by `extra` light modules on each side, beyond
+/// the symbology default the encoder already applied (the binding's
+/// `quiet_zone` option, §9.7). The module grid grows by `2 * extra` columns —
+/// and rows for a matrix symbology, whose quiet zone surrounds all four sides
+/// — and every rect is re-expressed in the wider unit box, so the bars keep
+/// their module widths relative to each other and move inward. `extra == 0`
+/// returns the geometry unchanged. Pure.
+pub fn with_quiet_zone(geometry: BarcodeGeometry, extra: u32) -> BarcodeGeometry {
+    if extra == 0 {
+        return geometry;
+    }
+    let mx = f64::from(geometry.modules_x);
+    let my = f64::from(geometry.modules_y);
+    let e = f64::from(extra);
+    let matrix = geometry.symbology.is_matrix();
+    let nx = mx + 2.0 * e;
+    let (ny, ey) = if matrix { (my + 2.0 * e, e) } else { (my, 0.0) };
+    let rects = geometry
+        .rects
+        .iter()
+        .map(|r| BarcodeRect {
+            x: (r.x * mx + e) / nx,
+            w: r.w * mx / nx,
+            y: (r.y * my + ey) / ny,
+            h: r.h * my / ny,
+        })
+        .collect();
+    BarcodeGeometry {
+        rects,
+        modules_x: geometry.modules_x + 2 * extra,
+        modules_y: if matrix {
+            geometry.modules_y + 2 * extra
+        } else {
+            geometry.modules_y
+        },
+        ..geometry
+    }
+}
+
 // ── Shared 1D helpers ───────────────────────────────────────────────────────
 
 /// Build a 1D [`BarcodeGeometry`] from a module bitmap (true = dark) + a quiet
@@ -250,6 +289,44 @@ mod tests {
         assert_eq!(Symbology::Qr.id(), "qr");
         assert!(Symbology::Qr.is_matrix());
         assert!(!Symbology::Code128.is_matrix());
+    }
+
+    #[test]
+    #[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+    fn data_barcode_with_quiet_zone_pads_a_linear_symbol__feat__data_barcode_symbology() {
+        // dark, light, dark with no default quiet zone: 3 modules.
+        let g = linear_geometry(Symbology::Code128, &[true, false, true], 0, String::new());
+        let w = with_quiet_zone(g.clone(), 2);
+        assert_eq!((w.modules_x, w.modules_y), (7, 1));
+        // The bars sit at module columns 2 and 4 of 7, one module wide, full height.
+        let cols: Vec<(f64, f64)> = w.rects.iter().map(|r| (r.x * 7.0, r.w * 7.0)).collect();
+        for ((x, wd), (ex, ew)) in cols.iter().zip([(2.0, 1.0), (4.0, 1.0)]) {
+            assert!(
+                (x - ex).abs() < 1e-12 && (wd - ew).abs() < 1e-12,
+                "{cols:?}"
+            );
+        }
+        assert!(w.rects.iter().all(|r| r.y == 0.0 && r.h == 1.0));
+        // Zero is the identity.
+        assert_eq!(with_quiet_zone(g.clone(), 0), g);
+    }
+
+    #[test]
+    #[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+    fn data_barcode_with_quiet_zone_pads_all_four_sides_of_a_matrix__feat__data_barcode_symbology()
+    {
+        let g = encode(Symbology::Qr, "paged").unwrap();
+        let w = with_quiet_zone(g.clone(), 3);
+        assert_eq!(w.modules_x, g.modules_x + 6);
+        assert_eq!(w.modules_y, g.modules_y + 6);
+        assert_eq!(w.rects.len(), g.rects.len());
+        // Each module keeps its grid cell, shifted by 3 in x and y.
+        let (mx, nx) = (f64::from(g.modules_x), f64::from(w.modules_x));
+        for (a, b) in g.rects.iter().zip(&w.rects) {
+            assert!((b.x * nx - (a.x * mx + 3.0)).abs() < 1e-9);
+            assert!((b.y * nx - (a.y * mx + 3.0)).abs() < 1e-9);
+            assert!((b.w * nx - a.w * mx).abs() < 1e-9);
+        }
     }
 
     #[test]

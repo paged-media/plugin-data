@@ -231,3 +231,58 @@ fn data_barcode_lower_qr_modules_are_square_cells() {
         assert!((m.h_pt - cell).abs() < 1e-6);
     }
 }
+
+// ── data.barcode.lower — the binding's quiet zone reaches the encoder ───────
+
+/// Lower a Code-128 barcode binding through the session (the wasm surface's
+/// path) with `quiet_zone` extra modules per side, into a 200 × 50 pt box.
+fn session_lowered(quiet_zone: u32) -> data_lower::LoweredBarcode {
+    let mut s = data_js::core::DataSession::new(today());
+    s.define_query(Query {
+        id: QueryId::from("q1"),
+        sql: String::new(),
+        params: vec![],
+        shape: ResultShape::SingleRecord,
+    });
+    s.ingest_result(
+        QueryId::from("q1"),
+        record_set(&[("code", FieldType::Text)], vec![vec![t("ABC-123")]]),
+    );
+    let mut binding = barcode_binding(BarcodeSymbology::Code128, "code", BarcodeMissing::Skip);
+    if let Binding::Barcode { options, .. } = &mut binding {
+        options.quiet_zone = quiet_zone;
+    }
+    s.define_binding(data_core::BindingDef {
+        id: BindingId::from("bc"),
+        binding,
+    });
+    s.lower_barcode_sized(&BindingId::from("bc"), 200.0, 50.0)
+        .unwrap()
+}
+
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_barcode_quiet_zone_widens_the_margin__feat__data_barcode_symbology() {
+    let plain = session_lowered(0);
+    let wide = session_lowered(5);
+    // Five extra light modules on EACH side of the symbology default.
+    assert_eq!(wide.modules_x, plain.modules_x + 10);
+    assert_eq!(wide.modules_y, plain.modules_y);
+    // Same bars, narrower modules, the first bar pushed right by 5 modules.
+    assert_eq!(wide.modules.len(), plain.modules.len());
+    let unit_plain = 200.0 / f64::from(plain.modules_x);
+    let unit_wide = 200.0 / f64::from(wide.modules_x);
+    let first_plain = plain.modules[0].x_pt / unit_plain;
+    let first_wide = wide.modules[0].x_pt / unit_wide;
+    assert!(
+        (first_wide - first_plain - 5.0).abs() < 1e-9,
+        "{first_plain} → {first_wide}"
+    );
+    // Still a full-height 1D symbol inside the box.
+    assert!(wide
+        .modules
+        .iter()
+        .all(|m| m.y_pt == 0.0 && (m.h_pt - 50.0).abs() < 1e-9));
+    let last = wide.modules.last().unwrap();
+    assert!(last.x_pt + last.w_pt <= 200.0 - 5.0 * unit_wide + 1e-9);
+}

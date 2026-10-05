@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FIELD_PLUGIN,
+  backToFront,
   createRuleCellStyle,
   diffFields,
   idmlFit,
@@ -39,6 +40,25 @@ import {
   type RuleTarget,
 } from "../index";
 import type { ImageReference } from "../lowered";
+
+describe("backToFront — field write order [data.lower.v43-consumers]", () => {
+  it("orders each story's writes by descending offset, stories in first-seen order [data.lower.v43-consumers]", () => {
+    const w = (storyId: string, offset: number) => ({ storyId, offset });
+    expect(backToFront([w("a", 0), w("b", 4), w("a", 9), w("a", 3), w("b", 1)])).toEqual([
+      w("a", 9),
+      w("a", 3),
+      w("a", 0),
+      w("b", 4),
+      w("b", 1),
+    ]);
+  });
+
+  it("does not reorder its input in place [data.lower.v43-consumers]", () => {
+    const input = [{ storyId: "a", offset: 0 }, { storyId: "a", offset: 5 }];
+    backToFront(input);
+    expect(input.map((x) => x.offset)).toEqual([0, 5]);
+  });
+});
 
 describe("data_lower_variable_field (D-01 in-text variables)", () => {
   it("inserts a tagged placeholder field in this plugin's namespace", () => {

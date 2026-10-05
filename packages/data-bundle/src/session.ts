@@ -33,6 +33,7 @@ import type {
 
 import {
   FIELD_PLUGIN,
+  backToFront,
   dataSetPlan,
   setFieldValueMutation,
   visibilityTarget,
@@ -136,6 +137,20 @@ export interface SessionState {
   bindings: string[];
   /** Remote sources (M1, D-03) — each INERT until its origin is consented. */
   remote: RemoteSourceState[];
+  /** What went wrong (or was deliberately skipped) and where, newest last.
+   *  The panels render it; nothing that fails is left as a log line only. */
+  diagnostics: SessionDiagnostic[];
+}
+
+/** One visible diagnostic: a failure or a deliberate skip the user should see
+ *  (an import that failed, a binding that did not resolve, a field a refresh
+ *  left alone because it is pinned). `binding` names the binding when there is
+ *  one. */
+export interface SessionDiagnostic {
+  level: "error" | "warn" | "info";
+  source: "import" | "refresh" | "preview" | "binding" | "variables";
+  message: string;
+  binding?: string;
 }
 
 /** A column → field mapping for a table binding (panel-authored). */
@@ -249,7 +264,7 @@ export interface GovernedCatalog {
 
 /** The §7.1 data-provider publication payload the engine produces — a schema +
  *  the stabilized rows + an opaque content revision (etag) — ready to register
- *  with the core data-provider registry once that contract lands (D-09). */
+ *  with the host data-provider registry (`host.dataProviders`, D-09). */
 export interface DataProviderPublication {
   id: string;
   category: string;
@@ -286,6 +301,8 @@ export interface ImportReport {
 /** The session API the panels + commands drive. */
 export interface DataSourceSession {
   getState(): SessionState;
+  /** Drop every diagnostic (the panel's "clear" action). */
+  clearDiagnostics(): void;
   registerCsvSource(name: string, csvText: string): Promise<void>;
   /** Define a remote source (M1, §6.2/D-03): records the `{url, format,
    *  params}` descriptor only — NOTHING fetches and no engine boots. The
@@ -462,8 +479,11 @@ export interface DataSourceSession {
   /** D-01 refresh loop: re-enumerate the document's placeholder FIELDS
    *  (`host.document.placeholders()`, fresh-read addresses), resolve each
    *  `{plugin:"media.paged.data", key}` against its binding's expression, and
-   *  `setFieldValue` the CHANGED values (minimal/idempotent). Sync states
-   *  (Linked/Stale) update. Returns the number of fields re-resolved. */
+   *  `setFieldValue` the CHANGED values (minimal/idempotent), back to front
+   *  per story so no write moves an address still to be used. A field whose
+   *  binding is Pinned or Overridden is left alone and not resolved (ADR 553);
+   *  every skip and failure lands in `diagnostics`. Returns the number of
+   *  fields written. */
   refreshFields(): Promise<number>;
   /** D-13: evaluate a rule binding and apply its document-style action to the
    *  fired content (per-cell on a lowered table, or over a story range).
@@ -495,16 +515,22 @@ export interface DataSourceSession {
   /** §7.1 data-provider: publish a query's resolved result as a named,
    *  discoverable dataset for OTHER consumers (the sheets plugin sourcing a
    *  sheet from a governed query) — declaring the provider, never knowing who
-   *  consumes it. Returns the engine-side publication payload. REGISTRATION with
-   *  the core registry is the D-09 gate (no `host.dataProviders` door yet); this
-   *  returns the payload ready for that `register(...)` call and does NOT fake a
-   *  registration (reserved seams stay honest). Requires the query's result to be
-   *  ingested first (`refreshData`). */
+   *  consumes it. Returns the engine-side publication payload, and registers it
+   *  with the host's shared data-provider registry (`host.dataProviders`, D-09)
+   *  when the host injects one (`supports("dataProviders@1")`); a re-publish
+   *  bumps the existing registration's revision. On a host without the
+   *  registry nothing is registered and nothing is faked — check
+   *  `isProviderRegistered`. Requires the query's result to be ingested first
+   *  (`refreshData`). */
   publishProvider(
     queryId: string,
     providerId: string,
     category: string,
   ): Promise<DataProviderPublication>;
+  /** Whether `publishProvider` registered `providerId` with the host registry
+   *  (false on a host that injects none — the payload exists, nobody can read
+   *  it yet). */
+  isProviderRegistered(providerId: string): boolean;
   /** §7 governed catalog: enrich a query's resolved schema with a column-metadata
    *  sidecar (the bundle reads the sidecar JSON from the source's
    *  `metadata_sidecar` location) → documented columns + governance-drift
@@ -567,10 +593,12 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // §9.7: the bound rectangle a barcode binding draws its VECTOR modules onto
   // (its page-coordinate top-left is the modules' origin). Caller-supplied.
   const barcodeTargets = new Map<string, { elementId: string }>();
-  // D-01: where each variable binding's placeholder field landed
-  // (`{storyId, offset}`), so a re-lower does not double-insert. The refresh
-  // loop re-enumerates placeholders() fresh, so this is the placed-once guard.
-  const variableFields = new Map<string, { storyId: string; offset: number }>();
+  // D-01: the variable bindings whose placeholder field this session placed,
+  // so a re-lower or a preview step does not insert a second one. A set, not a
+  // map of offsets, on purpose: a field's offset is valid only until the next
+  // edit (core normalises it to the run start, and anything inserted in front
+  // moves it), so every write re-reads placeholders() for the address.
+  const placedVariables = new Set<string>();
   // D-13: the rule scope→query each rule binding evaluates against + its host
   // target (story range / table column). Caller-supplied.
   const ruleTargets = new Map<string, { query: string; target: RuleTarget }>();
@@ -586,6 +614,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
   let engine: DataEngineLike | null = null;
   let duck: DuckDBHandle | null = null;
+  const diagnostics: SessionDiagnostic[] = [];
   const state: SessionState = {
     status: "idle",
     message: "No data sources yet — import a CSV to begin.",
@@ -593,7 +622,77 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     queries: [],
     bindings: bindingIds,
     remote: [],
+    diagnostics,
   };
+
+  /** Record a diagnostic (bounded: the newest 50 stay) and log it. */
+  const DIAGNOSTICS_KEPT = 50;
+  function report(d: SessionDiagnostic): void {
+    diagnostics.push(d);
+    if (diagnostics.length > DIAGNOSTICS_KEPT) {
+      diagnostics.splice(0, diagnostics.length - DIAGNOSTICS_KEPT);
+    }
+    const line = `${d.source}${d.binding ? `(${d.binding})` : ""}: ${d.message}`;
+    if (d.level === "info") host.log.info(line);
+    else host.log.warn(line);
+  }
+
+  const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+  /** Our placeholder fields with key `key` (or all of ours), freshly read.
+   *  `null` when the read failed — reported against `source`. */
+  async function readOwnFields(
+    source: SessionDiagnostic["source"],
+    key?: string,
+  ): Promise<PlaceholderField[] | null> {
+    try {
+      const all = (await host.document.placeholders()) as readonly PlaceholderField[];
+      return all.filter((p) => p.plugin === FIELD_PLUGIN && (key === undefined || p.key === key));
+    } catch (err) {
+      report({
+        level: "error",
+        source,
+        binding: key,
+        message: `could not read the document's fields: ${errText(err)}`,
+      });
+      return null;
+    }
+  }
+
+  /** Write `value` into every given field, back to front per story, off the
+   *  addresses just read. Returns the number of writes the host applied; each
+   *  rejection is reported. */
+  async function writeFields(
+    source: SessionDiagnostic["source"],
+    writes: readonly { storyId: string; offset: number; key: string; value: string | null }[],
+  ): Promise<number> {
+    let applied = 0;
+    for (const w of backToFront(writes)) {
+      const out = await host.document.mutate(setFieldValueMutation(w.storyId, w.offset, w.value));
+      if (out.applied) {
+        applied += 1;
+      } else {
+        report({
+          level: "error",
+          source,
+          binding: w.key,
+          message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(out.error)})`,
+        });
+      }
+    }
+    return applied;
+  }
+
+  /** The engine's sync status for a binding (`"linked"`, `"pinned"`, …), or
+   *  null when it has none yet. */
+  function syncStatus(e: DataEngineLike, id: string): string | null {
+    try {
+      const st = e.sync_state(id) as { status?: unknown } | null;
+      return st && typeof st.status === "string" ? st.status : null;
+    } catch {
+      return null;
+    }
+  }
 
   /** The host's currently-consented origins; [] when the door is unavailable
    *  (network undeclared) — which keeps every remote source inert. */
@@ -704,7 +803,12 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         queries: Array.from(queries.keys()),
         bindings: [...bindingIds],
         remote: remoteSnapshot(),
+        diagnostics: diagnostics.map((d) => ({ ...d })),
       };
+    },
+
+    clearDiagnostics() {
+      diagnostics.length = 0;
     },
 
     async registerCsvSource(name, csvText) {
@@ -724,7 +828,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         state.status = "ready";
         state.message = `Source "${name}" registered.`;
       } catch (err) {
-        host.log.warn(`registerCsvSource: ${String(err)}`);
+        // Keep the more specific engine-missing / duckdb-missing status the
+        // boot helpers set; anything else is an import error.
+        if (state.status !== "engine-missing" && state.status !== "duckdb-missing") {
+          state.status = "error";
+        }
+        state.message = `Import of "${name}" failed: ${errText(err)}`;
+        report({ level: "error", source: "import", message: state.message });
       }
     },
 
@@ -834,6 +944,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     addVariableBinding(id, target, query, expr) {
+      if (expr.trim() === "") {
+        report({
+          level: "warn",
+          source: "binding",
+          binding: id,
+          message: "the binding has an empty expression — it resolves to nothing; bind a field",
+        });
+      }
       void engine?.define_binding({
         id,
         kind: "variable",
@@ -921,10 +1039,18 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       let e: DataEngineLike;
       try {
         e = await ensureEngine();
-      } catch {
+      } catch (err) {
+        report({ level: "error", source: "variables", message: `engine unavailable: ${errText(err)}` });
         return [];
       }
-      if (typeof e.variables !== "function") return [];
+      if (typeof e.variables !== "function") {
+        report({
+          level: "info",
+          source: "variables",
+          message: "the engine wasm predates the variables lane — rebuild it (scripts/build-wasm.sh)",
+        });
+        return [];
+      }
       try {
         const set = e.variables() as { variables?: VariableSummary[] } | null;
         const decls = (set?.variables ?? []) as { name: string; trait: string }[];
@@ -934,7 +1060,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           bound: bindingIds.includes(d.name),
         }));
       } catch (err) {
-        host.log.warn(`variables: ${String(err)}`);
+        report({ level: "error", source: "variables", message: errText(err) });
         return [];
       }
     },
@@ -1204,9 +1330,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         } else if (lowered?.kind === "variable") {
           // D-01: place the variable as a tagged placeholder field ONCE (keyed by
           // the binding id), then re-resolve it through the placeholders() loop.
-          if (!variableFields.has(id)) {
+          if (!placedVariables.has(id)) {
             const placed = await commitLoweredVariable(host, lowered as never, id);
-            if (placed) variableFields.set(id, placed);
+            if (placed) placedVariables.add(id);
           } else {
             // Already placed — a re-lower just re-resolves the live field.
             await this.refreshFields();
@@ -1344,19 +1470,43 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           typeof e.resolve_lowered_at === "function"
             ? (id: string) => e.resolve_lowered_at!(id, record)
             : (id: string) => e.resolve_lowered(id);
+        // A table renders its whole result whatever the record index, so a
+        // preview step has nothing new to show — and committing it again would
+        // insert a second table frame per step. Leave it to Lower.
+        if (kind === "table") {
+          state.status = "ready";
+          state.message = `Preview: table "${bindingId}" shows every record — nothing to step.`;
+          return;
+        }
         const lowered = resolveAt(bindingId) as { kind?: string } | null;
-        if (lowered?.kind === "table") {
-          await commitLoweredTable(host, lowered as never);
-        } else if (lowered?.kind === "variable") {
-          // Re-resolve the previewed value into the placed field (place once).
-          if (!variableFields.has(bindingId)) {
+        if (lowered?.kind === "variable") {
+          const v = lowered as { hidden?: boolean; text?: string };
+          const value = v.hidden ? null : (v.text ?? null);
+          // Re-read the field addresses on every step: an offset is valid only
+          // until the next edit, so a cached one writes into whatever now sits
+          // there (measured: another plugin's field, test/field-offsets-real-core).
+          const fields = await readOwnFields("preview", bindingId);
+          if (fields === null) return;
+          if (fields.length > 0) {
+            await writeFields(
+              "preview",
+              fields
+                .filter((f) => f.value !== value)
+                .map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
+            );
+          } else if (!placedVariables.has(bindingId)) {
+            // Not in the document yet: place it once (the normal lower lane).
             const placed = await commitLoweredVariable(host, lowered as never, bindingId);
-            if (placed) variableFields.set(bindingId, placed);
+            if (placed) placedVariables.add(bindingId);
           } else {
-            const v = lowered as { hidden?: boolean; text?: string };
-            const f = variableFields.get(bindingId)!;
-            const value = v.hidden ? null : (v.text ?? null);
-            await host.document.mutate(setFieldValueMutation(f.storyId, f.offset, value));
+            // Placed earlier and since removed from the document. Placing it
+            // again on every step would mint a frame per step; say so instead.
+            report({
+              level: "warn",
+              source: "preview",
+              binding: bindingId,
+              message: "the field is no longer in the document — Lower places it again",
+            });
           }
         } else if (lowered?.kind === "image") {
           const tgt = imageTargets.get(bindingId);
@@ -1374,54 +1524,72 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     async refreshFields() {
-      // D-01 refresh loop: re-enumerate OUR placeholder fields (fresh-read
-      // addresses — re-enumerate before each write pass), resolve each field's
-      // key (= binding id) against its binding, and setFieldValue the changed
-      // values. A field whose binding no longer resolves is left untouched.
-      if (!host.supports("document.placeholders@1")) return 0;
+      // D-01 refresh loop: ONE fresh placeholders() read, resolve each of our
+      // fields against its binding, then write the changed values BACK TO
+      // FRONT per story (see backToFront: core addresses a field by its run
+      // start, and a write shifts every later field in the story). Pinned and
+      // Overridden bindings are skipped before they are resolved, because a
+      // resolve re-links (ADR 553).
+      if (!host.supports("document.placeholders@1")) {
+        report({
+          level: "warn",
+          source: "refresh",
+          message: "the host predates the placeholder field model (document.placeholders@1)",
+        });
+        return 0;
+      }
       let e: DataEngineLike;
       try {
         e = await ensureEngine();
-      } catch {
+      } catch (err) {
+        report({ level: "error", source: "refresh", message: `engine unavailable: ${errText(err)}` });
         return 0;
       }
-      let fields: readonly PlaceholderField[] = [];
-      try {
-        fields = (await host.document.placeholders()) as readonly PlaceholderField[];
-      } catch {
-        return 0;
-      }
-      let written = 0;
+      const fields = await readOwnFields("refresh");
+      if (fields === null) return 0;
+
+      const writes: { storyId: string; offset: number; key: string; value: string | null }[] = [];
+      // Resolve each binding once, however many copies of its field exist.
+      const resolved = new Map<string, { value: string | null } | "kept" | "failed">();
       for (const f of fields) {
-        if (f.plugin !== FIELD_PLUGIN) continue; // our namespace only
         if (bindingKinds.get(f.key) !== "variable") continue; // a known variable binding
-        // Resolve the binding live (the engine re-evaluates the expression over
-        // the freshly-ingested record).
-        let next: string | null = f.value;
-        try {
-          const lowered = e.resolve_lowered(f.key) as
-            | { kind?: string; text?: string; hidden?: boolean }
-            | null;
-          if (lowered?.kind === "variable") {
-            next = lowered.hidden ? null : (lowered.text ?? null);
+        let r = resolved.get(f.key);
+        if (r === undefined) {
+          const status = syncStatus(e, f.key);
+          if (status === "pinned" || status === "overridden") {
+            r = "kept";
+          } else {
+            try {
+              const lowered = e.resolve_lowered(f.key) as
+                | { kind?: string; text?: string; hidden?: boolean }
+                | null;
+              r =
+                lowered?.kind === "variable"
+                  ? { value: lowered.hidden ? null : (lowered.text ?? null) }
+                  : { value: f.value };
+            } catch (err) {
+              report({
+                level: "warn",
+                source: "refresh",
+                binding: f.key,
+                message: `did not resolve — the field keeps its value: ${errText(err)}`,
+              });
+              r = "failed";
+            }
           }
-        } catch {
-          continue; // binding gone / unresolvable → leave the field untouched
+          resolved.set(f.key, r);
         }
-        if (next === f.value) continue; // minimal: only changed → a write
-        const out = await host.document.mutate(setFieldValueMutation(f.storyId, f.offset, next));
-        if (out.applied) {
-          written += 1;
-          // Sync state: a re-resolved field tracks its source again (Linked).
-          try {
-            e.relink(f.key);
-          } catch {
-            /* relink is best-effort; the engine owns the state machine */
-          }
-        }
+        if (r === "kept" || r === "failed") continue;
+        if (r.value === f.value) continue; // minimal: only changed → a write
+        writes.push({ storyId: f.storyId, offset: f.offset, key: f.key, value: r.value });
       }
+
+      const written = await writeFields("refresh", writes);
+      const kept = [...resolved.values()].filter((r) => r === "kept").length;
       state.status = "ready";
-      state.message = `Refreshed ${written} field(s) from the live data.`;
+      state.message =
+        `Refreshed ${written} field(s) from the live data.` +
+        (kept > 0 ? ` Left ${kept} pinned/overridden binding(s) unchanged.` : "");
       return written;
     },
 
@@ -1499,6 +1667,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       const e = await ensureEngine();
       const pub = e.publish_provider(queryId, providerId, category) as DataProviderPublication;
 
+      // D-09: the registry door exists in the contract; a host that injects it
+      // answers `supports("dataProviders@1")`.
       const registry = host.dataProviders;
       const wired = Boolean(registry) && host.supports("dataProviders@1");
       if (registry && wired) {
@@ -1529,9 +1699,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       } else {
         host.log.info(
           `data provider "${pub.id}" (category "${pub.category}", rev ${pub.revision}) ` +
-            "ready, but no shared host.dataProviders registry is wired yet (D-09: the door " +
-            "exists; the editor injects createDataProviderRegistry). Registration deferred " +
-            "until then — never faked.",
+            "ready, but this host injects no host.dataProviders registry — nothing " +
+            "registered, never faked.",
         );
       }
       return pub;
@@ -1552,6 +1721,10 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     getLocale() {
       return locale;
+    },
+
+    isProviderRegistered(providerId) {
+      return providerHandles.has(providerId);
     },
 
     listBindings() {

@@ -69,3 +69,62 @@ describe("arrowToRecordSet", () => {
     expect(rs.columns[1][0]).toEqual({ t: "number", v: 9.99 });
   });
 });
+
+// ── Real apache-arrow vectors: decimal scale and nulls (wave 0, data bug f) ──
+
+import * as arrow from "apache-arrow";
+
+/** A 128-bit Decimal vector of UNSCALED integers (`null` → a null slot). */
+function decimalVector(unscaled: (bigint | null)[], scale: number, precision = 18) {
+  const words = new Uint32Array(unscaled.length * 4);
+  const bitmap = new Uint8Array(Math.ceil(unscaled.length / 8));
+  unscaled.forEach((v, i) => {
+    if (v === null) return;
+    bitmap[i >> 3] |= 1 << (i & 7);
+    const b = BigInt.asUintN(128, v);
+    for (let k = 0; k < 4; k++) words[i * 4 + k] = Number((b >> BigInt(32 * k)) & 0xffffffffn);
+  });
+  const nulls = unscaled.filter((v) => v === null).length;
+  return arrow.makeVector(
+    arrow.makeData({
+      type: new arrow.Decimal(scale, precision, 128),
+      length: unscaled.length,
+      nullCount: nulls,
+      nullBitmap: bitmap,
+      data: words,
+    }),
+  );
+}
+
+describe("arrowToRecordSet over real Arrow vectors [data.query.seam]", () => {
+  it("a Decimal column keeps its scale, one value per row [data.query.seam]", () => {
+    const table = new arrow.Table({
+      price: decimalVector([1234n, -560n, null, 100000000000000001n], 2),
+    });
+    const rs = arrowToRecordSet(table as unknown as ArrowLikeTable);
+    expect(rs.row_count).toBe(4);
+    expect(rs.schema.fields).toEqual([{ name: "price", ty: "float", nullable: true }]);
+    expect(rs.columns[0]).toEqual([
+      { t: "number", v: 12.34 },
+      { t: "number", v: -5.6 },
+      { t: "null" },
+      // 1000000000000000.01: beyond f64 precision, rounded the way the decimal
+      // string would be, not the unscaled integer divided in floating point.
+      { t: "number", v: Number("1000000000000000.01") },
+    ]);
+  });
+
+  it("a scale-0 Decimal is an integer value [data.query.seam]", () => {
+    const table = new arrow.Table({ qty: decimalVector([42n, -7n], 0) });
+    expect(arrowToRecordSet(table as unknown as ArrowLikeTable).columns[0]).toEqual([
+      { t: "number", v: 42 },
+      { t: "number", v: -7 },
+    ]);
+  });
+
+  it("a null in a numeric column stays null, not 0 [data.query.seam]", () => {
+    const table = arrow.tableFromArrays({ price: [1.5, null, 3] as (number | null)[] } as never);
+    const rs = arrowToRecordSet(table as unknown as ArrowLikeTable);
+    expect(rs.columns[0]).toEqual([{ t: "number", v: 1.5 }, { t: "null" }, { t: "number", v: 3 }]);
+  });
+});

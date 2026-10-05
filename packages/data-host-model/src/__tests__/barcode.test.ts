@@ -90,11 +90,12 @@ describe("data-host-model · barcode (VECTOR lane, §9.7)", () => {
     expect(a[3]).toEqual([36, 72]); // bottom-left
   });
 
-  it("stamps the binding envelope onto the first created path when supplied", () => {
+  it("stamps the binding envelope onto a created path when supplied", () => {
     const env = makeEnvelope({ kind: "barcode", target: "bc-frame", symbology: "code128" });
     const ops = barcodeToMutations(code128(), placement, env);
-    // 2 paths + 1 metadata op.
-    expect(ops).toHaveLength(3);
+    // 2 painted paths + 1 metadata op.
+    expect(ops.filter((o) => o.op === "insertPath")).toHaveLength(2);
+    expect(ops.filter((o) => o.op === "setPluginMetadata")).toHaveLength(1);
     const meta = ops.find((o) => o.op === "setPluginMetadata") as
       | { args: { key: string; elementId: { id: string } } }
       | undefined;
@@ -103,13 +104,40 @@ describe("data-host-model · barcode (VECTOR lane, §9.7)", () => {
   });
 
   it("lowers QR modules as square cells offset by the page origin", () => {
-    const ops = barcodeToMutations(qr(), placement);
+    const ops = barcodeToMutations(qr(), placement).filter((o) => o.op === "insertPath");
     expect(ops).toHaveLength(3); // 3 dark modules, no envelope
     const third = ops[2] as { args: { anchors: { anchor: [number, number] }[] } };
     // The 3rd module is at content (0, 4); page origin (36, 36) → top-left (36, 40).
     const a = third.args.anchors.map((p) => p.anchor);
     expect(a[0]).toEqual([36, 40]);
     expect(a[2]).toEqual([40, 44]); // +4 × +4 (a square cell)
+  });
+
+  it("paints every module: black fill, no stroke, on the path just created [data.barcode.symbology]", () => {
+    const ops = barcodeToMutations(code128(), placement, makeEnvelope({ kind: "barcode" }));
+    const created = { kind: "polygon", id: "$created" };
+    const paint = [
+      {
+        op: "setElementProperty",
+        args: { elementId: created, path: "frameFillColor", value: { type: "colorRef", value: "Color/Black" } },
+      },
+      {
+        op: "setElementProperty",
+        args: { elementId: created, path: "frameStrokeColor", value: { type: "colorRef", value: "Swatch/None" } },
+      },
+    ];
+    // insertPath, fill, stroke — per module — then the envelope.
+    expect(ops.map((o) => o.op)).toEqual([
+      "insertPath",
+      "setElementProperty",
+      "setElementProperty",
+      "insertPath",
+      "setElementProperty",
+      "setElementProperty",
+      "setPluginMetadata",
+    ]);
+    expect(ops.slice(1, 3)).toEqual(paint);
+    expect(ops.slice(4, 6)).toEqual(paint);
   });
 
   it("an empty barcode (missing-policy skip) yields no ops, never a placeholder", () => {

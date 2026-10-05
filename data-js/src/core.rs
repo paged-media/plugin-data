@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use data_automation::{plan_batch, BatchMode, BatchPlan};
-use data_barcode::{encode, Symbology};
+use data_barcode::{encode, with_quiet_zone, Symbology};
 use data_bind::{
     diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
     ResolutionEngine, ResolveError, Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
@@ -127,6 +127,8 @@ fn encode_barcode(
     }
     let geometry = encode(to_encoder_symbology(rb.symbology), &rb.value)
         .map_err(|e| SessionError::Decode(e.to_string()))?;
+    // The binding's extra quiet zone, beyond the symbology default (§9.7).
+    let geometry = with_quiet_zone(geometry, rb.quiet_zone);
     Ok(lower_barcode(
         rb.target.clone(),
         &geometry,

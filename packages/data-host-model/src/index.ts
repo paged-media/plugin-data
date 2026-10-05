@@ -79,6 +79,7 @@ export {
   insertFieldMutation,
   setFieldValueMutation,
   diffFields,
+  backToFront,
   ownFields,
   idmlFit,
   placeableUri,

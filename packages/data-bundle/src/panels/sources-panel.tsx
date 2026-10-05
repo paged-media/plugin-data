@@ -32,6 +32,7 @@ import { useState, type ChangeEvent, type CSSProperties, type ReactElement } fro
 import type { BundleHost } from "@paged-media/plugin-api";
 
 import type { DataSourceSession, RemoteFormat } from "../session";
+import { DiagnosticsList } from "./diagnostics";
 
 const wrap: CSSProperties = {
   display: "flex",
@@ -189,6 +190,14 @@ export function makeSourcesPanel(
           )}
         </div>
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
+        <DiagnosticsList
+          diagnostics={snapshot.diagnostics}
+          sources={["import"]}
+          onClear={() => {
+            session.clearDiagnostics();
+            refresh();
+          }}
+        />
         {/* Developer knowledge (was user-facing copy): the query engine is
             the vendored DuckDB-WASM (run scripts/vendor-duckdb.sh); the
             engine wasm is scripts/build-wasm.sh. Remote sources (M1) are

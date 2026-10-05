@@ -19,10 +19,10 @@
 // The Dataset panel — surfaces the three dataset-level capabilities over a
 // selected query: the §7 governed catalog (documented columns + governance
 // drift), the §10 batch plan (per-record / per-group / one-catalog generation
-// units), and the §7.1 data-provider publish (ready to register when the D-09
-// SDK door lands). Honest about the gates: no sidecar file read yet
-// (data.governed.extract), no host.dataProviders registry (D-09), no native
-// batch execution (napi-rs) — the ENGINE sides are done; these are the seams.
+// units), and the §7.1 data-provider publish (registered with the host's
+// shared registry, D-09, when the host injects one). Honest about the gates: no
+// sidecar file read yet (data.governed.extract) and no native batch execution
+// (napi-rs) — the ENGINE sides are done; these are the seams.
 
 import { useState, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
@@ -153,11 +153,12 @@ export function makeDatasetPanel(
       setError("");
       try {
         const pub = await session.publishProvider(selected, `${selected}-dataset`, "dataset");
-        // Technical detail (kept for developers): registration is DEFERRED —
-        // it awaits the host.dataProviders door (RFI D-09); the engine-side
-        // publication payload is real.
+        // Registered with the host's data-provider registry (D-09) when the
+        // host injects one; only a host without it gets the "can't share" note.
         setProviderNote(
-          `Provider "${pub.id}" (revision ${pub.revision}) is ready; this editor can't share it with other plugins yet.`,
+          session.isProviderRegistered(pub.id)
+            ? `Provider "${pub.id}" (revision ${pub.revision}) is shared with other plugins.`
+            : `Provider "${pub.id}" (revision ${pub.revision}) is ready; this editor can't share it with other plugins yet.`,
         );
       } catch (e) {
         setError(String(e));
@@ -473,13 +474,10 @@ export function makeDatasetPanel(
         {/* Developer knowledge (was user-facing copy) — the honest gates:
             the metadata sidecar is read from the source's metadata_sidecar
             by the broader data.governed.extract path (file/URL/DB); provider
-            registration awaits the host.dataProviders door (D-09); native
-            server/CI batch awaits the napi-rs binding. The engine sides are
-            done. */}
-        <p style={note}>
-          Sharing datasets with other plugins and server-side batch runs
-          aren&apos;t available in this editor yet.
-        </p>
+            registration rides host.dataProviders (D-09) when the host injects
+            it; native server/CI batch awaits the napi-rs binding. The engine
+            sides are done. */}
+        <p style={note}>Server-side batch runs aren&apos;t available in this editor yet.</p>
       </div>
     );
   };

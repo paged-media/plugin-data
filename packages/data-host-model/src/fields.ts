@@ -45,11 +45,9 @@ export const FIELD_PLUGIN = "media.paged.data";
  *  `value` is the engine-resolved display (null ⇒ the field shows its `<key>`
  *  token until refreshed).
  *
- *  CARET-POSITION GAP (honest): the SDK exposes no caret/selection read for a
- *  bundle, so `offset` is caller-supplied — the consumer inserts at a known
- *  story offset (story start, 0) rather than "the user's caret". The field is a
- *  real tagged run either way; only WHERE it lands is coarse until a caret-read
- *  door exists. */
+ *  `offset` is caller-supplied, in core's field convention: chars of the
+ *  story's runs, no paragraph separators. The bundle takes it from the user's
+ *  caret (C-9) when there is one, else story start. */
 export function insertFieldMutation(
   storyId: string,
   offset: number,
@@ -121,6 +119,33 @@ export function diffFields(
       changed: has && next !== f.value,
     };
   });
+}
+
+/** Order field writes so that each one leaves the addresses of the writes
+ *  still to come valid: per story, highest offset first (stories keep the
+ *  order they first appear in).
+ *
+ *  Why (read from core, 2026-10-05): `placeholders()` reports a field as the
+ *  char offset of its run start, and `setFieldValue` replaces that run's text,
+ *  so a write shifts every LATER field in the same story by the length change
+ *  and leaves earlier ones, and other stories, where they were. Written front
+ *  to back off one read, the next write can land inside the field just written
+ *  and overwrite it; written back to front, every address is still the one
+ *  that was read. Pure: no host access. */
+export function backToFront<T extends { storyId: string; offset: number }>(
+  writes: readonly T[],
+): T[] {
+  const byStory = new Map<string, T[]>();
+  for (const w of writes) {
+    const list = byStory.get(w.storyId);
+    if (list) list.push(w);
+    else byStory.set(w.storyId, [w]);
+  }
+  const out: T[] = [];
+  for (const list of byStory.values()) {
+    out.push(...[...list].sort((a, b) => b.offset - a.offset));
+  }
+  return out;
 }
 
 /** Keep only the fields this plugin owns (defence in depth — the host already

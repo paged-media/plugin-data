@@ -161,39 +161,25 @@ export async function commitLoweredTable(
   return frameId;
 }
 
-/** The C-9 caret read door as this bundle consumes it.
+/** Read the user's text caret (C-9, `host.text.caret()`, published in
+ *  plugin-api since 0.2.30-canary.0), or null when the host has no caret door /
+ *  no active text caret. Never throws: an older or partial host can answer
+ *  `supports` without injecting the surface, and a caret inside a table cell
+ *  answers `null` on purpose so cell-local offsets never leak as story-local.
  *
- *  THE STATE OF THIS, PRECISELY (checked 2026-08-05, do not soften it): the door
- *  is BUILT in `plugin-sdk` main — `host.text.caret(): {storyId, offset} | null`
- *  behind `supports("text.caret@1")` (commit fbe007d) — but it is in NO
- *  PUBLISHED `@paged-media/plugin-api` canary: the newest published version
- *  (0.2.27-canary.1) was cut from the commit immediately BEFORE it, and eleven
- *  contract commits have landed since without a bump. So the member is absent
- *  from the types this package compiles against, and declaring it structurally
- *  is the only way to consume it without pinning an unpublished contract.
- *
- *  This is therefore NOT a workaround for a missing door — it is a version
- *  probe for a door that exists upstream. It is written so that the day a canary
- *  carrying C-9 publishes, the caret path lights up with ZERO code change here:
- *  we gate on the CAPABILITY (`supports`) plus a runtime `typeof` check, never
- *  on a type. Both branches are tested. */
-interface CaretReader {
-  caret?(): { storyId: string; offset: number } | null;
-}
-
-/** Read the user's text caret, or null when the host has no caret door / no
- *  active text caret. Never throws (an older host that answers `supports` true
- *  but has no member, or a caret inside a table cell — which C-9 answers `null`
- *  for on purpose so cell-local offsets never leak as story-local). */
+ *  OFFSET CONVENTION — an open core question, not fixed here. The caret
+ *  answers in the `ContentSelection` convention (UTF-8 bytes of the runs plus
+ *  one synthetic `\n` per paragraph boundary), while `insertField`,
+ *  `setFieldValue` and `placeholders()` count CHARS with no paragraph
+ *  separators (core paged-mutate apply/path_topology.rs). The two agree only
+ *  in the first paragraph of ASCII text; elsewhere a caret offset passed
+ *  straight to `insertField` lands early. */
 function readCaret(host: BundleHost): { storyId: string; offset: number } | null {
   try {
     if (!host.supports("text.caret@1")) return null;
-    // The whole `text` surface can be absent on an older/partial host — probe
-    // the surface before the member, or a `supports` that answers optimistically
-    // takes the placement path down with a TypeError.
-    const reader = (host.text as unknown as CaretReader | undefined) ?? undefined;
-    if (!reader || typeof reader.caret !== "function") return null;
-    return reader.caret() ?? null;
+    const text = host.text as BundleHost["text"] | undefined;
+    if (!text || typeof text.caret !== "function") return null;
+    return text.caret() ?? null;
   } catch {
     return null;
   }
@@ -203,16 +189,13 @@ function readCaret(host: BundleHost): { storyId: string; offset: number } | null
  *
  *  Precedence, best first:
  *   1. **the user's caret** (C-9) — a real insertion point, which is what
- *      "insert a variable here" has always meant. Requires a published contract
- *      carrying the door; see [`CaretReader`] for exactly where that stands.
+ *      "insert a variable here" has always meant (see [`readCaret`] for the
+ *      offset-convention caveat).
  *   2. the SELECTED text frame's story, at offset 0.
  *   3. a fresh text frame minted on the active page, at offset 0.
  *
- *  D-01 CARET RESIDUAL — the current status: still OPEN, and not because the
- *  door is missing (it is not) but because it is unpublished. Levels 2/3 remain
- *  the shipped behavior until a canary carries C-9. A field placed at story
- *  start is a real tagged run either way — it survives edits and re-resolves
- *  live; only WHERE a new field first lands is coarse. */
+ *  A field placed at story start is a real tagged run either way — it survives
+ *  edits and re-resolves live; only WHERE a new field first lands differs. */
 async function variableInsertionPoint(
   host: BundleHost,
 ): Promise<{ storyId: string; offset: number } | null> {
