@@ -2,9 +2,9 @@
 // (the published @paged-media/canvas-wasm, booted in Node by plugin-sdk's
 // createHeadlessHost). The same pattern plugin-draw's conformance specs use.
 //
-// plugin-data does not (yet) carry canvas-wasm as a devDependency, so the
-// engine is found by probing: PAGED_ENGINE_FROM first (a directory whose
-// node_modules holds a canvas-wasm build), then this package, then an editor
+// canvas-wasm is a devDependency of this package; the engine is found by
+// probing: PAGED_ENGINE_FROM first (a directory whose node_modules holds a
+// canvas-wasm build, e.g. a local sync-wasm build), then this package, then an editor
 // checkout above this repo (`~/paged/editor/packages/client` in the local
 // workspace layout, `../editor/packages/client` in the sibling CI layout).
 // When nothing is found the suite SKIPS — unless REQUIRE_REAL_CORE=1, under

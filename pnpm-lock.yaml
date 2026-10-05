@@ -17,6 +17,9 @@ importers:
 
   packages/data-bundle:
     devDependencies:
+      '@paged-media/canvas-wasm':
+        specifier: 0.67.0
+        version: 0.67.0
       '@paged-media/data-host-model':
         specifier: workspace:*
         version: link:../data-host-model
@@ -372,6 +375,9 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+
+  '@paged-media/canvas-wasm@0.67.0':
+    resolution: {integrity: sha512-V/hk/fkMOqI0AL0kFcPnsywetkSJnT1EBTZGRMSL2/t9o1H+Ug3De1MiXwuR2gD5CbqdoGQbtLfMxdBZWsmYng==}
 
   '@paged-media/plugin-api@0.2.39-canary.0':
     resolution: {integrity: sha512-bdOOQreSPcgyrFAhdM3r2JdtcOzav/P2LQ5D+ZxN9NNIfm3g0lAj0Z+ayaq6clwHIQPkVlBT7KRW8dR7MCg1Jw==}
@@ -1165,6 +1171,8 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@paged-media/canvas-wasm@0.67.0': {}
 
   '@paged-media/plugin-api@0.2.39-canary.0':
     dependencies:

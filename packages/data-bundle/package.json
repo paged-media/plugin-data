@@ -1,7 +1,7 @@
 {
   "name": "@paged-media/data",
   "private": false,
-  "version": "0.1.0-canary.9",
+  "version": "0.1.0-canary.10",
   "license": "AGPL-3.0-only OR LicenseRef-PMEL",
   "type": "module",
   "main": "./src/index.ts",
@@ -25,6 +25,7 @@
     "react": "^18.3.0"
   },
   "devDependencies": {
+    "@paged-media/canvas-wasm": "0.67.0",
     "@paged-media/data-host-model": "workspace:*",
     "@paged-media/plugin-api": "0.2.39-canary.0",
     "@paged-media/plugin-sdk": "0.2.39-canary.0",

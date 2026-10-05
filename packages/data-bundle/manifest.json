@@ -1,7 +1,7 @@
 {
   "id": "media.paged.data",
   "name": "paged.data",
-  "version": "0.1.0-canary.9",
+  "version": "0.1.0-canary.10",
   "apiVersion": "^0.2",
   "publisher": "paged.media",
   "capabilities": {

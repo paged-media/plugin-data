@@ -88,6 +88,7 @@ jobs:
           # run. REQUIRE_REAL_DUCKDB does the same for the DuckDB specs.
           REQUIRE_REAL_ENGINE: "1"
           REQUIRE_REAL_DUCKDB: "1"
+          REQUIRE_REAL_CORE: "1"
         run: |
           pnpm -r --no-bail --dir plugin-data exec \
             vitest run --reporter=default --reporter=junit --outputFile.junit=junit.xml
