@@ -185,18 +185,9 @@ proptest! {
         let key = |r: &RecordSet, i: usize| r.value(i, 0).unwrap().as_display();
         let mut applied: BTreeMap<String, String> =
             (0..o.row_count).map(|i| (key(&o, i), format!("{:?}", o.value(i, 1)))).collect();
-        // `removed` carries diff's internal key encoding (DP-3), so learn each
-        // old row's encoded key from a one-row diff against nothing.
-        let encoded: BTreeMap<String, String> = old
-            .iter()
-            .map(|(k, v)| {
-                let one = make(&BTreeMap::from([(*k, *v)]));
-                (diff(&one, &make(&BTreeMap::new()), &["id".to_string()]).removed[0].clone(), format!("k{k}"))
-            })
-            .collect();
-        for k in &delta.removed {
-            let raw = encoded.get(k).unwrap_or_else(|| panic!("removed key {k} is no old row's key"));
-            prop_assert!(applied.remove(raw).is_some());
+        // `removed` names old rows by index (DP-3, fixed).
+        for &i in &delta.removed {
+            prop_assert!(applied.remove(&key(&o, i)).is_some());
         }
         for &i in delta.inserted.iter().chain(&delta.updated) {
             applied.insert(key(&n, i), format!("{:?}", n.value(i, 1)));
@@ -482,17 +473,19 @@ fn defect_dp2_payload_f64_drifts_through_json__feat__data_plugin_bundle() {
     );
 }
 
-/// DEFECT DP-3: `RowDelta.removed` holds diff's internal key encoding
-/// (`"<len>:<value>\u{1f}"`), not the old row's key values or index, so a change
-/// report cannot name the rows it removed.
+/// `RowDelta.removed` names the removed rows by their index in `old`, so a
+/// change report can show their values (was defect DP-3: it held diff's
+/// internal key encoding, `"3:k2\u{1f}"`).
 #[test]
-fn defect_dp3_diff_removed_keys_are_internal_encodings__feat__data_bind_engine() {
-    let old = record_set(&[("id", FieldType::Text)], vec![vec![Value::text("k2")]]);
-    let new = record_set(&[("id", FieldType::Text)], vec![vec![]]);
-    assert_eq!(
-        diff(&old, &new, &["id".to_string()]).removed,
-        vec!["3:k2\u{1f}".to_string()]
+fn data_bind_diff_removed_names_old_rows__feat__data_bind_engine() {
+    let old = record_set(
+        &[("id", FieldType::Text)],
+        vec![vec![Value::text("k1"), Value::text("k2")]],
     );
+    let new = record_set(&[("id", FieldType::Text)], vec![vec![Value::text("k1")]]);
+    let removed = diff(&old, &new, &["id".to_string()]).removed;
+    assert_eq!(removed, vec![1]);
+    assert_eq!(old.value(removed[0], 0), Some(&Value::text("k2")));
 }
 
 /// A variable binding reads record 0 of the STABILIZED order, so the same rows

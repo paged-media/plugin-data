@@ -237,8 +237,8 @@ independent decoder here, because no small, permissive, pure-Rust one exists.
   big-endian two's-complement byte keys. The sort key now flips the sign bit.
 - **DP-2.** An f64 in the payload drifts by one ulp through serde_json, which is built without
   `float_roundtrip`. The wasm boundary is exact.
-- **DP-3.** `RowDelta.removed` holds internal key encodings (`"3:k2\u{1f}"`), so a change report
-  cannot name the rows it removed.
+- **DP-3.** FIXED (Wave 2): `RowDelta.removed` held internal key encodings (`"3:k2\u{1f}"`), so a
+  change report could not name the rows it removed. It now holds their indices in `old`.
 - **DP-4.** FIXED (Wave 2): a variable binding followed the delivery order, so the same rows
   delivered in another order reported a change. Record N is now record N of the stabilized
   order, for every per-record kind.
