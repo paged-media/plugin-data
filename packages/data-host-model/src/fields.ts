@@ -123,6 +123,33 @@ export function diffFields(
   });
 }
 
+/** Order field writes so that each one leaves the addresses of the writes
+ *  still to come valid: per story, highest offset first (stories keep the
+ *  order they first appear in).
+ *
+ *  Why (read from core, 2026-10-05): `placeholders()` reports a field as the
+ *  char offset of its run start, and `setFieldValue` replaces that run's text,
+ *  so a write shifts every LATER field in the same story by the length change
+ *  and leaves earlier ones, and other stories, where they were. Written front
+ *  to back off one read, the next write can land inside the field just written
+ *  and overwrite it; written back to front, every address is still the one
+ *  that was read. Pure: no host access. */
+export function backToFront<T extends { storyId: string; offset: number }>(
+  writes: readonly T[],
+): T[] {
+  const byStory = new Map<string, T[]>();
+  for (const w of writes) {
+    const list = byStory.get(w.storyId);
+    if (list) list.push(w);
+    else byStory.set(w.storyId, [w]);
+  }
+  const out: T[] = [];
+  for (const list of byStory.values()) {
+    out.push(...[...list].sort((a, b) => b.offset - a.offset));
+  }
+  return out;
+}
+
 /** Keep only the fields this plugin owns (defence in depth — the host already
  *  scopes the enumeration, but a pure filter keeps the refresh honest if a
  *  broader read ever lands). */

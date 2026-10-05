@@ -85,18 +85,20 @@ describe("session.publishProvider (D-09, §7.1)", () => {
     expect(pub.schema.fields[0].name).toBe("sku");
   });
 
-  it("logs the honest 'registration deferred' note when no host registry is wired", async () => {
+  it("registers nothing, and says so, when the host injects no registry", async () => {
     const host = fakeHost(false);
     const session = createSession(host, 0);
     await session.publishProvider("q1", "p", "dataset");
-    expect(host.logs.some((m) => m.includes("D-09"))).toBe(true);
+    expect(host.logs.some((m) => m.includes("nothing registered"))).toBe(true);
+    expect(session.isProviderRegistered("p")).toBe(false);
   });
 
   it("registers with host.dataProviders (no defer note) once a registry is wired", async () => {
     const host = fakeHost(true);
     const session = createSession(host, 0);
     await session.publishProvider("q1", "pricing-dataset", "dataset");
-    expect(host.logs.some((m) => m.includes("D-09"))).toBe(false);
+    expect(host.logs.some((m) => m.includes("nothing registered"))).toBe(false);
+    expect(session.isProviderRegistered("pricing-dataset")).toBe(true);
     expect(host.registered).toHaveLength(1);
     expect(host.registered[0]).toMatchObject({ id: "pricing-dataset", category: "dataset" });
   });

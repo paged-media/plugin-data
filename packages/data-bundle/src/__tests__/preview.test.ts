@@ -33,6 +33,9 @@ const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 function fakeHost() {
   const mutations: Mutation[] = [];
+  // The placeholder fields the host holds — insertField adds one, setFieldValue
+  // updates it — so the session's fresh placeholders() read sees what it placed.
+  const fields: { storyId: string; offset: number; plugin: string; key: string; value: string | null }[] = [];
   const host = {
     manifest: { id: "media.paged.data", version: "0.0.1" },
     log: silent,
@@ -45,9 +48,18 @@ function fakeHost() {
         if (m.op === "insertTextFrame") {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
         }
+        if (m.op === "insertField" && typeof m.args.field === "object") {
+          const p = m.args.field.placeholder;
+          fields.push({ storyId: m.args.storyId, offset: m.args.offset, plugin: p.plugin, key: p.key, value: p.value ?? null });
+        }
+        if (m.op === "setFieldValue") {
+          const f = fields.find((x) => x.storyId === m.args.storyId && x.offset === m.args.offset);
+          if (!f) return { applied: false, error: "no placeholder field" };
+          f.value = m.args.value ?? null;
+        }
         return { applied: true, createdId: null, pageIds: [] };
       },
-      placeholders: async () => [],
+      placeholders: async () => fields.map((f) => ({ ...f })),
       frameChain: async () => [],
       elementGeometry: async (ids: { id: string }[]) =>
         ids.map((i) => ({ id: { kind: "textFrame", id: i.id }, pageId: "p1", bounds: [0, 0, 100, 200] })),
