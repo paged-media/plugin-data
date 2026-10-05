@@ -21,7 +21,12 @@ OUT=packages/data-bundle/bin
 # total. Mirrors plugin-sdk WASM_BUDGETS — change them together.
 BUDGET=$((100 * 1000 * 1000))
 
-cargo build --release --target wasm32-unknown-unknown -p data-js
+# Stamp the source hash into the wasm (option_env!, which cargo tracks)
+# and beside it, so packages/data-bundle/test/wasm-fresh.spec.ts can tell
+# a wasm built from these sources from one built from older ones.
+SOURCE_HASH=$(node scripts/source-hash.mjs)
+DATA_JS_SOURCE_HASH=$SOURCE_HASH \
+  cargo build --release --target wasm32-unknown-unknown -p data-js
 
 # Pin check: wasm-bindgen-cli must match the Cargo.lock wasm-bindgen.
 LOCKED=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | head -1 | cut -d'"' -f2)
@@ -32,7 +37,7 @@ if [ "$LOCKED" != "$CLI" ]; then
   exit 1
 fi
 
-wasm-bindgen target/wasm32-unknown-unknown/release/data_js.wasm \
+wasm-bindgen "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/data_js.wasm" \
   --target web --out-dir "$OUT"
 
 if command -v wasm-opt >/dev/null 2>&1; then
@@ -40,6 +45,8 @@ if command -v wasm-opt >/dev/null 2>&1; then
 else
   echo "warning: wasm-opt not found — shipping unoptimized wasm (CI optimizes)" >&2
 fi
+
+echo "$SOURCE_HASH" > "$OUT/SOURCE_HASH"
 
 SIZE=$(wc -c < "$OUT/data_js_bg.wasm" | tr -d ' ')
 echo "data_js_bg.wasm: $SIZE bytes (budget $BUDGET)"
