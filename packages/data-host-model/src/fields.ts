@@ -45,11 +45,9 @@ export const FIELD_PLUGIN = "media.paged.data";
  *  `value` is the engine-resolved display (null ⇒ the field shows its `<key>`
  *  token until refreshed).
  *
- *  CARET-POSITION GAP (honest): the SDK exposes no caret/selection read for a
- *  bundle, so `offset` is caller-supplied — the consumer inserts at a known
- *  story offset (story start, 0) rather than "the user's caret". The field is a
- *  real tagged run either way; only WHERE it lands is coarse until a caret-read
- *  door exists. */
+ *  `offset` is caller-supplied, in core's field convention: chars of the
+ *  story's runs, no paragraph separators. The bundle takes it from the user's
+ *  caret (C-9) when there is one, else story start. */
 export function insertFieldMutation(
   storyId: string,
   offset: number,
