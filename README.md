@@ -68,4 +68,4 @@ pnpm --filter @paged-media/data test:e2e
 
 ## License
 
-Dual-licensed **MPL-2.0 OR PMEL** — see [`LICENSE.md`](./LICENSE.md).
+Dual-licensed **AGPL-3.0 OR PMEL** — see [`LICENSE.md`](./LICENSE.md).

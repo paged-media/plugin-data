@@ -71,7 +71,7 @@ cat > "$OUT/SOURCE.md" <<EOF
 
 This is the query/ingest engine (spec §6). It is vendored as a PREBUILT
 artifact and consumed as a WASM module + JS bindings — NOT compiled in-tree,
-NOT linked into the MPL/PMEL Rust crates. The boundary is the Arrow-shaped
+NOT linked into the AGPL/PMEL Rust crates. The boundary is the Arrow-shaped
 \`RecordSet\` interchange (spec §3 license boundary — data outputs only). No
 DuckDB engine source is part of this repo's build.
 EOF
