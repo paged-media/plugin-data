@@ -43,10 +43,12 @@
 //! The query engine itself is the vendored DuckDB-WASM (TS side); it converts
 //! its Arrow result to a `RecordSet` JSON which `ingest_result` decodes.
 
+pub mod columns;
 pub mod core;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::columns::ColumnBuf;
     use crate::core::DataSession;
     use data_core::{BindingId, QueryId};
     use wasm_bindgen::prelude::*;
@@ -116,6 +118,102 @@ mod wasm {
             self.session
                 .ingest_result(QueryId::from(query), from_js(records)?);
             Ok(())
+        }
+
+        /// Start a typed-column ingest (the column door): `schema` is the
+        /// RecordSet schema JSON (`{fields: [{name, ty, nullable}]}`), then one
+        /// `push_*` per field in order, then `finish_columns`. Each buffer is
+        /// copied into wasm memory once; no per-cell objects cross.
+        pub fn begin_columns(
+            &mut self,
+            query: &str,
+            schema: JsValue,
+            rows: usize,
+        ) -> Result<(), JsValue> {
+            self.session
+                .begin_columns(QueryId::from(query), from_js(schema)?, rows);
+            Ok(())
+        }
+
+        /// Push a number column (`Float64Array`) + optional validity bitmap.
+        pub fn push_f64(
+            &mut self,
+            values: Vec<f64>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::F64 { values, valid })
+        }
+
+        /// Push a boolean column (`Uint8Array`, 0/1 per row).
+        pub fn push_bool(
+            &mut self,
+            values: Vec<u8>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Bool { values, valid })
+        }
+
+        /// Push a date column (`Int32Array`, days since 1970-01-01).
+        pub fn push_date(
+            &mut self,
+            values: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Date { values, valid })
+        }
+
+        /// Push a datetime column (`Float64Array`, ms since the epoch).
+        pub fn push_datetime(
+            &mut self,
+            values: Vec<f64>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::DateTime { values, valid })
+        }
+
+        /// Push a text column: one UTF-8 buffer + `Int32Array` offsets
+        /// (`rows + 1`).
+        pub fn push_utf8(
+            &mut self,
+            bytes: Vec<u8>,
+            offsets: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Utf8 {
+                bytes,
+                offsets,
+                valid,
+            })
+        }
+
+        /// Push a binary column: one buffer + `Int32Array` offsets.
+        pub fn push_binary(
+            &mut self,
+            bytes: Vec<u8>,
+            offsets: Vec<i32>,
+            valid: Option<Vec<u8>>,
+        ) -> Result<(), JsValue> {
+            self.push(ColumnBuf::Binary {
+                bytes,
+                offsets,
+                valid,
+            })
+        }
+
+        /// Finish the column ingest: `"unchanged"` when the buffers equal the
+        /// last column ingest for the query (nothing decoded or delivered),
+        /// else `"changed"`.
+        pub fn finish_columns(&mut self) -> Result<String, JsValue> {
+            self.session
+                .finish_columns()
+                .map(|o| o.as_str().to_string())
+                .map_err(map_err)
+        }
+
+        /// The content token (hex content hash) of a query's ingested result,
+        /// or `undefined` before an ingest. Equal tokens = equal data.
+        pub fn result_token(&self, query: &str) -> Option<String> {
+            self.session.result_token(&QueryId::from(query))
         }
 
         /// Resolve a binding and return its lowered IR.
@@ -443,6 +541,12 @@ mod wasm {
         /// D-08 64 KiB budget check for per-record capture.
         pub fn data_set_payload_bytes(&self) -> usize {
             self.session.data_set_payload_bytes()
+        }
+    }
+
+    impl DataEngine {
+        fn push(&mut self, col: ColumnBuf) -> Result<(), JsValue> {
+            self.session.push_column(col).map_err(map_err)
         }
     }
 

@@ -201,11 +201,12 @@ export async function partC() {
     missing: { missing: "blank" },
   });
   const v = engine.resolve_lowered("v_price");
-  // The stream's first record is price 19.99 → de "19,99 €" (trailing €, comma
+  // Record 0 is the first STABILIZED record (A-1, price 9.99 — not the
+  // delivery order's B-2, oracle defect DP-4) → de "9,99 €" (trailing €, comma
   // decimal) — proves set_locale("de") deserialized + threaded to the kernels.
   eq(v.kind, "variable", "Part C: lowered variable kind");
-  eq(v.text, "19,99 €", "Part C: de locale via real wasm (CURRENCY → '19,99 €')");
-  console.log("  ✓ locale: set_locale('de') → CURRENCY formats '19,99 €' through real wasm");
+  eq(v.text, "9,99 €", "Part C: de locale via real wasm (CURRENCY → '9,99 €')");
+  console.log("  ✓ locale: set_locale('de') → CURRENCY formats '9,99 €' through real wasm");
 
   // §10 — run a record-flow batch through real wasm (proves the chain shape:
   // FrameCapacity crosses camelCase as `heightPt`, and the BatchRun output).

@@ -159,11 +159,13 @@ fn price_rows() -> data_core::RecordSet {
                     name: "sku".into(),
                     ty: FieldType::Text,
                     nullable: true,
+                    scale: None,
                 },
                 Field {
                     name: "price".into(),
                     ty: FieldType::Float,
                     nullable: true,
+                    scale: None,
                 },
             ],
         },

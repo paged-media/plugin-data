@@ -30,7 +30,8 @@ use data_automation::{plan_batch, BatchMode, BatchPlan};
 use data_barcode::{encode, with_quiet_zone, Symbology};
 use data_bind::{
     diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
-    ResolutionEngine, ResolveError, Resolved, ResolvedBarcode, ResolvedRecordFlow, RuleEvaluation,
+    FingerprintSnapshot, ResolutionEngine, ResolveError, Resolved, ResolvedBarcode,
+    ResolvedRecordFlow, RuleEvaluation,
 };
 use data_core::{
     BarcodeSymbology, Binding, BindingDef, BindingId, DataSource, Locale, Placeholder, Query,
@@ -45,6 +46,8 @@ use data_lower::{
     LoweredTable, LoweredVariable, LoweredVisibility, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
+
+use crate::columns::{ColumnBuf, ColumnIngest, IngestOutcome};
 use data_sources::{
     authorize, build_manifest, enrich_schema, DatasetMetadata, GovernedCatalog,
     GrantedCapabilities, SourceManifest,
@@ -334,7 +337,12 @@ pub struct DataSession {
     /// report). `refresh_change_report` diffs the current resolution against this
     /// then updates it; `None` until the first report (where every binding shows
     /// as `added` — the baseline).
-    last_fingerprints: Option<HashMap<String, String>>,
+    last_fingerprints: Option<FingerprintSnapshot>,
+    /// The transport hash of the last COLUMN ingest per query: a re-delivery
+    /// of identical buffers is recognised before anything is decoded.
+    column_hashes: HashMap<QueryId, u64>,
+    /// A column ingest in progress (`begin_columns` … `finish_columns`).
+    pending_columns: Option<ColumnIngest>,
     /// The §9.9 variable set: declarations (derived from the bindable bindings,
     /// plus any imported from a library) + the captured data sets.
     variables: VariableSet,
@@ -351,6 +359,8 @@ impl DataSession {
             bindings: Vec::new(),
             today,
             last_fingerprints: None,
+            column_hashes: HashMap::new(),
+            pending_columns: None,
             // Illustrator names a document's one variable set `binding1`; match
             // it so an exported library drops into that workflow unremarkably.
             variables: VariableSet::new("binding1"),
@@ -399,7 +409,74 @@ impl DataSession {
 
     /// Deliver a query's result (from the DuckDB-WASM query layer → RecordSet).
     pub fn ingest_result(&mut self, query: QueryId, records: RecordSet) {
+        // A RecordSet ingest replaces whatever the column door last delivered.
+        self.column_hashes.remove(&query);
         self.engine.set_result(query, records);
+    }
+
+    /// Start a typed-column ingest of `rows` rows (the column door — see
+    /// [`crate::columns`]). Push one column per schema field with
+    /// [`push_column`](Self::push_column), then
+    /// [`finish_columns`](Self::finish_columns). Replaces any ingest in
+    /// progress.
+    pub fn begin_columns(&mut self, query: QueryId, schema: Schema, rows: usize) {
+        self.pending_columns = Some(ColumnIngest::begin(query, schema, rows));
+    }
+
+    /// Push the next column of the ingest in progress.
+    pub fn push_column(&mut self, col: ColumnBuf) -> Result<(), SessionError> {
+        let pending = self
+            .pending_columns
+            .as_mut()
+            .ok_or_else(|| SessionError::Decode("push_column without begin_columns".into()))?;
+        let pushed = pending.push(col);
+        if pushed.is_err() {
+            self.pending_columns = None;
+        }
+        pushed
+    }
+
+    /// Finish the column ingest. When the buffers are identical to the last
+    /// column ingest for this query (and its result is still the engine's),
+    /// nothing is decoded or delivered: `Unchanged`. Otherwise the buffers
+    /// become a RecordSet and are delivered like
+    /// [`ingest_result`](Self::ingest_result): `Changed`.
+    pub fn finish_columns(&mut self) -> Result<IngestOutcome, SessionError> {
+        let pending = self
+            .pending_columns
+            .take()
+            .ok_or_else(|| SessionError::Decode("finish_columns without begin_columns".into()))?;
+        let hash = pending.transport_hash()?;
+        let query = pending.query().clone();
+        if self.column_hashes.get(&query) == Some(&hash) && self.engine.result(&query).is_some() {
+            return Ok(IngestOutcome::Unchanged);
+        }
+        let records = pending.into_record_set()?;
+        self.engine.set_result(query.clone(), records);
+        self.column_hashes.insert(query, hash);
+        Ok(IngestOutcome::Changed)
+    }
+
+    /// One-call column ingest (`begin_columns` + every `push_column` +
+    /// `finish_columns`) — the native form of the column door.
+    pub fn ingest_columns(
+        &mut self,
+        query: QueryId,
+        schema: Schema,
+        rows: usize,
+        columns: Vec<ColumnBuf>,
+    ) -> Result<IngestOutcome, SessionError> {
+        self.begin_columns(query, schema, rows);
+        for c in columns {
+            self.push_column(c)?;
+        }
+        self.finish_columns()
+    }
+
+    /// The content token of a query's ingested result (the engine's content
+    /// hash, hex), or `None` before an ingest. Equal tokens = equal data.
+    pub fn result_token(&self, query: &QueryId) -> Option<String> {
+        self.engine.result_hash(query).map(|h| format!("{h:016x}"))
     }
 
     /// Resolve a binding and lower it to the host IR.
@@ -441,9 +518,19 @@ impl DataSession {
     /// that wants the baseline silent can prime it with one discarded call after
     /// the first lower.
     pub fn refresh_change_report(&mut self) -> ChangeReportOut {
-        let current = self.engine.fingerprint_all();
-        let before = self.last_fingerprints.take().unwrap_or_default();
-        let report = diff_resolved(&before, &current);
+        // Only the bindings whose dependency stamp moved re-resolve; the rest
+        // keep their previous fingerprint (data-bind fingerprint_incremental).
+        let prev = self.last_fingerprints.take();
+        let current = self
+            .engine
+            .fingerprint_incremental(prev.as_ref().unwrap_or(&HashMap::new()));
+        let fingerprints = |snap: &FingerprintSnapshot| -> HashMap<String, String> {
+            snap.iter()
+                .filter_map(|(id, (_, fp))| fp.clone().map(|fp| (id.clone(), fp)))
+                .collect()
+        };
+        let before = prev.as_ref().map(fingerprints).unwrap_or_default();
+        let report = diff_resolved(&before, &fingerprints(&current));
         self.last_fingerprints = Some(current);
         ChangeReportOut {
             entries: report
@@ -1033,10 +1120,9 @@ impl DataSession {
     /// query has no result, the record is out of range, or the column is absent.
     fn record_field_display(&self, query: &QueryId, record: usize, column: &str) -> Option<String> {
         let records = self.engine.result(query)?;
-        if record >= records.row_count {
-            return None;
-        }
-        records.field(record, column).map(|v| v.as_display())
+        // Record N in the stabilized order, like every other record index.
+        let row = self.engine.record_row(query, record)?;
+        records.field(row, column).map(|v| v.as_display())
     }
 
     /// The named data sets, in palette order (§9.9).

@@ -41,8 +41,10 @@ pub enum Counter {
     Resolves = 0,
     /// A record set stabilized (`stabilize` — sort + reorder copy).
     StabilizeCalls,
-    /// A sort key built by `value_key` — each one is a fresh `Vec<u8>`; the
-    /// comparator builds two per column it compares.
+    /// A sort key built by `value_key` — each one is a fresh `Vec<u8>`.
+    /// `stabilize` used to build two per column per comparison; since Wave 2
+    /// it compares values in place and builds none, so a non-zero count on a
+    /// stabilize path is a regression.
     KeyAllocs,
     /// A resolved binding fingerprinted for the change report.
     Fingerprints,
@@ -52,7 +54,8 @@ pub enum Counter {
     IngestCells,
     /// A full-content hash of a record set (`content_hash`).
     ContentHashes,
-    /// A group-key comparison in `group_by` (the O(n·g) linear scan).
+    /// A group-key comparison in `group_by` (was an O(n·g) linear scan; now
+    /// only the groups in the row's hash bucket are compared).
     GroupKeyCompares,
 }
 
