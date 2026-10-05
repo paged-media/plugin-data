@@ -45,7 +45,14 @@
 // which the sources panel shows as "duckdb-missing" — never faked.
 
 import { binUrl } from "../bin-url";
-import { arrowToRecordSet, type ArrowLikeTable, type RecordSetJson } from "./recordset";
+import {
+  arrowToColumns,
+  arrowToRecordSet,
+  needsText,
+  type ArrowLikeTable,
+  type ColumnBatch,
+  type RecordSetJson,
+} from "./recordset";
 
 export const DUCKDB_NOT_VENDORED =
   "DuckDB-WASM not available — run `bash scripts/vendor-duckdb.sh` (stages packages/data-bundle/bin/duckdb-engine.wasm), and make sure the host serves the bundle's bin/";
@@ -63,8 +70,12 @@ export interface DuckDBHandle {
   registerCsv(name: string, csvText: string): Promise<void>;
   /** Register imported file bytes under a virtual name (the file-import path). */
   registerFileBuffer(name: string, bytes: Uint8Array): Promise<void>;
-  /** Run SQL and materialise the Arrow result as a RecordSet. */
+  /** Run SQL and materialise the Arrow result as a RecordSet (`{t, v}` per
+   *  cell — the original seam). */
   query(sql: string): Promise<RecordSetJson>;
+  /** Run SQL and read the Arrow result as typed column buffers — the form
+   *  `ingestColumnBatch` sends to the engine with one copy per column. */
+  queryColumns(sql: string): Promise<ColumnBatch>;
   /** Tear the session + worker down. */
   close(): Promise<void>;
 }
@@ -83,6 +94,30 @@ export interface DuckDBConnectionLike {
   close(): unknown;
 }
 
+/** A double-quoted SQL identifier. */
+function ident(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+/** Run SQL; when the result has columns data-core has no kind for (TIME,
+ *  INTERVAL, LIST, STRUCT, MAP, …), run it again with exactly those columns
+ *  cast to VARCHAR, so they cross as DuckDB's own text rendering (oracle
+ *  defect DQ-4). Only such results pay the second query. */
+async function runQuery(conn: DuckDBConnectionLike, sql: string): Promise<ArrowLikeTable> {
+  const table = (await conn.query(sql)) as ArrowLikeTable;
+  const casts = table.schema.fields.filter(needsText);
+  if (casts.length === 0) return table;
+  const inner = sql.trim().replace(/;+\s*$/, "");
+  const replace = casts.map((f) => `CAST(${ident(f.name)} AS VARCHAR) AS ${ident(f.name)}`).join(", ");
+  try {
+    return (await conn.query(`SELECT * REPLACE (${replace}) FROM (${inner}) AS _paged_q`)) as ArrowLikeTable;
+  } catch {
+    // A shape the rewrite cannot wrap (e.g. duplicate column names): read the
+    // original, whose nested columns then fall back to per-row text.
+    return table;
+  }
+}
+
 /** Wrap a connected DuckDB (browser or Node) as the bundle's [`DuckDBHandle`]. */
 export function duckdbHandle(
   db: DuckDBLike,
@@ -98,8 +133,10 @@ export function duckdbHandle(
       await db.registerFileBuffer(name, bytes);
     },
     async query(sql: string): Promise<RecordSetJson> {
-      const table = (await conn.query(sql)) as ArrowLikeTable;
-      return arrowToRecordSet(table);
+      return arrowToRecordSet(await runQuery(conn, sql));
+    },
+    async queryColumns(sql: string): Promise<ColumnBatch> {
+      return arrowToColumns(await runQuery(conn, sql));
     },
     async close() {
       await conn.close();

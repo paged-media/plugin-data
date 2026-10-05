@@ -69,19 +69,19 @@ tolerance is zero. The lane also checks the following, all exactly:
 - Decimals agree at every width, which shows the decimal-scale fix holds.
 - UTF-8, quoting, ordering and NULL handling agree.
 
-**Defects pinned:**
+**Defects found, all FIXED in Wave 2** (`src/query/recordset.ts` now reads Arrow's raw
+buffers by type id, and `src/query/duckdb.ts` casts the types without a data-core kind to
+VARCHAR in SQL):
 
-- **DQ-1.** DATE cells arrive as epoch milliseconds, not days. `data-js` then rejects the whole
-  result (`expected i32`), so any query with a DATE column cannot be ingested.
-- **DQ-2.** A TIMESTAMP column with no nulls is read by `toArray()` in its storage unit: µs for
-  TIMESTAMP, s for `_S`, ns for `_NS`. The same column with one null is read row by row and
-  comes out right.
-- **DQ-3.** HUGEINT is classified `float`.
-- **DQ-4.** The types without a data-core kind are read wrongly:
-  - TIME arrives as raw µs text;
-  - INTERVAL, LIST and STRUCT are classified `int` by a substring match, then read as null
-    numbers;
-  - BLOB becomes the text `"97,98"`.
+- **DQ-1.** DATE cells arrived as epoch milliseconds, not days, and `data-js` rejected the whole
+  result (`expected i32`). The DateDay buffer is days and is now read directly.
+- **DQ-2.** A TIMESTAMP column with no nulls was read in its storage unit (µs, or s / ns for
+  `_S` / `_NS`). The buffer is now floored to ms by its unit.
+- **DQ-3.** HUGEINT (an Arrow Decimal(38, 0)) was classified `float`. It is `int` now; a
+  declared DECIMAL(38, 0) reads the same way, and its values are integers too.
+- **DQ-4.** TIME, INTERVAL, LIST and STRUCT (and MAP, UNION, DURATION) cross as DuckDB's own
+  text: when a result has such a column, the handle re-runs the query with exactly those
+  columns cast to VARCHAR. BLOB crosses as bytes.
 
 **Re-recording.** The CLI must be the engine inside the vendored duckdb-wasm. For
 `@duckdb/duckdb-wasm` 1.29.0 that is v1.1.1 (`af39bd0dcf`): download

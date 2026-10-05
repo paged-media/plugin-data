@@ -128,3 +128,52 @@ describe("arrowToRecordSet over real Arrow vectors [data.query.seam]", () => {
     expect(rs.columns[0]).toEqual([{ t: "number", v: 1.5 }, { t: "null" }, { t: "number", v: 3 }]);
   });
 });
+
+// ── Raw-buffer reads (Wave 2): the typed column form and the oracle types ──
+
+import { arrowToColumns, columnToValues, needsText } from "../query/recordset";
+
+describe("arrowToColumns reads Arrow's buffers by type [data.query.seam]", () => {
+  it("DateDay is days, Timestamp<µs> is floored ms, with and without nulls [data.query.seam]", () => {
+    const table = arrow.tableFromArrays({
+      d: arrow.vectorFromArray([new Date(Date.UTC(1969, 11, 31)), new Date(Date.UTC(2024, 1, 29))], new arrow.DateDay()),
+      ts: arrow.makeVector(
+        arrow.makeData({
+          type: new arrow.TimestampMicrosecond(),
+          length: 2,
+          nullCount: 0,
+          data: BigInt64Array.from([-1n, 1_709_214_306_789_000n]),
+        }),
+      ),
+    } as never);
+    const rs = arrowToRecordSet(table as unknown as ArrowLikeTable);
+    expect(rs.schema.fields.map((f) => f.ty)).toEqual(["date", "datetime"]);
+    expect(rs.columns[0]).toEqual([{ t: "date", v: -1 }, { t: "date", v: 19782 }]);
+    // −1 µs floors to −1 ms (1969-12-31 23:59:59.999), not 0.
+    expect(rs.columns[1]).toEqual([{ t: "datetime", v: -1 }, { t: "datetime", v: 1_709_214_306_789 }]);
+  });
+
+  it("text crosses as ONE UTF-8 buffer + offsets across chunks; both forms agree [data.query.seam]", () => {
+    const a = arrow.tableFromArrays({ s: ["ä", null, "b"], n: [1, 2, 3], b: [true, false, null] } as never);
+    const b = arrow.tableFromArrays({ s: ["€uro"], n: [4], b: [true] } as never);
+    const table = a.concat(b);
+    const batch = arrowToColumns(table as unknown as ArrowLikeTable);
+    const s = batch.columns[0];
+    expect(s.kind).toBe("utf8");
+    if (s.kind !== "utf8") return;
+    expect(new TextDecoder().decode(s.bytes)).toBe("äb€uro");
+    expect(Array.from(s.offsets)).toEqual([0, 2, 2, 3, 9]);
+    expect(Array.from(s.valid!)[0] & 0b1111).toBe(0b1101);
+    const rs = arrowToRecordSet(table as unknown as ArrowLikeTable);
+    batch.columns.forEach((c, i) => expect(columnToValues(c, batch.row_count)).toEqual(rs.columns[i]));
+    expect(rs.columns[2]).toEqual([{ t: "bool", v: true }, { t: "bool", v: false }, { t: "null" }, { t: "bool", v: true }]);
+  });
+
+  it("types without a data-core kind are named for the VARCHAR cast; timestamps are not [data.query.seam]", () => {
+    expect(needsText({ name: "x", type: "Time64<MICROSECOND>" })).toBe(true);
+    expect(needsText({ name: "x", type: "List<Int32>" })).toBe(true);
+    expect(needsText({ name: "x", type: "Timestamp<ms>" })).toBe(false);
+    expect(classifyType({ name: "x", type: "Interval<MONTH_DAY_NANO>" })).toBe("text");
+    expect(classifyType({ name: "x", type: "Binary" })).toBe("bytes");
+  });
+});

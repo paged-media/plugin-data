@@ -232,6 +232,12 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
       log.rowsOut += rs.row_count;
       return rs;
     },
+    async queryColumns(sql) {
+      log.queries += 1;
+      const batch = await inner.queryColumns(sql);
+      log.rowsOut += batch.row_count;
+      return batch;
+    },
     close: () => inner.close(),
   };
   return {

@@ -34,27 +34,9 @@ const recorded = JSON.parse(readFileSync(join(LANE, "recorded", "results.json"),
  *  case's own test (so any OTHER disagreement in the case still fails) and
  *  checked by an it.fails pin that goes red the day the defect is fixed. */
 const DEFECTS: Array<{ id: string; what: string; cases: Record<string, string[]>; ingest?: string[] }> = [
-  {
-    id: "DQ-1",
-    what: "DATE cells arrive as epoch MILLISECONDS (Arrow JS DateDay), not days; data-js ingest_result then rejects the whole result (`expected i32`)",
-    cases: { "types-temporal": ["leap", "before_epoch"], "nulls-every-type": ["dt"], "csv-type-detection": ["day"] },
-    ingest: ["types-temporal", "nulls-every-type", "csv-type-detection"],
-  },
-  {
-    id: "DQ-2",
-    what: "a TIMESTAMP column with no nulls is read by toArray() in its storage unit (µs; s for TIMESTAMP_S, ns for TIMESTAMP_NS), not ms; the same column WITH a null is read per row and comes out right",
-    cases: { "types-temporal": ["ts", "ts_before_epoch", "ts_s", "ts_ns"] },
-  },
-  {
-    id: "DQ-3",
-    what: "HUGEINT arrives as an Arrow Decimal(38,0) and is classified float, not int",
-    cases: { "types-integers": ["huge"] },
-  },
-  {
-    id: "DQ-4",
-    what: "types without a data-core kind: TIME arrives as raw µs text, INTERVAL/LIST/STRUCT are classified int by a substring match (Interval, List<Int32>, Struct<{a:Int32}>) and read as null numbers, BLOB is text \"97,98\" instead of bytes",
-    cases: { "types-extended": ["tm", "iv", "bl", "lst", "st"] },
-  },
+  // DQ-1 … DQ-4 were fixed in Wave 2 (recordset.ts reads Arrow's raw
+  // buffers by type id; duckdb.ts casts the kind-less types to VARCHAR). New
+  // disagreements are pinned here the same way.
 ];
 
 // ── the contract: native (type, text) → expected RecordSet cell ─────────────
