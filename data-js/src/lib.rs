@@ -453,6 +453,18 @@ mod wasm {
         serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// The hash of the sources this wasm was built from
+    /// (`scripts/source-hash.mjs`, stamped by `scripts/build-wasm.sh`;
+    /// "unstamped" for any other build). `packages/data-bundle/test/
+    /// wasm-fresh.spec.ts` compares it with the checkout, so a stale wasm
+    /// fails the suite instead of being tested in place of the code.
+    #[wasm_bindgen]
+    pub fn engine_source_hash() -> String {
+        option_env!("DATA_JS_SOURCE_HASH")
+            .unwrap_or("unstamped")
+            .to_string()
+    }
+
     #[wasm_bindgen(start)]
     fn start() {
         console_error_panic_hook::set_once();
