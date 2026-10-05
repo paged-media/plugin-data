@@ -260,6 +260,19 @@ mod wasm {
             to_js(&runs)
         }
 
+        /// Plan an InDesign-style Data Merge (`spec` is `MergeSpec`) over a
+        /// query's result in delivered order: `MergePlan` — the grid, the page
+        /// of every record and each record's frames with their merged text or
+        /// image reference. The bundle's merge writer turns it into mutations.
+        pub fn plan_merge(&self, query: &str, spec: JsValue) -> Result<JsValue, JsValue> {
+            let spec: data_lower::merge::MergeSpec = from_js(spec)?;
+            let plan = self
+                .session
+                .plan_merge(&QueryId::from(query), &spec)
+                .map_err(map_err)?;
+            to_js(&plan)
+        }
+
         /// Plan a §10 batch run over a query's result (`mode` is `BatchMode`):
         /// `{ mode, units: [{ label, recordIndices }], totalRecords }` — which
         /// records feed which output document (per-record / per-group / one

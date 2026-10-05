@@ -14,3 +14,6 @@ workspace = true
 data-core = { path = "../data-core" }
 data-barcode = { path = "../data-barcode" }
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

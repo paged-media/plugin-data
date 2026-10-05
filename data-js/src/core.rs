@@ -1257,3 +1257,26 @@ fn to_flow_groups(rf: &ResolvedRecordFlow) -> Vec<FlowGroup> {
         })
         .collect()
 }
+
+// ── Data Merge (campaign Wave 5) ────────────────────────────────────────────
+//
+// Kept in its own `impl` block at the foot of the file: the merge reads a
+// query's result exactly as delivered (source order, DM-2) and never goes
+// through a binding's resolve, so it shares nothing with the refresh path.
+
+impl DataSession {
+    /// Plan an InDesign-style Data Merge of a query's result through a record
+    /// template (`data_lower::merge`): records in the order the query
+    /// delivered them, laid out Single Record or Multiple Records, field text
+    /// verbatim. Errors when the query has no ingested result.
+    pub fn plan_merge(
+        &self,
+        query_id: &QueryId,
+        spec: &data_lower::merge::MergeSpec,
+    ) -> Result<data_lower::merge::MergePlan, SessionError> {
+        let records = self.engine.result(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        Ok(data_lower::merge::plan_merge(spec, records))
+    }
+}

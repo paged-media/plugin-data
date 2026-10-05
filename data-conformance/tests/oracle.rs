@@ -30,7 +30,13 @@
 //!    ⌊k / (rows·cols)⌋, rows-first or columns-first, every frame on that grid
 //!    within ±0.5 pt). It must reproduce every recording exactly. It is what
 //!    the merge writer (campaign Wave 5) implements.
-//! 2. **The engine** — our record flow as it stands: `DataSession` resolves
+//! 2. **The merge planner** — `DataSession::plan_merge` (`data_lower::merge`,
+//!    Wave 5) over the CSV: Data Merge itself. It reproduces every recording
+//!    except the overset flag, which needs text measurement and is the host
+//!    writer's job (`packages/data-bundle/test/merge-real-core.spec.ts`).
+//!
+//!    **The record flow** — the EasyCatalog-style flow binding, kept as a
+//!    reference lane: `DataSession` resolves
 //!    a record-flow binding over the CSV and `paginate_flow` packs it into the
 //!    natural chain (one frame per page of the template frame's height for
 //!    Single Record; per page one frame per column of the margin box height
@@ -85,6 +91,8 @@ struct Fixture {
     text_bounds: [f64; 4],
     lines: Vec<String>,
     image_field: Option<String>,
+    /// The image frame [y1, x1, y2, x2], when the template has one.
+    image_bounds: Option<[f64; 4]>,
     multiple: bool,
     rows_first: bool,
     row_spacing: f64,
@@ -207,10 +215,12 @@ fn fixtures() -> Vec<Fixture> {
                 .find(|fr| fr["kind"] == "text")
                 .expect("a text frame");
             let b: Vec<f64> = text["bounds"].as_array().unwrap().iter().map(f).collect();
-            let image_field = frames
-                .iter()
-                .find(|fr| fr["kind"] == "image")
-                .map(|fr| fr["field"].as_str().unwrap().to_string());
+            let image = frames.iter().find(|fr| fr["kind"] == "image");
+            let image_field = image.map(|fr| fr["field"].as_str().unwrap().to_string());
+            let image_bounds = image.map(|fr| {
+                let b: Vec<f64> = fr["bounds"].as_array().unwrap().iter().map(f).collect();
+                [b[0], b[1], b[2], b[3]]
+            });
             let merge = &fx["merge"];
             let mut csv = parse_csv(
                 &std::fs::read_to_string(lane().join("csv").join(format!("{id}.csv"))).unwrap(),
@@ -226,6 +236,7 @@ fn fixtures() -> Vec<Fixture> {
                     .map(|l| l.as_str().unwrap().to_string())
                     .collect(),
                 image_field,
+                image_bounds,
                 multiple: merge["recordsPerPage"] == "multiple",
                 rows_first: merge["arrangeBy"] != "columns",
                 row_spacing: merge["rowSpacing"].as_f64().unwrap_or(0.0),
@@ -270,6 +281,23 @@ fn normalise(s: &str) -> String {
     s.replace('\r', "\n").replace('\u{feff}', "")
 }
 
+/// The (row, column) of a record text frame on the Data Merge grid, or `None`
+/// when its bounds are off the grid or not the template's size by more than
+/// TOL_PT.
+fn on_grid(fx: &Fixture, b: &[f64]) -> Option<(usize, usize)> {
+    let pitch_y = fx.h() + fx.row_spacing;
+    let pitch_x = fx.w() + fx.col_spacing;
+    let (dy, dx) = (b[0] - fx.text_bounds[0], b[1] - fx.text_bounds[1]);
+    let (row, col) = ((dy / pitch_y).round(), (dx / pitch_x).round());
+    let ok = row >= 0.0
+        && col >= 0.0
+        && (dy - row * pitch_y).abs() <= TOL_PT
+        && (dx - col * pitch_x).abs() <= TOL_PT
+        && ((b[2] - b[0]) - fx.h()).abs() <= TOL_PT
+        && ((b[3] - b[1]) - fx.w()).abs() <= TOL_PT;
+    ok.then_some((row as usize, col as usize))
+}
+
 /// InDesign's merged document as a layout: each text frame placed on the
 /// record grid by its recorded bounds. Panics when a frame is off the grid by
 /// more than TOL_PT — the recording would contradict the grid model.
@@ -278,8 +306,6 @@ fn indesign_layout(fx: &Fixture) -> Layout {
     let merged = &rec["merged"];
     let pages = merged["pages"].as_array().expect("pages");
     assert_eq!(merged["page_count"].as_u64().unwrap() as usize, pages.len());
-    let pitch_y = fx.h() + fx.row_spacing;
-    let pitch_x = fx.w() + fx.col_spacing;
     let mut placed = Vec::new();
     for (p, page) in pages.iter().enumerate() {
         let images: Vec<Option<String>> = page["rectangles"]
@@ -295,20 +321,13 @@ fn indesign_layout(fx: &Fixture) -> Layout {
                 .iter()
                 .map(|v| v.as_f64().unwrap())
                 .collect();
-            let (dy, dx) = (b[0] - fx.text_bounds[0], b[1] - fx.text_bounds[1]);
-            let (row, col) = ((dy / pitch_y).round(), (dx / pitch_x).round());
-            assert!(
-                (dy - row * pitch_y).abs() <= TOL_PT
-                    && (dx - col * pitch_x).abs() <= TOL_PT
-                    && ((b[2] - b[0]) - fx.h()).abs() <= TOL_PT
-                    && ((b[3] - b[1]) - fx.w()).abs() <= TOL_PT,
-                "{}: page {p} frame {b:?} is off the record grid",
-                fx.id
-            );
+            let (row, col) = on_grid(fx, &b).unwrap_or_else(|| {
+                panic!("{}: page {p} frame {b:?} is off the record grid", fx.id)
+            });
             placed.push(Placed {
                 page: p,
-                row: row as usize,
-                col: col as usize,
+                row,
+                col,
                 text: normalise(tf["text"].as_str().unwrap()),
                 overset: tf["overset"].as_bool().unwrap(),
                 // Single Record: one image frame per page, beside the record.
@@ -404,7 +423,7 @@ fn flow_layout(flow: &PaginatedFlow, cap: f64) -> Layout {
 
 /// Our record flow end to end: DataSession over the CSV (every field TEXT,
 /// as Data Merge reads it; an empty field is null, as DuckDB reads it).
-fn engine_layout(fx: &Fixture) -> Layout {
+fn session_over_csv(fx: &Fixture) -> DataSession {
     let mut s = DataSession::new(today());
     s.define_query(Query {
         id: QueryId::from("q"),
@@ -412,6 +431,27 @@ fn engine_layout(fx: &Fixture) -> Layout {
         params: vec![],
         shape: ResultShape::RecordStream,
     });
+    let schema = Schema::from_fields(fx.header.iter().map(|h| (h.clone(), FieldType::Text)));
+    let columns = (0..fx.header.len())
+        .map(|c| {
+            fx.rows
+                .iter()
+                .map(|r| {
+                    if r[c].is_empty() {
+                        Value::Null
+                    } else {
+                        Value::text(&r[c])
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    s.ingest_result(QueryId::from("q"), RecordSet::new(schema, columns).unwrap());
+    s
+}
+
+fn flow_layout_of_engine(fx: &Fixture) -> Layout {
+    let mut s = session_over_csv(fx);
     let fields = fx
         .lines
         .iter()
@@ -441,22 +481,6 @@ fn engine_layout(fx: &Fixture) -> Layout {
             options: FlowOpts::default(),
         },
     });
-    let schema = Schema::from_fields(fx.header.iter().map(|h| (h.clone(), FieldType::Text)));
-    let columns = (0..fx.header.len())
-        .map(|c| {
-            fx.rows
-                .iter()
-                .map(|r| {
-                    if r[c].is_empty() {
-                        Value::Null
-                    } else {
-                        Value::text(&r[c])
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    s.ingest_result(QueryId::from("q"), RecordSet::new(schema, columns).unwrap());
     let cap = if fx.multiple { fx.content[3] } else { fx.h() };
     let flow = s
         .lower_record_flow(
@@ -471,6 +495,100 @@ fn engine_layout(fx: &Fixture) -> Layout {
         fx.id
     );
     flow_layout(&flow, cap)
+}
+
+/// The Data Merge planner (`data_lower::merge`, Wave 5) end to end through
+/// `DataSession::plan_merge`, over the same TEXT ingest as the flow lane.
+/// Every planned text frame is placed on the grid FROM ITS BOUNDS (as
+/// InDesign's frames are), so a planner that put a frame in the wrong place
+/// fails the grid check instead of scoring by its own claim. The planner
+/// does not measure text, so it never claims overset (DM-7 is measured by
+/// the host writer: packages/data-bundle/test/merge-real-core.spec.ts).
+fn merge_layout(fx: &Fixture) -> Layout {
+    use data_lower::merge::{
+        MergeArrange, MergeFrameContent, MergeSpec, MergeTemplateFrame, RecordsPerPage,
+    };
+    let s = session_over_csv(fx);
+    let mut frames = vec![MergeTemplateFrame {
+        id: "text".into(),
+        bounds: fx.text_bounds,
+        content: MergeFrameContent::Text {
+            text: fx.lines.join("\n"),
+        },
+    }];
+    if let (Some(field), Some(bounds)) = (&fx.image_field, fx.image_bounds) {
+        frames.push(MergeTemplateFrame {
+            id: "image".into(),
+            bounds,
+            content: MergeFrameContent::Image {
+                field: field.clone(),
+            },
+        });
+    }
+    let c = fx.content;
+    let spec = MergeSpec {
+        margin_box: [c[0], c[1], c[0] + c[3], c[1] + c[2]],
+        frames,
+        records_per_page: if fx.multiple {
+            RecordsPerPage::Multiple {
+                arrange: if fx.rows_first {
+                    MergeArrange::Rows
+                } else {
+                    MergeArrange::Columns
+                },
+                row_spacing_pt: fx.row_spacing,
+                column_spacing_pt: fx.col_spacing,
+            }
+        } else {
+            RecordsPerPage::Single
+        },
+        remove_blank_lines: fx.remove_blank,
+    };
+    let plan = s.plan_merge(&QueryId::from("q"), &spec).unwrap();
+    assert!(
+        plan.missing_fields.is_empty(),
+        "{}: {:?}",
+        fx.id,
+        plan.missing_fields
+    );
+    let placed = plan
+        .records
+        .iter()
+        .map(|r| {
+            let text = &r.frames[0];
+            let (row, col) = on_grid(fx, &text.bounds).unwrap_or_else(|| {
+                panic!(
+                    "{}: planned frame {:?} is off the record grid",
+                    fx.id, text.bounds
+                )
+            });
+            if let (Some(img), Some(b)) = (r.frames.get(1), fx.image_bounds) {
+                // The image frame keeps its offset from the text frame.
+                let (dy, dx) = (
+                    text.bounds[0] - fx.text_bounds[0],
+                    text.bounds[1] - fx.text_bounds[1],
+                );
+                assert_eq!(
+                    img.bounds,
+                    [b[0] + dy, b[1] + dx, b[2] + dy, b[3] + dx],
+                    "{}",
+                    fx.id
+                );
+            }
+            Placed {
+                page: r.page,
+                row,
+                col,
+                text: text.text.clone().unwrap_or_default(),
+                overset: false,
+                image: r.frames.get(1).and_then(|f| f.image.clone()),
+            }
+        })
+        .collect();
+    Layout {
+        pages: plan.page_count,
+        placed,
+    }
 }
 
 /// `paginate_flow` alone at InDesign's pitch, CSV order, Data Merge's text.
@@ -628,7 +746,13 @@ fn data_oracle_indesign_merge_rule_reproduces_every_recording__feat__data_lower_
 /// that moved it.
 struct Pin {
     fixture: &'static str,
-    engine: Score,
+    /// The Data Merge planner (Wave 5): what InDesign does.
+    merge: Score,
+    /// The record-flow binding: EasyCatalog-style continuous flow, NOT Data
+    /// Merge. Its divergences from InDesign are what the flow is (records
+    /// packed by template height, stable re-sorted identity, no image
+    /// field); Data Merge is the merge lane.
+    flow: Score,
     paginator: Score,
     why: &'static str,
 }
@@ -651,56 +775,88 @@ fn sc(
     }
 }
 
+/// Marks a merge pin as "full agreement with InDesign" (see [`full`]).
+const MERGE_FULL: Score = Score {
+    pages: (0, 0),
+    placed: 0,
+    texts: 0,
+    overset: 0,
+    images: 0,
+    of: usize::MAX,
+};
+
+/// Full agreement with a recording: every page, placement, text, overset
+/// flag and image.
+fn full(theirs: &Layout) -> Score {
+    let of = theirs.placed.len();
+    Score {
+        pages: (theirs.pages, theirs.pages),
+        placed: of,
+        texts: of,
+        overset: of,
+        images: theirs.placed.iter().filter(|p| p.image.is_some()).count(),
+        of,
+    }
+}
+
 fn pins() -> Vec<Pin> {
     vec![
         // PINS_START
         Pin {
             fixture: "single-record",
-            engine: sc((2, 3), 0, 3, 3, 0, 3),
+            merge: MERGE_FULL,
+            flow: sc((2, 3), 0, 3, 3, 0, 3),
             paginator: sc((3, 3), 3, 3, 3, 0, 3),
-            why: "DEFECT DM-1 no Single Record mode (2 records share a frame); DM-2 records re-sorted",
+            why: "flow: no Single Record mode, records re-sorted (DM-1/DM-2 are closed for Data Merge by the merge lane)",
         },
         Pin {
             fixture: "multi-record-column",
-            engine: sc((1, 2), 10, 12, 12, 0, 12),
+            merge: MERGE_FULL,
+            flow: sc((1, 2), 10, 12, 12, 0, 12),
             paginator: sc((2, 2), 12, 12, 12, 0, 12),
-            why: "DEFECT DM-3 record pitch is lines x leading, not frame height + row spacing (20 per page, not 10)",
+            why: "flow: record pitch is lines x leading, not frame height + row spacing (DM-3 closed by the merge lane)",
         },
         Pin {
             fixture: "multi-record-grid",
-            engine: sc((1, 1), 1, 7, 7, 0, 7),
+            merge: MERGE_FULL,
+            flow: sc((1, 1), 1, 7, 7, 0, 7),
             paginator: sc((1, 1), 1, 7, 7, 0, 7),
-            why: "DEFECT DM-4 the chain fills column by column; Data Merge arranges rows first",
+            why: "flow: the chain fills column by column (DM-4 closed by the merge lane)",
         },
         Pin {
             fixture: "long-record-set",
-            engine: sc((2, 3), 0, 57, 57, 0, 57),
+            merge: MERGE_FULL,
+            flow: sc((2, 3), 0, 57, 57, 0, 57),
             paginator: sc((3, 3), 57, 57, 57, 0, 57),
-            why: "DEFECT DM-2 records re-sorted (CSV order lost); DM-3 pitch",
+            why: "flow: records re-sorted, pitch (DM-2/DM-3 closed by the merge lane)",
         },
         Pin {
             fixture: "empty-field-lines",
-            engine: sc((2, 3), 1, 2, 2, 0, 3),
+            merge: MERGE_FULL,
+            flow: sc((2, 3), 1, 2, 2, 0, 3),
             paginator: sc((3, 3), 3, 3, 3, 0, 3),
-            why: "DEFECT DM-5 no Remove Blank Lines for Empty Fields; DM-1",
+            why: "flow: no Remove Blank Lines (DM-5 closed by the merge lane)",
         },
         Pin {
             fixture: "overset",
-            engine: sc((2, 2), 0, 2, 1, 0, 2),
+            merge: sc((2, 2), 2, 2, 1, 0, 2),
+            flow: sc((2, 2), 0, 2, 1, 0, 2),
             paginator: sc((2, 2), 2, 2, 1, 0, 2),
-            why: "DEFECT DM-7 record height is not measured text, so the overset record is not flagged (the paginator lane cannot know by construction); DM-2",
+            why: "merge: the planner does not measure text, so it never claims overset; DM-7 is measured by the host writer (merge-real-core.spec.ts). flow/paginator cannot know by construction",
         },
         Pin {
             fixture: "number-text",
-            engine: sc((2, 3), 1, 3, 3, 0, 3),
+            merge: MERGE_FULL,
+            flow: sc((2, 3), 1, 3, 3, 0, 3),
             paginator: sc((3, 3), 3, 3, 3, 0, 3),
-            why: "texts agree verbatim over a TEXT ingest (the DuckDB-typed path is DM-8, duckdb-sql-oracle.spec.ts); DM-1",
+            why: "texts agree verbatim over a TEXT ingest (the DuckDB-typed path is DM-8, duckdb-sql-oracle.spec.ts)",
         },
         Pin {
             fixture: "image-field",
-            engine: sc((2, 3), 0, 3, 3, 0, 3),
+            merge: MERGE_FULL,
+            flow: sc((2, 3), 0, 3, 3, 0, 3),
             paginator: sc((3, 3), 3, 3, 3, 0, 3),
-            why: "DEFECT DM-6 a record-flow template has no image field (0/3 images); DM-1",
+            why: "flow: a record-flow template has no image field (DM-6 closed by the merge lane)",
         },
         // PINS_END
     ]
@@ -709,17 +865,29 @@ fn pins() -> Vec<Pin> {
 fn check(id: &str) {
     let fx = fixture(id);
     let theirs = indesign_layout(&fx);
-    let engine = score(&engine_layout(&fx), &theirs);
+    let merge = score(&merge_layout(&fx), &theirs);
+    let flow = score(&flow_layout_of_engine(&fx), &theirs);
     let paginator = score(&paginator_layout(&fx), &theirs);
-    report("engine", &fx, engine);
+    report("merge", &fx, merge);
+    report("flow", &fx, flow);
     report("paginator", &fx, paginator);
     let pin = pins()
         .into_iter()
         .find(|p| p.fixture == id)
         .unwrap_or_else(|| panic!("no pin for {id}"));
+    let merge_pin = if pin.merge == MERGE_FULL {
+        full(&theirs)
+    } else {
+        pin.merge
+    };
     assert_eq!(
-        engine, pin.engine,
-        "{id}: the engine's score moved ({})",
+        merge, merge_pin,
+        "{id}: the merge planner's score moved ({})",
+        pin.why
+    );
+    assert_eq!(
+        flow, pin.flow,
+        "{id}: the record flow's score moved ({})",
         pin.why
     );
     assert_eq!(

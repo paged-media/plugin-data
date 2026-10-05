@@ -533,6 +533,7 @@ dependencies = [
  "data-barcode",
  "data-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

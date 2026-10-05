@@ -34,6 +34,18 @@
   tests:
     rust: ["data-conformance/tests/recordflow.rs::data_lower_paginate"]
 
+- id: data.lower.merge-plan
+  title: Data Merge planner — InDesign's Single / Multiple Record layout over a template (Wave 5)
+  spec: plugin-data data-lower/src/merge.rs + data-js DataSession::plan_merge (docs/design/oracles.md §2)
+  status: implemented
+  provenance: ["the closed-form rule that reproduces all 8 InDesign 2025 recordings: Single Record (DM-1), Multiple Records rows x columns from frame box + spacing (DM-3), rows/columns first (DM-4), source order (DM-2), Remove Blank Lines (DM-5), image fields (DM-6); overset (DM-7) is measured by the host writer"]
+  tests:
+    rust:
+      [
+        "data-lower/src/merge.rs::data_lower_merge",
+        "data-conformance/tests/oracle.rs::data_oracle_indesign",
+      ]
+
 - id: data.lower.pagination
   title: Pagination convergence — repeated/continued headers, tall-record handling
   spec: plugin-data data-lower/src/lib.rs (base-idea §9.4)

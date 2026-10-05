@@ -36,6 +36,8 @@
 //! Inputs are plain resolved content (display strings) so this crate depends
 //! ONLY on `data-core` — `data-js` bridges `data-bind`'s resolved output here.
 
+pub mod merge;
+
 use serde::{Deserialize, Serialize};
 
 use data_core::{FrameRef, ImageReference, ImageStatus, ImgFit, PlaceholderRef};
