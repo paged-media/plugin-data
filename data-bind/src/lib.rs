@@ -34,7 +34,9 @@
 pub mod diff;
 pub mod mapping;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -45,7 +47,7 @@ use data_core::{
     Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
-use data_query::{content_hash, stabilize, stamp};
+use data_query::{content_hash, first_stable_row, stable_order, stamp};
 
 pub use diff::{
     diff, diff_resolved, resolved_fingerprint, BindingChange, ChangeKind, ChangeReport, RowDelta,
@@ -228,6 +230,12 @@ pub enum ResolveError {
     Unsupported(&'static str),
 }
 
+/// A cached stabilized order's key: the query and the sort keys.
+type OrderKey = (QueryId, Vec<String>);
+/// Cached stabilized orders, each with the result content hash it was sorted
+/// from.
+type OrderCache = HashMap<OrderKey, (u64, Arc<[usize]>)>;
+
 /// The resolution + synchronization engine (spec §8).
 #[derive(Default)]
 pub struct ResolutionEngine {
@@ -238,6 +246,11 @@ pub struct ResolutionEngine {
     /// Per-query results delivered by the query engine (DuckDB → RecordSet).
     results: HashMap<QueryId, RecordSet>,
     results_hash: HashMap<QueryId, u64>,
+    /// Stabilized row orders per (query, sort keys), each valid for the result
+    /// content hash it was sorted from. A table, a record flow, a rule and the
+    /// preview stepper all reuse one sort until the data changes (a reflow
+    /// burst, a 20-step preview, a change report: one sort, not one each).
+    order_cache: RefCell<OrderCache>,
     sync: HashMap<BindingId, SyncState>,
     params: HashMap<String, Value>,
     today: i32,
@@ -304,6 +317,10 @@ impl ResolutionEngine {
         if !changed {
             return;
         }
+        // The cached orders of the old result are stale; free them.
+        self.order_cache
+            .borrow_mut()
+            .retain(|(q, _), _| q != &query);
         let dependents: Vec<BindingId> = self
             .bindings
             .iter()
@@ -331,6 +348,46 @@ impl ResolutionEngine {
     /// §9 record-preview). `0` when no result is ingested yet.
     pub fn record_count(&self, query: &QueryId) -> usize {
         self.results.get(query).map(|r| r.row_count).unwrap_or(0)
+    }
+
+    /// The stabilized row order of a query's result by `keys`, sorted once per
+    /// result content and reused until the data changes.
+    fn cached_order(&self, query: &QueryId, records: &RecordSet, keys: &[String]) -> Arc<[usize]> {
+        let hash = self.results_hash.get(query).copied().unwrap_or(0);
+        let key = (query.clone(), keys.to_vec());
+        if let Some((h, order)) = self.order_cache.borrow().get(&key) {
+            if *h == hash {
+                return order.clone();
+            }
+        }
+        let order: Arc<[usize]> = stable_order(records, keys).into();
+        self.order_cache
+            .borrow_mut()
+            .insert(key, (hash, order.clone()));
+        order
+    }
+
+    /// The physical row that holds RECORD `record` of a query's result, where
+    /// records are numbered in the STABILIZED order (no keys: every column) —
+    /// the order tables, record flows and batch plans already use, so record N
+    /// is the same row whatever order the query engine delivered (§8; was
+    /// defect DP-4). `None` when no result is ingested or `record` is out of
+    /// range. Record 0 is found by one O(n) scan unless the order is cached.
+    pub fn record_row(&self, query: &QueryId, record: usize) -> Option<usize> {
+        let records = self.results.get(query)?;
+        if record >= records.row_count {
+            return None;
+        }
+        if record == 0 {
+            let hash = self.results_hash.get(query).copied().unwrap_or(0);
+            if let Some((h, order)) = self.order_cache.borrow().get(&(query.clone(), Vec::new())) {
+                if *h == hash {
+                    return Some(order[0]);
+                }
+            }
+            return first_stable_row(records);
+        }
+        Some(self.cached_order(query, records, &[])[record])
     }
 
     /// The sync state of a binding.
@@ -391,7 +448,7 @@ impl ResolutionEngine {
     /// idempotent (same inputs → identical content, §12.4).
     ///
     /// Per-record bindings (variable / image / barcode) resolve against the
-    /// FIRST record (row 0). To preview the document against a chosen record
+    /// FIRST record of the stabilized order. To preview the document against a chosen record
     /// (the §9 record-preview stepper), use [`resolve_at`](Self::resolve_at).
     pub fn resolve(&mut self, id: &BindingId) -> Result<Resolved, ResolveError> {
         self.resolve_at(id, 0)
@@ -399,9 +456,10 @@ impl ResolutionEngine {
 
     /// Resolve a binding against a chosen RECORD INDEX `record` (the §9
     /// record-preview stepper — "show the document resolved against record N").
-    /// For the per-record kinds (variable / image / barcode) the expression is
-    /// evaluated over `records[record]` (clamped harmlessly to "missing" when
-    /// out of range). Whole-result kinds (table / record-flow) resolve their
+    /// For the per-record kinds (variable / image / barcode / visibility) the
+    /// expression is evaluated over record `record` of the STABILIZED order
+    /// ([`record_row`](Self::record_row) — the same numbering tables, flows and
+    /// batch plans use), treated as "missing" when out of range. Whole-result kinds (table / record-flow) resolve their
     /// entire stabilized set regardless of `record` — a per-record preview index
     /// is meaningless for them, so they render in full (the stepper greys their
     /// control). Stamping + the non-destructive sync policy are identical to
@@ -447,6 +505,9 @@ impl ResolutionEngine {
             .get(query_id)
             .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
         let query = self.queries.get(query_id);
+        // Per-record kinds read stabilized record `record` (see `record_row`);
+        // an absent record is out of range for them (the missing policy).
+        let row = || self.record_row(query_id, record).unwrap_or(usize::MAX);
 
         let resolved = match binding {
             Binding::Variable {
@@ -459,7 +520,7 @@ impl ResolutionEngine {
                 expr,
                 missing,
                 records,
-                record,
+                row(),
                 &self.params,
                 self.today,
                 self.locale,
@@ -473,7 +534,7 @@ impl ResolutionEngine {
             } => Resolved::Table(resolve_table(
                 region.clone(),
                 columns,
-                options,
+                &self.cached_order(query_id, records, &options.group_by),
                 records,
                 &self.params,
                 self.today,
@@ -493,6 +554,7 @@ impl ResolutionEngine {
                     chain.clone(),
                     tmpl,
                     options,
+                    &self.cached_order(query_id, records, &options.group_by),
                     records,
                     &self.params,
                     self.today,
@@ -509,7 +571,7 @@ impl ResolutionEngine {
                 expr,
                 policy,
                 records,
-                record,
+                row(),
                 &self.params,
                 self.today,
                 self.locale,
@@ -526,7 +588,7 @@ impl ResolutionEngine {
                 expr,
                 options,
                 records,
-                record,
+                row(),
                 &self.params,
                 self.today,
                 self.locale,
@@ -541,7 +603,7 @@ impl ResolutionEngine {
                 expr,
                 options,
                 records,
-                record,
+                row(),
                 &self.params,
                 self.today,
                 self.locale,
@@ -591,11 +653,11 @@ impl ResolutionEngine {
             .results
             .get(query_id)
             .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
-        let stable = stabilize(records, &[]);
+        let order = self.cached_order(query_id, records, &[]);
         let mut fires = Vec::new();
-        for row in 0..stable.row_count {
+        for (i, &row) in order.iter().enumerate() {
             let ctx = RowCtx {
-                records: &stable,
+                records,
                 row,
                 params: &self.params,
             };
@@ -606,14 +668,14 @@ impl ResolutionEngine {
             .as_bool()
             .unwrap_or(false)
             {
-                fires.push(row);
+                fires.push(i);
             }
         }
         Ok(RuleEvaluation {
             scope,
             fires,
             apply,
-            total: stable.row_count,
+            total: records.row_count,
         })
     }
 
@@ -766,24 +828,24 @@ fn apply_missing(
     }
 }
 
-/// Resolve a dynamic table: stabilize the rows (stable identity), then evaluate
-/// each column's expression per record into a grid of display strings.
+/// Resolve a dynamic table: walk the rows in their stabilized `order` (stable
+/// identity), evaluating each column's expression per record into a grid of
+/// display strings.
 #[allow(clippy::too_many_arguments)]
 fn resolve_table(
     region: data_core::FrameRef,
     columns: &[data_core::ColumnBind],
-    options: &data_core::TableOpts,
+    order: &[usize],
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
     locale: Locale,
 ) -> ResolvedTable {
-    let stable = stabilize(records, &options.group_by);
     let headers: Vec<String> = columns.iter().map(|c| c.header.clone()).collect();
-    let mut rows = Vec::with_capacity(stable.row_count);
-    for row in 0..stable.row_count {
+    let mut rows = Vec::with_capacity(order.len());
+    for &row in order {
         let ctx = RowCtx {
-            records: &stable,
+            records,
             row,
             params,
         };
@@ -837,8 +899,9 @@ impl FooterAcc {
     }
 }
 
-/// Resolve a record flow (spec §9.4): stabilize the records (so groups are
-/// contiguous + stable), split into sections by the group-by key, and render
+/// Resolve a record flow (spec §9.4): walk the records in their stabilized
+/// `order` (so groups are contiguous + stable), split into sections by the
+/// group-by key, and render
 /// one template instance per record. Each record instance is atomic (the
 /// paginator never splits it); its height is `fields × line_height`.
 #[allow(clippy::too_many_arguments)]
@@ -846,16 +909,16 @@ fn resolve_record_flow(
     chain: FrameChainRef,
     template: &Template,
     options: &FlowOpts,
+    order: &[usize],
     records: &RecordSet,
     params: &HashMap<String, Value>,
     today: i32,
     locale: Locale,
 ) -> ResolvedRecordFlow {
-    let stable = stabilize(records, &options.group_by);
     let key_cols: Vec<usize> = options
         .group_by
         .iter()
-        .filter_map(|n| stable.schema.index_of(n))
+        .filter_map(|n| records.schema.index_of(n))
         .collect();
     let instance_height = template.fields.len() as f64 * template.line_height_pt;
 
@@ -864,16 +927,16 @@ fn resolve_record_flow(
         .footer
         .as_ref()
         .and_then(|f| f.sum_field.as_ref())
-        .and_then(|n| stable.schema.index_of(n));
+        .and_then(|n| records.schema.index_of(n));
 
     let mut groups: Vec<ResolvedFlowGroup> = Vec::new();
     // Per-group footer accumulators (count, sum), aligned with `groups`.
     let mut accums: Vec<FooterAcc> = Vec::new();
     let mut current_key: Option<Vec<Value>> = None;
-    for row in 0..stable.row_count {
+    for &row in order {
         let key: Vec<Value> = key_cols
             .iter()
-            .map(|&c| stable.value(row, c).cloned().unwrap_or(Value::Null))
+            .map(|&c| records.value(row, c).cloned().unwrap_or(Value::Null))
             .collect();
         // A new section opens when the group-by key changes. With multi-level
         // grouping, the levels that changed (from the first divergent one) open
@@ -914,7 +977,7 @@ fn resolve_record_flow(
         }
 
         let ctx = RowCtx {
-            records: &stable,
+            records,
             row,
             params,
         };
@@ -937,7 +1000,7 @@ fn resolve_record_flow(
         let acc = accums.last_mut().expect("an accumulator per group");
         acc.count += 1;
         if let Some(c) = footer_sum_col {
-            if let Some(Value::Number(n)) = stable.value(row, c) {
+            if let Some(Value::Number(n)) = records.value(row, c) {
                 acc.sum += n;
                 acc.min = acc.min.min(*n);
                 acc.max = acc.max.max(*n);

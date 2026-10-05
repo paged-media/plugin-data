@@ -76,7 +76,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     wasmCalls: 200,
     cellsIn: 0,
     resolves: 200,
-    stabilizeCalls: 200,
+    // Was 200: every event re-sorted the whole flow. The engine caches the
+    // stabilized order per result content, so the burst sorts once.
+    stabilizeCalls: 1,
     // Was 665 600: stabilize built two Vec<u8> keys per column per
     // comparison. Wave 2 (engine) compares values in place.
     keyAllocs: 0,

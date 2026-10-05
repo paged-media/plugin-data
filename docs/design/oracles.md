@@ -239,8 +239,9 @@ independent decoder here, because no small, permissive, pure-Rust one exists.
   `float_roundtrip`. The wasm boundary is exact.
 - **DP-3.** `RowDelta.removed` holds internal key encodings (`"3:k2\u{1f}"`), so a change report
   cannot name the rows it removed.
-- **DP-4.** A variable binding follows the delivery order, so the same rows delivered in
-  another order report a change.
+- **DP-4.** FIXED (Wave 2): a variable binding followed the delivery order, so the same rows
+  delivered in another order reported a change. Record N is now record N of the stabilized
+  order, for every per-record kind.
 
 ## Feature links
 

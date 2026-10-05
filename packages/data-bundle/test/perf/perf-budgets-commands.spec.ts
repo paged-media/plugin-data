@@ -261,7 +261,12 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     wasmCalls: 20,
     cellsIn: 0,
     resolves: 20,
-    stabilizeCalls: 0,
+    // RAISED 0 → 1, the one budget that went up (oracle defect DP-4): record N
+    // was record N of DuckDB's DELIVERY order, so the same rows delivered in
+    // another order previewed a different record. Record N is now record N of
+    // the stabilized order — one sort per result content, cached, shared by
+    // all 20 steps (and by every table / flow over the same result).
+    stabilizeCalls: 1,
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,

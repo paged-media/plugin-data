@@ -960,10 +960,9 @@ impl DataSession {
     /// query has no result, the record is out of range, or the column is absent.
     fn record_field_display(&self, query: &QueryId, record: usize, column: &str) -> Option<String> {
         let records = self.engine.result(query)?;
-        if record >= records.row_count {
-            return None;
-        }
-        records.field(record, column).map(|v| v.as_display())
+        // Record N in the stabilized order, like every other record index.
+        let row = self.engine.record_row(query, record)?;
+        records.field(row, column).map(|v| v.as_display())
     }
 
     /// The named data sets, in palette order (§9.9).

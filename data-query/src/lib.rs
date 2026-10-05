@@ -211,10 +211,35 @@ pub fn apply_order(records: &RecordSet, order: &[usize]) -> RecordSet {
     }
 }
 
-/// Stabilize a record set by the named keys (`order_rows` + `apply_order`).
-pub fn stabilize(records: &RecordSet, keys: &[String]) -> RecordSet {
+/// The stabilized row order of a record set by the named keys — the sort
+/// [`stabilize`] does, without copying the rows. Counted as one
+/// [`Counter::StabilizeCalls`].
+pub fn stable_order(records: &RecordSet, keys: &[String]) -> Vec<usize> {
     perf::bump(Counter::StabilizeCalls);
-    let order = order_rows(records, keys);
+    order_rows(records, keys)
+}
+
+/// The row that stabilizes FIRST (with no keys: by every column), found by
+/// one O(n) scan instead of a sort. It is `stable_order(records, &[])[0]` up
+/// to rows of identical content, which are interchangeable. `None` when the
+/// set is empty.
+pub fn first_stable_row(records: &RecordSet) -> Option<usize> {
+    let ncols = records.columns.len();
+    (0..records.row_count).min_by(|&a, &b| {
+        for c in 0..ncols {
+            let col = &records.columns[c];
+            match cmp_values(col.get(a), col.get(b)) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        std::cmp::Ordering::Equal
+    })
+}
+
+/// Stabilize a record set by the named keys (`stable_order` + `apply_order`).
+pub fn stabilize(records: &RecordSet, keys: &[String]) -> RecordSet {
+    let order = stable_order(records, keys);
     apply_order(records, &order)
 }
 

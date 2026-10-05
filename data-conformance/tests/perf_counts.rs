@@ -89,6 +89,28 @@ fn data_perf_count_table_resolve_10k() {
 const BUDGET_TABLE_10K_KEY_ALLOCS: u64 = 0;
 
 #[test]
+fn data_perf_count_table_re_resolve_reuses_the_sort() {
+    let mut s = table_session(10_000);
+    let first = s.resolve_lowered(&BindingId::from("t1")).unwrap();
+    // Re-delivering the SAME result (a refresh with no data change) keeps the
+    // cached order valid.
+    s.ingest_result(
+        QueryId::from("q1"),
+        data_conformance::perf_workloads::catalog(10_000, 50),
+    );
+    reset_perf_counters();
+    let again = s.resolve_lowered(&BindingId::from("t1")).unwrap();
+    let c = perf_counters();
+    show("table_re_resolve_10k", &c);
+    // Behaviour: the same table, byte for byte.
+    assert_eq!(format!("{first:?}"), format!("{again:?}"));
+    assert_eq!(c.resolves, 1);
+    // A reflow burst or a second command re-resolves without re-sorting.
+    assert_eq!(c.stabilize_calls, BUDGET_TABLE_RE_RESOLVE_SORTS);
+}
+const BUDGET_TABLE_RE_RESOLVE_SORTS: u64 = 0;
+
+#[test]
 fn data_perf_count_catalog_lower_7k() {
     let (mut s, chain) = catalog_session(7_000);
     reset_perf_counters();
@@ -126,15 +148,18 @@ fn data_perf_count_change_report_50_bindings() {
     assert_eq!(report.changed, REPORT_TABLES);
     assert_eq!(report.unchanged, 50 - REPORT_TABLES);
     // AS FOUND: fingerprint_all re-resolves EVERY binding (50), and each table
-    // re-sorts the whole result — a one-cell change costs 10 full sorts.
+    // re-sorted the whole result — a one-cell change cost 10 full sorts. The
+    // engine now sorts once per (result content, keys) and the ten tables
+    // share it.
     assert_eq!(c.resolves, 50);
     assert_eq!(c.fingerprints, 50);
-    assert_eq!(c.stabilize_calls, REPORT_TABLES as u64);
+    assert_eq!(c.stabilize_calls, BUDGET_REPORT_50_SORTS);
     assert_eq!(c.ingest_cells, (rows * 4) as u64);
     assert_eq!(c.content_hashes, 1);
     assert_eq!(c.diff_rows, 0, "the O(n) row diff() is not on this path");
     assert_eq!(c.key_allocs, BUDGET_REPORT_50_KEY_ALLOCS);
 }
+const BUDGET_REPORT_50_SORTS: u64 = 1;
 // Was 210 560: ten table sorts building keys per comparison.
 const BUDGET_REPORT_50_KEY_ALLOCS: u64 = 0;
 

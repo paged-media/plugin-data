@@ -24,9 +24,17 @@
 //! - `stabilize` compares values in place ([`data_query::cmp_values`])
 //!   instead of building a `value_key` per comparison: the order is the SAME
 //!   total order, and it stays permutation-invariant over every value type.
+//! - The engine caches the stabilized order per result content and numbers
+//!   records in it: the preview stepper's record N is the same record
+//!   whatever order the rows were delivered in, and a cached re-resolve is
+//!   the same content as a cold one.
 
-use data_conformance::record_set;
-use data_core::{FieldType, Value, ValueError};
+use data_conformance::{record_set, today};
+use data_core::{
+    Binding, BindingDef, BindingId, FieldType, MissingPolicy, PlaceholderRef, Query, QueryId,
+    ResultShape, Value, ValueError,
+};
+use data_js::core::DataSession;
 use data_query::{cmp_values, order_rows, stabilize, value_key};
 use proptest::prelude::*;
 
@@ -139,5 +147,45 @@ proptest! {
         let b = stabilize(&make(&shuffled), &key);
         // Compare by content hash: NaN != NaN under PartialEq.
         prop_assert_eq!(data_query::content_hash(&a), data_query::content_hash(&b));
+    }
+
+    /// Record N (the preview stepper) is the same record for any delivery
+    /// order of the same rows, and a session that resolves from the cached
+    /// order agrees with a fresh session at every record.
+    #[test]
+    fn data_perf_prop_record_n_is_delivery_order_free(rows in rows_strategy(), seed in any::<u64>()) {
+        let session = |rows: &[[Value; 3]]| {
+            let mut s = DataSession::new(today());
+            s.define_query(Query { id: QueryId::from("q"), sql: String::new(), params: vec![], shape: ResultShape::RecordStream });
+            s.define_binding(BindingDef {
+                id: BindingId::from("v"),
+                binding: Binding::Variable {
+                    target: PlaceholderRef::from("p"),
+                    query: QueryId::from("q"),
+                    expr: "CONCAT(a, \"|\", b, \"|\", c)".into(),
+                    missing: MissingPolicy::Blank,
+                },
+            });
+            s.ingest_result(QueryId::from("q"), make(rows));
+            s
+        };
+        let mut shuffled = rows.clone();
+        let mut x = seed | 1;
+        for i in (1..shuffled.len()).rev() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            shuffled.swap(i, (x % (i as u64 + 1)) as usize);
+        }
+        let (mut a, mut b) = (session(&rows), session(&shuffled));
+        let id = BindingId::from("v");
+        for record in 0..=rows.len() {
+            let ra = format!("{:?}", a.resolve_lowered_at(&id, record));
+            let rb = format!("{:?}", b.resolve_lowered_at(&id, record));
+            // A fresh session for the same record (no cache warmed by earlier steps).
+            let rc = format!("{:?}", session(&rows).resolve_lowered_at(&id, record));
+            prop_assert_eq!(&ra, &rb);
+            prop_assert_eq!(&ra, &rc);
+        }
     }
 }

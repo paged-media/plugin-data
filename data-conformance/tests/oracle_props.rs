@@ -303,9 +303,14 @@ proptest! {
         let again = s.refresh_change_report();
         prop_assert_eq!((again.changed, again.added, again.removed), (0, 0, 0));
 
-        // Re-ingesting the same rows (same delivery order) is still no change;
-        // another delivery order is DP-4.
+        // Re-ingesting the same rows is still no change — in the same delivery
+        // order, and in the reverse one (DP-4, fixed).
         s.ingest_result(QueryId::from("q"), rs(&rows));
+        let after = s.refresh_change_report();
+        prop_assert_eq!((after.changed, after.added, after.removed), (0, 0, 0));
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        s.ingest_result(QueryId::from("q"), rs(&reversed));
         let after = s.refresh_change_report();
         prop_assert_eq!((after.changed, after.added, after.removed), (0, 0, 0));
     }
@@ -490,12 +495,11 @@ fn defect_dp3_diff_removed_keys_are_internal_encodings__feat__data_bind_engine()
     );
 }
 
-/// DEFECT DP-4: a variable binding reads record 0 of the DELIVERY order, not
-/// of the stabilized order, so the same rows delivered in another order (as
-/// DuckDB may, without ORDER BY) flip the value and the change report calls
-/// it a change. (Tables stabilize and stay unchanged.)
+/// A variable binding reads record 0 of the STABILIZED order, so the same rows
+/// delivered in another order (as DuckDB may, without ORDER BY) are no change
+/// (was defect DP-4: it read record 0 of the delivery order).
 #[test]
-fn defect_dp4_variable_follows_delivery_order__feat__data_bind_change_report() {
+fn data_bind_variable_ignores_delivery_order__feat__data_bind_change_report() {
     let mut s = DataSession::new(today());
     s.define_query(Query {
         id: QueryId::from("q"),
@@ -522,10 +526,7 @@ fn defect_dp4_variable_follows_delivery_order__feat__data_bind_change_report() {
     reversed.reverse();
     s.ingest_result(QueryId::from("q"), rs(&reversed));
     let report = s.refresh_change_report();
-    assert_eq!(
-        report.changed, 1,
-        "DP-4 fixed? same rows, other order, no change: drop this pin"
-    );
+    assert_eq!((report.changed, report.unchanged), (0, 1));
 }
 
 /// DEFECT DB-1: the EAN-13 encoder writes G-parity symbols INVERTED (digit 0
