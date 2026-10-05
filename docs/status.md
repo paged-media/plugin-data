@@ -1,7 +1,10 @@
 # Status
 
 What `paged.data` ships and what it does not, read from the code at commit `6b96ce5`
-(`@paged-media/data` 0.1.0-canary.9). How the parts fit is in [`architecture.md`](architecture.md).
+(`@paged-media/data` 0.1.0-canary.9), with the gates and records corrected on 2026-10-05. How
+the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
+of work, with file and line references, is
+[`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md).
 "The session" below is the object returned by `createSession`, which the package exports.
 
 ## Shipped
@@ -65,17 +68,24 @@ What `paged.data` ships and what it does not, read from the code at commit `6b96
   resolves it and the fetch is made without it. In the editor at `28dc764` the page policy
   is the fixed `connect-src 'self' blob: data:` (`editor: apps/canvas/public/_headers:49`);
   it is not derived from consent grants (`editor: apps/canvas/src/plugin-consent.ts:36-41`).
-- **DuckDB is not in the npm package.** The manifest declares `bin/duckdb-engine.wasm`, but
-  the publish workflow does not run the script that produces it, and the bundle loads DuckDB
-  from `vendor/duckdb-wasm/dist/`, which the host application has to serve
+- **DuckDB was not in the npm package.** Every version up to 0.1.0-canary.9 shipped without
+  `bin/duckdb-engine.wasm`. The publish workflow now runs `scripts/vendor-duckdb.sh` and
+  refuses a tarball without it (`scripts/pubcheck.sh`). The bundle still loads DuckDB from
+  `vendor/duckdb-wasm/dist/`, which the host application has to serve
   ([ADR 015](adr/015-duckdb-wasm-vendored.md)).
 - **Smaller gaps.** A barcode's `quietZone` option reaches no encoder. The column list is
   built with an empty metadata sidecar, so every column shows as undocumented. A note in
   `packages/data-bundle/src/query/recordset.ts` says Arrow decimal columns are read without
   their scale. The variable-library XML was not checked against the application whose
   format it follows ([ADR 557](adr/557-variables-and-data-sets.md)).
-- **CI does not gate on tests.** The nextest and vitest commands end in `|| true`. Format,
-  clippy, the dependency checks, the coverage gate and the wasm build do fail the job.
+- **Tests gate CI since 2026-10-05.** A failing Rust or TypeScript test fails its job, both
+  lanes run on pull requests, the TypeScript lane typechecks, vendors DuckDB and runs with
+  `REQUIRE_REAL_ENGINE=1` and `REQUIRE_REAL_DUCKDB=1`, and the coverage gate requires every
+  registry-mapped test to have run and passed. Publishing waits for both lanes on the same
+  commit, runs the tests again, and fails when the package's inputs changed since the
+  published version without a version bump (`scripts/package-hash.mjs`). Baseline: 204 Rust
+  tests (one skipped: the oracle skeleton), 112 TypeScript tests in 22 files, of which one
+  file boots the real engine and none yet the real DuckDB.
 
 ## Not built
 

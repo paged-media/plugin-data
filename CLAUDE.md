@@ -30,8 +30,9 @@ surface), `data-conformance` (TEST-ONLY), plus the §10 automation lane —
 commands + DuckDB-WASM query integration). Vendored MIT engine:
 `vendor/duckdb-wasm/`.
 
-**State (verified; the live ledger is the state-repo registry, not this prose).**
-The M0 spine shipped and grew to ~M3-class across the 11 crates above:
+**State (the live ledger is the Cockpit feature registry and `docs/status.md`,
+not this prose; the 2026-10-05 analysis is `docs/design/analysis-2026-10-05.md`).**
+The ENGINE is far ahead of what a user can reach from the panels:
 - The binding-expression DSL is SHIPPED — its own publishing grammar (not
   Excel's), ~42 functions across format/logic/text/math/temporal, registry-
   driven FnId-parity dispatch (no row → no dispatch → uncallable).
@@ -42,13 +43,18 @@ The M0 spine shipped and grew to ~M3-class across the 11 crates above:
 - Print automation is SHIPPED end-to-end (per-record / per-group / one-catalog
   batch plan + RUN executor + the data-cli + the data-script Boa surface).
 - The D-09 data-provider contract is SHIPPED (register a provider, publish a
-  RecordSet to other consumers; never knows its consumers, §7.1); governed
-  extract (governed tables + column-metadata sidecar) is SHIPPED.
-- M1 DEFERRALS, kept honest in the manifest + UI (never faked): remote/DB
-  sources (the bundle is dormant at `network:false`; the D-03 consent contract
-  + host.network door exist editor-side but the bundle has no network:true
-  caller yet), the network-consent UI's first real consumer, DB-attach, OPFS
-  persistence, and worker-hosted DuckDB.
+  RecordSet to other consumers; never knows its consumers, §7.1). The
+  governed-catalog KERNEL is built (schema + column-metadata sidecar), but
+  nothing reads a sidecar from a source location yet (PARTIAL).
+- REACHABILITY GAPS (2026-10-05, see the analysis): nothing survives reopen
+  (sources, queries, bindings and data sets are session-only); the panels
+  define variable, image and barcode bindings only, over `SELECT *`; table,
+  rule and visibility bindings are session-only; record flow has no define
+  method and no writer, so it never becomes document content; local import is
+  CSV/TSV only. Remote sources declare `network: { origins: "consent" }` and
+  fetch only consented origins, but the editor's CSP `connect-src 'self'`
+  still blocks them in the browser (RFI D-03). Still not built: DB-attach
+  execution, OPFS persistence, worker-hosted DuckDB, merge to a document.
 
 ## Project State & Feature Matrix (cockpit)
 
@@ -113,8 +119,10 @@ Rules for every code change in this repo:
   dispatch match, FnId parity). No row → no dispatch entry → **an unregistered
   function is uncallable by construction**. Same principle for source adapters,
   binding kinds, and lowering rules (registry-listed). The coverage gate
-  (`cargo run -p data-conformance --bin coverage-gate`) fails below 100%
-  tests-per-implemented-row.
+  (`cargo run -p data-conformance --bin coverage-gate`) fails when an
+  `implemented` row names no test that exists on disk; with
+  `-- --junit target/nextest/ci/junit.xml` (as CI runs it, after nextest) it
+  also fails when a named test did not run (ignored, filtered) or failed.
 - **PURE KERNELS.** `data-expr` functions are pure
   `fn(&[Value], &EvalCtx) -> Value` — they never see the resolution graph, the
   scheduler, or the SDK (spec §4 rule 1). `data-lower` is pure model→IR.
@@ -125,11 +133,11 @@ Rules for every code change in this repo:
   user-consented; a data-source manifest shows every origin/file a document
   touches; documents carrying queries are treated as carrying code (no
   auto-fetch on open — inert until consented). Credentials are NEVER serialized
-  into the document payload. M0 ships the capability/consent SKELETON +
+  into the document payload. The capability/consent gate +
   `data.security.*` hard gates (no resolution of remote sources pre-consent;
   round-trip test: save→inspect→assert credentials absent). `network` reach is
-  declared `false` at M0 (file/inline only); it flips on at M1 WITH the consent
-  UI — never silently.
+  declared `origins: "consent"`: a remote source is fetched only for an origin
+  the host reports as consented — never silently.
 - **The bundle touches host surfaces + React only.** No `@paged-media/shell` /
   `client` imports — writes via `host.document.mutate`, binding payload via
   `setPluginMetadata` (namespace `x-paged:media.paged.data`), persistence honesty
@@ -137,11 +145,11 @@ Rules for every code change in this repo:
   committed content — the panel says what is and isn't persisted). Panels are
   factories closing over `BundleHost`; styling = the token layer (`--pg-*`,
   `--status-*`, `--font-mono`, `--space-*`, `--radius-*`).
-- **Reserved seams stay honest.** Remote/DB sources, the network-consent UI,
-  record flow / pagination, data-driven rules, governed extract, batch
-  generation, the data-provider contract, OPFS persistence, and worker-hosted
-  DuckDB are NOT implemented at M0 — the manifest + UI + the RFI say so
-  explicitly. Never fake them.
+- **Reserved seams stay honest.** What the engine can do but a user cannot
+  reach (record flow into the document, merge to a document, persistence,
+  DB-attach execution, worker-hosted DuckDB, OPFS) is said so in the manifest,
+  the UI, `docs/status.md` and the RFI. Never fake it, and never leave a
+  "not yet" message standing after the door exists.
 - **CLEAN-ROOM (§3).** `references/` (any reference engine, IF ever mounted) is
   read-only, analyst-only, gitignored, excluded from all artifacts; implementers
   never read it. EasyCatalog is studied as a PRODUCT (features/UX), never as
@@ -170,23 +178,32 @@ Rules for every code change in this repo:
 ## Commands
 
 ```bash
-# Rust (the engine)
-cargo build --workspace && cargo test --workspace
+# Rust (the engine). CARGO_INCREMENTAL=0 keeps target/ small.
+cargo build --workspace
+cargo nextest run --workspace --profile ci --no-fail-fast   # writes target/nextest/ci/junit.xml
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p data-conformance --bin coverage-gate    # the §12.2 gate
+cargo run -p data-conformance --bin coverage-gate -- --junit target/nextest/ci/junit.xml   # the §12.2 gate
 
 # Dependency guards (CI runs these; run before claiming green)
 cargo tree -p data-expr --edges normal | grep -E 'data-(sources|query|bind|lower|js)' && echo LEAK
 cargo tree -p data-js --target wasm32-unknown-unknown | grep -E 'data-conformance|proptest' && echo LEAK
 cargo deny check
 
-# wasm artifact (100 MB app wasm budget; lands in packages/data-bundle/bin/)
-bash scripts/vendor-duckdb.sh   # acquire the MIT DuckDB-WASM artifact (once)
+# wasm artifact (100 MB app wasm budget; lands in packages/data-bundle/bin/).
+# Rebuild after ANY Rust change: test/wasm-fresh.spec.ts fails on a wasm built
+# from other sources (scripts/source-hash.mjs, stamped as bin/SOURCE_HASH).
+bash scripts/vendor-duckdb.sh   # the MIT DuckDB-WASM artifact; stages bin/duckdb-engine.wasm
 bash scripts/build-wasm.sh
 
-# TS (the bundle) — install order: editor → plugin-sdk → plugin-data
-pnpm install && pnpm test && pnpm typecheck
+# TS (the bundle). The contract comes from npm at an exact pin
+# (test/sdk-pin.spec.ts); CI runs with REQUIRE_REAL_ENGINE=1 REQUIRE_REAL_DUCKDB=1.
+pnpm install && pnpm typecheck && pnpm test
 pnpm validate:manifest
+
+# Publishing (publish.yml, after green CI): a version already on npm must be
+# bumped when its inputs changed, and the tarball must carry DuckDB.
+node scripts/package-hash.mjs --check
+bash scripts/pubcheck.sh <packed.tgz>
 
 # Optional native-DuckDB differential oracle (CI container; not local)
 PAGED_DATA_ORACLE=1 cargo test -p data-conformance -- --ignored
