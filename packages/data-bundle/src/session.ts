@@ -56,14 +56,34 @@ import {
   decodeSession,
   emptyTargets,
   encodeSession,
+  dataPartOf,
   loadData,
+  loadFile,
   storeData,
+  storeFile,
+  type BinaryFormat,
   type PersistedData,
   type PersistedSession,
   type PersistedTargets,
 } from "./persist";
 import type { LowerStamp } from "./lower";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
+import {
+  formatOfFile,
+  loadIntoDuckDB,
+  quoteIdent,
+  sourceNameOf,
+  type ImportFormat,
+  type XlsxImport,
+} from "./query/import";
+import { diagnoseDuckDBError, guardQuery, previewSql, type SqlDiagnostic } from "./query/sql";
+import {
+  IntervalScheduler,
+  MANUAL,
+  readPolicy,
+  refusePolicy,
+  type RefreshPolicy,
+} from "./refresh";
 import {
   commitDataSet,
   commitLoweredBarcode,
@@ -83,6 +103,9 @@ import {
 } from "./remote";
 
 export type { RemoteFormat, RemoteSourceState } from "./remote";
+export type { RefreshPolicy } from "./refresh";
+export type { SqlDiagnostic } from "./query/sql";
+export type { ImportFormat } from "./query/import";
 
 /** One frame in a live chain, the shape the engine paginates over
  *  (`FrameCapacity`): `frame`/`page` ids + the content-box `heightPt`. The
@@ -157,6 +180,40 @@ export interface SessionState {
   diagnostics: SessionDiagnostic[];
   /** Whether the session is saved with the document (the panels say so). */
   persistence: PersistenceState;
+  /** Imported local files (wave 6): which source came from which file. */
+  files: ImportedFileState[];
+  /** Refresh policy per source (absent = manual). */
+  refresh: Record<string, RefreshPolicy>;
+  /** Remote sources being polled now (interval policy, consented origin). */
+  polling: string[];
+}
+
+/** One imported local file, as the Sources panel lists it. */
+export interface ImportedFileState {
+  source: string;
+  format: ImportFormat;
+  fileName: string;
+  /** XLSX: the worksheet read, and every worksheet of the workbook. */
+  sheet?: string;
+  sheets?: string[];
+}
+
+/** What an import did. `error` is set (and reported) when it failed. */
+export interface ImportResult {
+  source: string;
+  format: ImportFormat | null;
+  sheet?: string;
+  sheets?: string[];
+  error?: string;
+}
+
+/** A query preview: the first rows as DuckDB renders them, or why not. */
+export interface QueryPreview {
+  columns: { name: string; type: string }[];
+  rows: (string | null)[][];
+  /** The query's full row count (the preview shows at most `limit`). */
+  total: number | null;
+  diagnostic: SqlDiagnostic | null;
 }
 
 /** Where the session stands against the document's `session` part:
@@ -183,7 +240,8 @@ export interface SessionDiagnostic {
     | "variables"
     | "persist"
     | "restore"
-    | "flow";
+    | "flow"
+    | "query";
   message: string;
   binding?: string;
 }
@@ -369,6 +427,39 @@ export interface DataSourceSession {
    *  engine-computed content-hash invalidation key. */
   loadRemoteSource(name: string): Promise<void>;
   addQuery(id: string, sql: string, shape: "recordStream" | "singleRecord" | "scalar"): void;
+  /** Import a local file as a source table: CSV, TSV, JSON (array or
+   *  newline-delimited), Parquet, XLSX (one worksheet, `sheet` absent = the
+   *  first). The source is named after the file unless `name` is given. The
+   *  file is saved with the document like a CSV. Never throws: a failure is
+   *  in the result and in `diagnostics`. */
+  importFile(
+    fileName: string,
+    bytes: Uint8Array,
+    options?: { name?: string; sheet?: string },
+  ): Promise<ImportResult>;
+  /** Read another worksheet of an imported workbook into the same source. */
+  selectSheet(source: string, sheet: string): Promise<ImportResult>;
+  /** The columns of a source table (name and DuckDB type), for the query
+   *  builders. Empty when the source is unknown or DuckDB is unavailable. */
+  describeSource(source: string): Promise<{ name: string; type: string }[]>;
+  /** Run a query for a preview of its first `limit` rows (default 50), as
+   *  DuckDB renders the values. Guarded like every query (query/sql.ts);
+   *  nothing is ingested and no binding changes. */
+  previewQuery(sql: string, limit?: number): Promise<QueryPreview>;
+  /** Define or replace a query after the guard admits it; returns the
+   *  diagnostic and defines nothing when it does not. Saved with the
+   *  session. */
+  saveQuery(
+    id: string,
+    sql: string,
+    shape?: "recordStream" | "singleRecord" | "scalar",
+  ): Promise<SqlDiagnostic | null>;
+  /** The defined queries and their SQL, in definition order. */
+  listQueries(): { id: string; sql: string }[];
+  /** Set a source's refresh policy (src/refresh.ts says what each does).
+   *  Returns why it was refused, or null. */
+  setRefreshPolicy(source: string, policy: RefreshPolicy): string | null;
+  getRefreshPolicy(source: string): RefreshPolicy;
   addVariableBinding(id: string, target: string, query: string, expr: string): void;
   addTableBinding(id: string, region: string, query: string, columns: ColumnSpec[]): void;
   /** D-14: define an image binding bound to a RECTANGLE (`elementId`). `expr`
@@ -727,7 +818,32 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     remote: [],
     diagnostics,
     persistence,
+    files: [],
+    refresh: {},
+    polling: [],
   };
+
+  // ── wave 6: local files beyond CSV, refresh policies, the query guard ────
+  /** An imported JSON / Parquet / XLSX file: the bytes the session saves. */
+  interface ImportedFile {
+    format: BinaryFormat;
+    fileName: string;
+    bytes: Uint8Array;
+    sheet?: string;
+    sheets?: string[];
+  }
+  const importedFiles = new Map<string, ImportedFile>();
+  // Restored files not yet in DuckDB (registered on DuckDB's first boot).
+  const pendingFiles = new Map<string, ImportedFile>();
+  // The file a CSV / TSV source came from (display only).
+  const csvFileNames = new Map<string, { format: "csv" | "tsv"; fileName: string }>();
+  const refreshPolicies = new Map<string, RefreshPolicy>();
+  // The guard's verdict per query text: a refresh asks DuckDB's parser once
+  // per distinct query, not on every run.
+  const guardVerdicts = new Map<string, SqlDiagnostic | null>();
+  const poller = new IntervalScheduler((name) => pollRemote(name));
+  // Set once the returned object exists (pollRemote calls refreshData on it).
+  let self: DataSourceSession | null = null;
 
   function emit(): void {
     for (const l of [...listeners]) {
@@ -822,6 +938,19 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         ),
       );
     }
+    for (const [source, f] of importedFiles) {
+      data.push(
+        await storeFile(
+          source,
+          f.format,
+          f.fileName,
+          f.bytes,
+          f.sheet,
+          (path, bytes) => host.parts.write(path, bytes),
+          knownDataParts,
+        ),
+      );
+    }
     return {
       v: 1,
       engine: payload,
@@ -836,6 +965,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         params: { ...r.params },
         ...(r.credentialRef ? { credentialRef: r.credentialRef } : {}),
       })),
+      refresh: Object.fromEntries(refreshPolicies),
     };
   }
 
@@ -880,7 +1010,10 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       const built = await buildPersisted();
       if (!built) return;
       const named = new Set(
-        built.data.flatMap((d) => ("ref" in d ? [`${DATA_PART_DIR}${d.ref.hash}.csv`] : [])),
+        built.data.flatMap((d) => {
+          const part = dataPartOf(d);
+          return part ? [part] : [];
+        }),
       );
       for (const rel of await host.parts.list(DATA_PART_DIR)) {
         const path = rel.startsWith(DATA_PART_DIR) ? rel : `${DATA_PART_DIR}${rel}`;
@@ -1129,6 +1262,19 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           });
         }
       }
+      for (const [name, f] of [...pendingFiles]) {
+        try {
+          const e = f.format === "xlsx" ? await ensureEngine() : null;
+          await loadIntoDuckDB(d, name, f.format, f.bytes, xlsxReader(e), f.sheet);
+          pendingFiles.delete(name);
+        } catch (err) {
+          report({
+            level: "error",
+            source: "restore",
+            message: `the saved file "${f.fileName}" (source "${name}") could not be loaded into the query engine: ${errText(err)}`,
+          });
+        }
+      }
       return d;
     } catch (err) {
       state.status = "duckdb-missing";
@@ -1139,6 +1285,146 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
   function sync(): void {
     state.queries = Array.from(queries.keys());
+  }
+
+  /** The data engine's worksheet reader (xlsx imports). */
+  function xlsxReader(e: DataEngineLike | null): (bytes: Uint8Array, sheet?: string) => XlsxImport {
+    return (bytes, sheet) => {
+      if (!e || typeof e.xlsx_import !== "function") {
+        throw new Error(
+          "the engine wasm predates the XLSX reader — rebuild scripts/build-wasm.sh",
+        );
+      }
+      return e.xlsx_import(bytes, sheet) as XlsxImport;
+    };
+  }
+
+  /** Ask the guard once per query text (query/sql.ts). */
+  async function guardOnce(d: DuckDBHandle, sql: string): Promise<SqlDiagnostic | null> {
+    if (guardVerdicts.has(sql)) return guardVerdicts.get(sql)!;
+    const verdict = await guardQuery(d, sql);
+    guardVerdicts.set(sql, verdict);
+    return verdict;
+  }
+
+  /** Is this source a remote one, a local one, or unknown? */
+  function sourceKind(name: string): "remote" | "file" | null {
+    if (remoteSources.has(name)) return "remote";
+    return sourceNames.includes(name) ? "file" : null;
+  }
+
+  /** Make the running poll timers match the policies: a remote source with
+   *  an interval policy whose origin is consented, nothing else. */
+  function syncPolling(): void {
+    const consented = consentedOriginsSafe();
+    const wanted = new Map<string, number>();
+    for (const [name, p] of refreshPolicies) {
+      const r = remoteSources.get(name);
+      if (p.policy === "interval" && r && consented.includes(r.origin)) wanted.set(name, p.secs);
+    }
+    poller.sync(wanted);
+    state.polling = [...wanted.keys()];
+  }
+
+  /** One poll of a remote source: fetch again, and re-run the queries when
+   *  the content changed. The session part is not rewritten (nothing in it
+   *  changed). Stops polling a source whose consent is gone. */
+  async function pollRemote(name: string): Promise<void> {
+    const r = remoteSources.get(name);
+    if (!r) return;
+    if (!consentedOriginsSafe().includes(r.origin)) {
+      syncPolling();
+      return;
+    }
+    const before = r.contentKey;
+    await fetchRemote(name, false);
+    if (r.status === "loaded" && r.contentKey !== before && before !== null) {
+      await self?.refreshData();
+      state.message = `Remote source "${name}" changed — data refreshed.`;
+    }
+    emit();
+  }
+
+  /** On open, act on `onOpen` policies: a consented remote source is fetched
+   *  again; when any source asks for it, the queries re-run (this boots
+   *  DuckDB — the user chose it for this document). Never throws. */
+  async function applyOnOpen(): Promise<void> {
+    const onOpen = [...refreshPolicies].filter(([, p]) => p.policy === "onOpen").map(([n]) => n);
+    if (onOpen.length === 0) return;
+    const consented = consentedOriginsSafe();
+    for (const name of onOpen) {
+      const r = remoteSources.get(name);
+      if (r && consented.includes(r.origin)) await fetchRemote(name, false);
+    }
+    await self?.refreshData();
+  }
+
+  /** The fetch behind Load and every poll (the consent gate first). */
+  async function fetchRemote(name: string, persist: boolean): Promise<void> {
+    const r = remoteSources.get(name);
+    if (!r) return;
+    // THE GATE COMES FIRST: an unconsented origin never reaches the network
+    // (no fetch, no engine boot) — the source stays inert (§11/D-03).
+    if (!consentedOriginsSafe().includes(r.origin)) {
+      r.consent = "required";
+      r.status = "inert";
+      r.message = `Origin ${r.origin} not consented — request consent first (no fetch performed).`;
+      state.message = r.message;
+      return;
+    }
+    r.consent = "granted";
+    try {
+      // Edit-time fetch (the ONLY fetch in the bundle): the editor's CSP
+      // connect-src derived from the grant backstops this gate.
+      const response = await fetch(buildRemoteUrl(r.url, r.params));
+      if (!response.ok) {
+        throw new Error(`fetch failed: HTTP ${response.status}`);
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+
+      // Hand the bytes to the query lane exactly like an imported file: the
+      // source becomes a table named after it, whatever its format.
+      const d = await ensureDuck();
+      const e = await ensureEngine();
+      await loadIntoDuckDB(d, name, r.format, bytes, xlsxReader(e));
+
+      // Define the descriptor on the engine + record the content-hash
+      // invalidation key (computed in Rust; the engine never fetches).
+      e.define_source({
+        id: name,
+        kind: {
+          kind: "remote",
+          url: r.url,
+          format: r.format,
+          params: r.params,
+          credential_ref: r.credentialRef ?? null,
+        },
+        capability: "network",
+        refresh: refreshPolicies.get(name) ?? MANUAL,
+      });
+      r.contentKey =
+        typeof e.remote_invalidation_key === "function"
+          ? e.remote_invalidation_key(name, bytes)
+          : null;
+
+      if (!sourceNames.includes(name)) sourceNames.push(name);
+      r.status = "loaded";
+      r.message =
+        r.contentKey === null
+          ? "Loaded (engine wasm predates the invalidation key — rebuild scripts/build-wasm.sh)."
+          : `Loaded — content key ${r.contentKey}.`;
+      state.status = "ready";
+      state.message = `Remote source "${name}" loaded.`;
+      if (persist) markDirty();
+    } catch (err) {
+      r.status = "error";
+      r.message = err instanceof Error ? err.message : String(err);
+      report({
+        level: "error",
+        source: "import",
+        message: `remote source "${name}" did not load: ${r.message}`,
+      });
+    }
   }
 
   /** Restore the document's `session` part: the engine recipe, the locale and
@@ -1203,6 +1489,29 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     // Imported data: back into DuckDB when it first boots.
     for (const d of saved.data) {
+      if (d.format !== "csv") {
+        const fileBytes = await loadFile(d, (path) => host.parts.read(path));
+        if (fileBytes === null) {
+          report({
+            level: "error",
+            source: "restore",
+            message: `the file "${d.fileName}" of source "${d.source}" is missing from the document — import it again`,
+          });
+          continue;
+        }
+        const part = dataPartOf(d);
+        if (part) knownDataParts.add(part);
+        const f: ImportedFile = {
+          format: d.format,
+          fileName: d.fileName,
+          bytes: fileBytes,
+          ...(d.sheet !== undefined ? { sheet: d.sheet } : {}),
+        };
+        importedFiles.set(d.source, f);
+        pendingFiles.set(d.source, f);
+        if (!sourceNames.includes(d.source)) sourceNames.push(d.source);
+        continue;
+      }
       const text = await loadData(d, (path) => host.parts.read(path));
       if (text === null) {
         report({
@@ -1216,6 +1525,11 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       importedCsv.set(d.source, text);
       pendingCsv.set(d.source, text);
       if (!sourceNames.includes(d.source)) sourceNames.push(d.source);
+    }
+
+    for (const [name, p] of Object.entries(saved.refresh)) {
+      const policy = readPolicy(p);
+      if (policy.policy !== "manual") refreshPolicies.set(name, policy);
     }
 
     // Remote descriptors come back INERT: nothing fetches on open (§11).
@@ -1286,6 +1600,11 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     state.status = "ready";
     state.message = `Restored ${bindingIds.length} binding(s) over ${sourceNames.length} source(s) from the document.`;
     emit();
+    // Refresh policies: interval polling for consented remote sources, and
+    // what the document asked to happen on open.
+    syncPolling();
+    await applyOnOpen();
+    emit();
   }
 
   // Save hook + undo/redo follow-up, held for dispose.
@@ -1308,7 +1627,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     );
   }
 
-  return {
+  self = {
     getState() {
       return {
         ...state,
@@ -1318,6 +1637,18 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         remote: remoteSnapshot(),
         diagnostics: diagnostics.map((d) => ({ ...d })),
         persistence: { ...persistence },
+        files: [
+          ...Array.from(csvFileNames, ([source, f]) => ({ source, ...f })),
+          ...Array.from(importedFiles, ([source, f]) => ({
+            source,
+            format: f.format,
+            fileName: f.fileName,
+            ...(f.sheet !== undefined ? { sheet: f.sheet } : {}),
+            ...(f.sheets !== undefined ? { sheets: [...f.sheets] } : {}),
+          })),
+        ],
+        refresh: Object.fromEntries(refreshPolicies),
+        polling: [...state.polling],
       };
     },
 
@@ -1393,68 +1724,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     async loadRemoteSource(name) {
-      const r = remoteSources.get(name);
-      if (!r) return;
-      // THE GATE COMES FIRST: an unconsented origin never reaches the network
-      // (no fetch, no engine boot) — the source stays inert (§11/D-03).
-      if (!consentedOriginsSafe().includes(r.origin)) {
-        r.consent = "required";
-        r.status = "inert";
-        r.message = `Origin ${r.origin} not consented — request consent first (no fetch performed).`;
-        state.message = r.message;
-        return;
-      }
-      r.consent = "granted";
-      try {
-        // Edit-time fetch (the ONLY fetch in the bundle): the editor's CSP
-        // connect-src derived from the grant backstops this gate.
-        const response = await fetch(buildRemoteUrl(r.url, r.params));
-        if (!response.ok) {
-          throw new Error(`fetch failed: HTTP ${response.status}`);
-        }
-        const bytes = new Uint8Array(await response.arrayBuffer());
-
-        // Hand the bytes to the query lane exactly like an imported file.
-        const d = await ensureDuck();
-        if (r.format === "csv" || r.format === "tsv") {
-          await d.registerCsv(name, new TextDecoder().decode(bytes));
-        } else {
-          await d.registerFileBuffer(`${name}.${r.format}`, bytes);
-        }
-
-        // Define the descriptor on the engine + record the content-hash
-        // invalidation key (computed in Rust; the engine never fetches).
-        const e = await ensureEngine();
-        e.define_source({
-          id: name,
-          kind: {
-            kind: "remote",
-            url: r.url,
-            format: r.format,
-            params: r.params,
-            credential_ref: r.credentialRef ?? null,
-          },
-          capability: "network",
-        });
-        r.contentKey =
-          typeof e.remote_invalidation_key === "function"
-            ? e.remote_invalidation_key(name, bytes)
-            : null;
-
-        if (!sourceNames.includes(name)) sourceNames.push(name);
-        r.status = "loaded";
-        r.message =
-          r.contentKey === null
-            ? "Loaded (engine wasm predates the invalidation key — rebuild scripts/build-wasm.sh)."
-            : `Loaded — content key ${r.contentKey}.`;
-        state.status = "ready";
-        state.message = `Remote source "${name}" loaded.`;
-        markDirty();
-      } catch (err) {
-        r.status = "error";
-        r.message = err instanceof Error ? err.message : String(err);
-        host.log.warn(`loadRemoteSource(${name}): ${r.message}`);
-      }
+      await fetchRemote(name, true);
+      syncPolling();
+      emit();
     },
 
     addQuery(id, sql, shape) {
@@ -1462,6 +1734,185 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       defineOnEngine((e) => e.define_query({ id, sql, params: [], shape: { shape } }));
       sync();
       markDirty();
+    },
+
+    async importFile(fileName, bytes, options) {
+      const format = formatOfFile(fileName);
+      const name = options?.name ?? sourceNameOf(fileName);
+      if (!format) {
+        const error = `"${fileName}" is not a file the data plugin imports (CSV, TSV, JSON, Parquet or XLSX)`;
+        report({ level: "error", source: "import", message: error });
+        return { source: name, format: null, error };
+      }
+      if (format === "csv" || format === "tsv") {
+        const text = new TextDecoder().decode(bytes);
+        const before = diagnostics.length;
+        await this.registerCsvSource(name, text);
+        if (importedCsv.get(name) !== text) {
+          const error = diagnostics.slice(before).find((d) => d.source === "import")?.message ??
+            `Import of "${name}" failed`;
+          return { source: name, format, error };
+        }
+        importedFiles.delete(name);
+        pendingFiles.delete(name);
+        csvFileNames.set(name, { format, fileName });
+        emit();
+        return { source: name, format };
+      }
+      try {
+        const d = await ensureDuck();
+        const e = await ensureEngine();
+        const out = await loadIntoDuckDB(d, name, format, bytes, xlsxReader(e), options?.sheet);
+        e.define_source({
+          id: name,
+          kind: { kind: "file", format: format === "xlsx" ? "excel" : format, name: fileName },
+          capability: "file-import",
+          refresh: refreshPolicies.get(name) ?? MANUAL,
+        });
+        importedFiles.set(name, {
+          format,
+          fileName,
+          bytes,
+          ...(out.sheet !== undefined ? { sheet: out.sheet } : {}),
+          ...(out.sheets !== undefined ? { sheets: out.sheets } : {}),
+        });
+        pendingFiles.delete(name);
+        importedCsv.delete(name);
+        pendingCsv.delete(name);
+        csvFileNames.delete(name);
+        if (!sourceNames.includes(name)) sourceNames.push(name);
+        state.status = "ready";
+        state.message =
+          `Source "${name}" imported from ${fileName}` +
+          (out.sheet !== undefined ? ` (worksheet "${out.sheet}")` : "") +
+          ".";
+        if (out.errorCells) {
+          report({
+            level: "warn",
+            source: "import",
+            message: `${out.errorCells} error cell(s) in ${fileName} were read as empty`,
+          });
+        }
+        markDirty();
+        return {
+          source: name,
+          format,
+          ...(out.sheet !== undefined ? { sheet: out.sheet } : {}),
+          ...(out.sheets !== undefined ? { sheets: out.sheets } : {}),
+        };
+      } catch (err) {
+        if (state.status !== "engine-missing" && state.status !== "duckdb-missing") {
+          state.status = "error";
+        }
+        const error = `Import of "${fileName}" failed: ${errText(err)}`;
+        state.message = error;
+        report({ level: "error", source: "import", message: error });
+        return { source: name, format, error };
+      }
+    },
+
+    async selectSheet(source, sheet) {
+      const f = importedFiles.get(source);
+      if (!f || f.format !== "xlsx") {
+        const error = `"${source}" is not an imported workbook`;
+        report({ level: "error", source: "import", message: error });
+        return { source, format: f?.format ?? null, error };
+      }
+      return this.importFile(f.fileName, f.bytes, { name: source, sheet });
+    },
+
+    async describeSource(source) {
+      if (!sourceNames.includes(source)) return [];
+      try {
+        const d = await ensureDuck();
+        const desc = await d.rows(`DESCRIBE ${quoteIdent(source)}`);
+        return desc.rows.map((r) => ({ name: r[0] ?? "", type: r[1] ?? "" }));
+      } catch (err) {
+        report({
+          level: "warn",
+          source: "query",
+          message: `the columns of "${source}" could not be read: ${errText(err)}`,
+        });
+        return [];
+      }
+    },
+
+    async previewQuery(sql, limit = 50) {
+      const empty = { columns: [], rows: [], total: null };
+      let d: DuckDBHandle;
+      try {
+        d = await ensureDuck();
+      } catch (err) {
+        return { ...empty, diagnostic: { kind: "Engine", message: errText(err) } };
+      }
+      const refused = await guardOnce(d, sql);
+      if (refused) return { ...empty, diagnostic: refused };
+      try {
+        const limited = previewSql(sql, limit);
+        const desc = await d.rows(`DESCRIBE ${limited}`);
+        const columns = desc.rows.map((r) => ({ name: r[0] ?? "", type: r[1] ?? "" }));
+        // DuckDB renders every value (dates, decimals with their scale, …)
+        // the way it would print them.
+        const shown = await d.rows(`SELECT COLUMNS(*)::VARCHAR FROM (${limited})`);
+        const count = await d.rows(`SELECT count(*) FROM (\n${sql.replace(/[\s;]+$/, "")}\n)`);
+        const total = Number(count.rows[0]?.[0] ?? NaN);
+        return {
+          columns,
+          rows: shown.rows,
+          total: Number.isFinite(total) ? total : null,
+          diagnostic: null,
+        };
+      } catch (err) {
+        return { ...empty, diagnostic: diagnoseDuckDBError(err, 1) };
+      }
+    },
+
+    async saveQuery(id, sql, shape = "recordStream") {
+      let d: DuckDBHandle;
+      try {
+        d = await ensureDuck();
+      } catch (err) {
+        return { kind: "Engine", message: errText(err) };
+      }
+      const refused = await guardOnce(d, sql);
+      if (refused) return refused;
+      try {
+        await d.rows(`DESCRIBE ${previewSql(sql, 0)}`);
+      } catch (err) {
+        return diagnoseDuckDBError(err, 1);
+      }
+      this.addQuery(id, sql.replace(/[\s;]+$/, "").trim(), shape);
+      return null;
+    },
+
+    listQueries() {
+      return Array.from(queries.values(), (q) => ({ id: q.id, sql: q.sql }));
+    },
+
+    setRefreshPolicy(source, policy) {
+      const kind = sourceKind(source);
+      if (!kind) return `no source named "${source}"`;
+      const refused = refusePolicy(kind, policy);
+      if (refused) return refused;
+      if (policy.policy === "manual") refreshPolicies.delete(source);
+      else refreshPolicies.set(source, policy);
+      // Mirror it into the engine's source definition (the recipe model).
+      if (engine) {
+        try {
+          const p = engine.payload() as { sources?: { id: string }[] } | null;
+          const def = p?.sources?.find((x) => x.id === source);
+          if (def) engine.define_source({ ...def, refresh: policy });
+        } catch {
+          // the session map is what acts on the policy
+        }
+      }
+      syncPolling();
+      markDirty();
+      return null;
+    },
+
+    getRefreshPolicy(source) {
+      return refreshPolicies.get(source) ?? MANUAL;
     },
 
     addVariableBinding(id, target, query, expr) {
@@ -1796,7 +2247,29 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         const e = await ensureEngine();
         const d = await ensureDuck();
         for (const q of queries.values()) {
-          const records = await d.query(q.sql);
+          // A document's queries are code (§11): only a SELECT over the
+          // source tables runs (query/sql.ts).
+          const refused = await guardOnce(d, q.sql);
+          if (refused) {
+            report({
+              level: "error",
+              source: "query",
+              message: `query "${q.id}" was not run: ${refused.message}`,
+            });
+            continue;
+          }
+          let records;
+          try {
+            records = await d.query(q.sql);
+          } catch (err) {
+            const diag = diagnoseDuckDBError(err);
+            report({
+              level: "error",
+              source: "query",
+              message: `query "${q.id}" failed — ${diag.kind}: ${diag.message}`,
+            });
+            continue;
+          }
           e.ingest_result(q.id, records);
         }
         state.status = "ready";
@@ -2449,6 +2922,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       remoteSources.clear();
       importedCsv.clear();
       pendingCsv.clear();
+      importedFiles.clear();
+      pendingFiles.clear();
+      csvFileNames.clear();
+      refreshPolicies.clear();
+      guardVerdicts.clear();
+      poller.stopAll();
+      state.polling = [];
       loweredInto.clear();
       pendingDefs.length = 0;
       knownDataParts.clear();
@@ -2481,6 +2961,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         if (persistTimer) clearTimeout(persistTimer);
         persistTimer = null;
         for (const d of hostSubs.splice(0)) d.dispose();
+        poller.stopAll();
         listeners.clear();
         for (const h of providerHandles.values()) h.dispose();
         providerHandles.clear();
@@ -2490,4 +2971,5 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         duck = null;
       },
     };
-  }
+  return self;
+}

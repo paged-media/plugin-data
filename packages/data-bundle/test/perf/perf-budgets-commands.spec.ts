@@ -122,6 +122,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     duckQueries: 0,
   };
   // Wave 4 (persistence): +1 parts.write (the session part), +1 supports, +1 log; +1 payload +1 sync_report to build it (one payload, shared with the lowered label's definition hash).
+  // Wave 6 (query guard): +1 DuckDB statement — the first refresh asks DuckDB's
+  // parser about the query once (`json_serialize_sql`, query/sql.ts guardQuery).
   const W1_LOWER: Measured = {
     hostCalls: 11,
     hostReads: 3,
@@ -135,7 +137,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     stabilizeCalls: 1,
     keyAllocs: 9840,
     fingerprints: 0,
-    duckQueries: 1,
+    duckQueries: 2,
   };
   it("W1 imports a 500-row CSV and lowers it as one table [data.perf.gates]", async () => {
     h = await openDataHost();
@@ -355,6 +357,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 20 variables places its field in a FRESH frame: meta + pages + insertText-
   // Frame + elementGeometry + meta + hitTest + insertField — two undo steps
   // and five reads per variable (D-16: the minted story is not addressable).
+  // Wave 6 (query guard): +1 DuckDB statement — `json_serialize_sql` once for the
+  // one query on its first refresh (query/sql.ts guardQuery).
   const W5: Measured = {
     hostCalls: 240,
     hostReads: 120,
@@ -368,7 +372,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     stabilizeCalls: 0,
     keyAllocs: 0,
     fingerprints: 0,
-    duckQueries: 1,
+    duckQueries: 2,
   };
   it("W5 lowers 20 variable bindings at once [data.perf.gates]", async () => {
     h = await openDataHost();

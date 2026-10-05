@@ -104,6 +104,10 @@ export interface DataEngineLike {
    *  source over bundle-fetched bytes. Optional: a wasm artifact built before
    *  the M1 slice lacks it (the session degrades honestly). */
   remote_invalidation_key?(source: string, bytes: Uint8Array): string;
+  /** Wave 6: read one worksheet of an `.xlsx` (data-xlsx) as
+   *  `{sheet, sheets, columns, rows, errorCells, json}` for DuckDB. Optional:
+   *  a wasm built before it lacks it (the import says so). */
+  xlsx_import?(bytes: Uint8Array, sheet?: string): unknown;
   sync_state(binding: string): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;

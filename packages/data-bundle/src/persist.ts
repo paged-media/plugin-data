@@ -18,11 +18,15 @@
 //                 rule's query and host target, and the element a table was
 //                 lowered into (`lowered`), so a reopen can tell whether that
 //                 element is still there and still carries this binding.
-//   · `data`    — the imported CSV text per source. A small file is inline; a
-//                 large one (over INLINE_DATA_MAX_BYTES) is its own content-
-//                 addressed part `data/<hash>.csv` and the session names it by
-//                 `{ hash, bytes }`, so a session rewrite never rewrites the
-//                 data and two sessions with the same file share one part.
+//   · `data`    — the imported file per source: CSV/TSV as text, JSON,
+//                 Parquet and XLSX as bytes (base64 when inline). A small file
+//                 is inline; a large one (over INLINE_DATA_MAX_BYTES) is its
+//                 own content-addressed part `data/<hash>.<ext>` and the
+//                 session names it by `{ hash, bytes }`, so a session rewrite
+//                 never rewrites the data and two sessions with the same file
+//                 share one part. An XLSX entry also names the worksheet read.
+//   · `refresh` — the refresh policy per source (data-core `RefreshPolicy`),
+//                 absent = manual.
 //   · `remote`  — remote source descriptors (url, format, params, credential
 //                 REF). They restore INERT: nothing is fetched on open (§11).
 //
@@ -37,6 +41,8 @@
 import type { ElementId } from "@paged-media/plugin-api";
 
 import type { IdmlFit, RuleTarget, VisibilityTargetKind } from "../../data-host-model/src";
+import type { ImportFormat } from "./query/import";
+import type { RefreshPolicy } from "./refresh";
 import type { RemoteFormat } from "./remote";
 
 /** The part the session is written to (relative to `paged/media.paged.data/`). */
@@ -47,10 +53,30 @@ export const DATA_PART_DIR = "data/";
 export const INLINE_DATA_MAX_BYTES = 64 * 1024;
 export const SESSION_VERSION = 1;
 
-/** One imported source's data: inline text, or a pointer to its own part. */
+/** A stored CSV entry. */
+export type CsvData = Extract<PersistedData, { format: "csv" }>;
+
+/** The imported formats stored as bytes (CSV and TSV are stored as text). */
+export type BinaryFormat = Exclude<ImportFormat, "csv" | "tsv">;
+
+/** One imported source's data: inline, or a pointer to its own part. */
 export type PersistedData =
   | { source: string; format: "csv"; text: string }
-  | { source: string; format: "csv"; ref: { hash: string; bytes: number } };
+  | { source: string; format: "csv"; ref: { hash: string; bytes: number } }
+  | {
+      source: string;
+      format: BinaryFormat;
+      fileName: string;
+      sheet?: string;
+      base64: string;
+    }
+  | {
+      source: string;
+      format: BinaryFormat;
+      fileName: string;
+      sheet?: string;
+      ref: { hash: string; bytes: number };
+    };
 
 export interface PersistedRemote {
   name: string;
@@ -77,6 +103,8 @@ export interface PersistedSession {
   targets: PersistedTargets;
   data: PersistedData[];
   remote: PersistedRemote[];
+  /** Refresh policy per source; a source not named here is manual. */
+  refresh: Record<string, RefreshPolicy>;
 }
 
 export function emptyTargets(): PersistedTargets {
@@ -95,8 +123,61 @@ export async function contentHash(bytes: Uint8Array): Promise<string> {
   ).join("");
 }
 
-export function dataPartPath(hash: string): string {
-  return `${DATA_PART_DIR}${hash}.csv`;
+/** The part a stored file is written to (`data/<hash>.<ext>`). */
+export function dataPartPath(hash: string, format: "csv" | BinaryFormat = "csv"): string {
+  return `${DATA_PART_DIR}${hash}.${format}`;
+}
+
+/** The part path a persisted entry points at, or null when it is inline. */
+export function dataPartOf(d: PersistedData): string | null {
+  return "ref" in d ? dataPartPath(d.ref.hash, d.format) : null;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+function fromBase64(text: string): Uint8Array {
+  const bin = atob(text);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** Store one imported binary file (JSON, Parquet, XLSX): inline as base64
+ *  when small, else as a content-addressed part written once. */
+export async function storeFile(
+  source: string,
+  format: BinaryFormat,
+  fileName: string,
+  bytes: Uint8Array,
+  sheet: string | undefined,
+  writePart: (path: string, bytes: Uint8Array) => Promise<void>,
+  known: Set<string>,
+): Promise<PersistedData> {
+  const head = { source, format, fileName, ...(sheet !== undefined ? { sheet } : {}) };
+  if (bytes.length <= INLINE_DATA_MAX_BYTES) return { ...head, base64: toBase64(bytes) };
+  const hash = await contentHash(bytes);
+  const path = dataPartPath(hash, format);
+  if (!known.has(path)) {
+    await writePart(path, bytes);
+    known.add(path);
+  }
+  return { ...head, ref: { hash, bytes: bytes.length } };
+}
+
+/** Read one stored binary file back, or `null` when its part is missing. */
+export async function loadFile(
+  d: PersistedData,
+  readPart: (path: string) => Promise<Uint8Array | null>,
+): Promise<Uint8Array | null> {
+  if ("base64" in d) return fromBase64(d.base64);
+  if ("text" in d) return encoder.encode(d.text);
+  return readPart(dataPartPath(d.ref.hash, d.format));
 }
 
 /** Decide how one imported text is stored: inline when small, else as a
@@ -106,7 +187,7 @@ export async function storeData(
   text: string,
   writePart: (path: string, bytes: Uint8Array) => Promise<void>,
   known: Set<string>,
-): Promise<PersistedData> {
+): Promise<CsvData> {
   const bytes = encoder.encode(text);
   if (bytes.length <= INLINE_DATA_MAX_BYTES) return { source, format: "csv", text };
   const hash = await contentHash(bytes);
@@ -120,7 +201,7 @@ export async function storeData(
 
 /** Read one stored source's text back, or `null` when its part is missing. */
 export async function loadData(
-  d: PersistedData,
+  d: CsvData,
   readPart: (path: string) => Promise<Uint8Array | null>,
 ): Promise<string | null> {
   if ("text" in d) return d.text;
@@ -159,5 +240,6 @@ export function decodeSession(bytes: Uint8Array): PersistedSession | { error: st
     targets: { ...emptyTargets(), ...(p.targets ?? {}) },
     data: Array.isArray(p.data) ? p.data : [],
     remote: Array.isArray(p.remote) ? p.remote : [],
+    refresh: p.refresh && typeof p.refresh === "object" ? p.refresh : {},
   };
 }
