@@ -188,6 +188,39 @@ describe.skipIf(!ready && !required)(
       ]);
     });
 
+    it("a record flow defines, previews, and comes back with its template [data.bind.authoring]", async () => {
+      expect(ready).toBe(true);
+      const mod = await loadBundleModule();
+      const h1 = await open();
+      h1.loadBundle(mod.dataBundle);
+      const s1 = mod.sessionFor(h1.host)!;
+      await s1.whenRestored();
+      await s1.registerCsvSource("stock", "sku,region\nA-1,North\nB-2,South\nC-3,North\n");
+      s1.addQuery("q", "SELECT sku, region FROM stock ORDER BY sku", "recordStream");
+      s1.defineRecordFlow("rf", "q", [{ expr: "sku" }], { groupBy: ["region"] });
+      await s1.refreshData();
+      const before = await s1.previewRecordFlow("rf");
+      expect(before?.total).toBe(3);
+      expect(before?.blocks.filter((b) => b.kind === "header").map((b) => b.text)).toEqual([
+        "North",
+        "South",
+      ]);
+      expect(before?.blocks.filter((b) => b.kind === "record").map((b) => b.text)).toEqual([
+        "A-1",
+        "C-3",
+        "B-2",
+      ]);
+      expect(s1.listBindings()).toEqual([{ id: "rf", kind: "recordFlow" }]);
+
+      await h1.willSave.fire();
+      const h2 = await open(await exportPaged(h1.host));
+      h2.loadBundle(mod.dataBundle);
+      const s2 = mod.sessionFor(h2.host)!;
+      await s2.whenRestored();
+      await s2.refreshData();
+      expect(await s2.previewRecordFlow("rf")).toEqual(before);
+    });
+
     it("a large CSV is stored once as its own content-addressed part [data.plugin.persistence]", async () => {
       expect(ready).toBe(true);
       const mod = await loadBundleModule();

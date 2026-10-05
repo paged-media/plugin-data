@@ -23,6 +23,8 @@ vi.mock("react", async (orig) => ({
     };
     return [slots[i], set];
   },
+  // No renderer here: effects (the session subscription) do not run.
+  useEffect: () => {},
 }));
 
 type El = { type: unknown; props: Record<string, unknown> & { children?: unknown } };
@@ -168,4 +170,167 @@ describe("dataset panel provider note [data.provider.contract]", () => {
       expect(all).toContain('Provider "q_all-dataset"');
     });
   }
+});
+
+describe("bindings panel — every binding kind is reachable [data.bind.authoring]", () => {
+  async function author(
+    kind: string,
+    field: string,
+    over: Partial<DataSourceSession>,
+    hostOver: Record<string, unknown> = {},
+    extra: (tree: El[]) => void = () => {},
+  ): Promise<string | undefined> {
+    const session = stubSession({ addQuery: () => {}, ...over });
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel({ ...host, ...hostOver } as unknown as BundleHost, session);
+    let tree = render(Panel);
+    (tree.find((e) => "data-data-bind-kind" in e.props)!.props.onChange as (e: unknown) => void)({
+      target: { value: kind },
+    });
+    tree = render(Panel);
+    (tree.find((e) => "data-data-bind-field" in e.props)!.props.onChange as (e: unknown) => void)({
+      target: { value: field },
+    });
+    tree = render(Panel);
+    extra(tree);
+    tree = render(Panel);
+    (tree.find((e) => "data-data-bind-add" in e.props)!.props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    tree = render(Panel);
+    const msg = tree.find((e) => "data-data-bind-msg" in e.props);
+    return msg ? text(msg) : undefined;
+  }
+
+  it("a table binding takes its columns from the comma-separated fields [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    await author("table", "sku, price", { addTableBinding: (...a: unknown[]) => void calls.push(a) });
+    expect(calls).toHaveLength(1);
+    expect(calls[0][3]).toEqual([
+      { header: "sku", expr: "sku" },
+      { header: "price", expr: "price" },
+    ]);
+  });
+
+  it("a show/hide binding binds the selected element, with its kind and invert [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    const msg = await author(
+      "visibility",
+      "discontinued",
+      { addVisibilityBinding: (...a: unknown[]) => void calls.push(a) },
+      { selection: { get: () => [{ kind: "oval", id: "u9" }] } },
+      (tree) =>
+        (tree.find((e) => "data-data-bind-invert" in e.props)!.props.onChange as (e: unknown) => void)({
+          target: { checked: true },
+        }),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].slice(1)).toEqual(["u9", "q_all", "discontinued", { invert: true, kind: "oval" }]);
+    expect(msg).toMatch(/hidden when true/);
+  });
+
+  it("a show/hide binding with nothing selected says what is missing [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    const msg = await author("visibility", "x", { addVisibilityBinding: (...a: unknown[]) => void calls.push(a) });
+    expect(calls).toHaveLength(0);
+    expect(msg).toMatch(/select the frame/);
+  });
+
+  it("a style rule over the caret's story applies the named style [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    await author(
+      "rule",
+      "stock < 5",
+      { addRuleBinding: (...a: unknown[]) => void calls.push(a) },
+      {
+        text: { caret: () => ({ storyId: "s1", offset: 2 }) },
+        document: {
+          storyContent: async () => ({ selfId: "s1", paragraphs: [{ runs: [{ text: "Hello" }, { text: "!" }] }] }),
+        },
+      },
+      (tree) =>
+        (tree.find((e) => "data-data-bind-rule-style" in e.props)!.props.onChange as (e: unknown) => void)({
+          target: { value: "Low stock" },
+        }),
+    );
+    expect(calls).toHaveLength(1);
+    const [, , query, when, apply, target] = calls[0];
+    expect([query, when, apply, target]).toEqual([
+      "q_all",
+      "stock < 5",
+      { action: "characterStyle", name: "Low stock" },
+      { kind: "storyRange", storyId: "s1", start: 0, end: 6 },
+    ]);
+  });
+
+  it("a cell-style rule on a selected table cell targets its column [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    await author(
+      "rule",
+      "stock < 5",
+      { addRuleBinding: (...a: unknown[]) => void calls.push(a) },
+      { selection: { get: () => [{ kind: "tableCell", id: { story_id: "s1", table_id: "t1", row: 2, col: 3 } }] } },
+      (tree) => {
+        (tree.find((e) => "data-data-bind-rule-style" in e.props)!.props.onChange as (e: unknown) => void)({
+          target: { value: "Alert" },
+        });
+        (tree.find((e) => "data-data-bind-rule-action" in e.props)!.props.onChange as (e: unknown) => void)({
+          target: { value: "tableStyle" },
+        });
+      },
+    );
+    expect(calls[0][5]).toEqual({ kind: "tableColumn", storyId: "s1", tableId: "t1", col: 3, headerRows: 1 });
+  });
+
+  it("a record flow is defined with its fields and grouping [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    await author(
+      "recordFlow",
+      "sku, price",
+      { defineRecordFlow: (...a: unknown[]) => void calls.push(a) },
+      {},
+      (tree) =>
+        (tree.find((e) => "data-data-bind-group-by" in e.props)!.props.onChange as (e: unknown) => void)({
+          target: { value: "region" },
+        }),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].slice(1)).toEqual(["q_all", [{ expr: "sku" }, { expr: "price" }], { groupBy: ["region"] }]);
+  });
+
+  it("a record flow lists its preview [data.bind.authoring]", async () => {
+    const session = stubSession(
+      {
+        listBindings: () => [{ id: "rf", kind: "recordFlow" }],
+        refreshData: async () => {},
+        previewRecordFlow: async () => ({
+          total: 2,
+          blocks: [
+            { kind: "header", text: "North" },
+            { kind: "record", text: "A-1 · 9.99" },
+          ],
+        }),
+      },
+      { bindings: ["rf"] },
+    );
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel(host, session);
+    let tree = render(Panel);
+    (tree.find((e) => "data-data-flow-preview" in e.props)!.props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    tree = render(Panel);
+    expect(tree.filter((e) => "data-flow-block" in e.props).map((e) => text(e))).toEqual(["North", "A-1 · 9.99"]);
+  });
+});
+
+describe("sources panel says whether the session is saved [data.plugin.persistence]", () => {
+  it.each([
+    ["saved", /saved with the document/],
+    ["unavailable", /cannot save/],
+  ] as const)("%s", async (status, re) => {
+    const session = stubSession({}, { persistence: { status, hash: null } });
+    const { makeSourcesPanel } = await import("../panels/sources-panel");
+    const tree = render(makeSourcesPanel(host, session));
+    const p = tree.find((e) => "data-data-persistence" in e.props)!;
+    expect(text(p)).toMatch(re);
+  });
 });

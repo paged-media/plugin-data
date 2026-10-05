@@ -21,8 +21,8 @@
 // shell.pickFile@1, with the raw file input kept as the harness-host fallback),
 // the source list, the remote-source lane (M1, D-03: per-source consent state,
 // request-consent + edit-time load — inert until granted), and the HONEST
-// status (engine/DuckDB availability, the "no OPFS persistence" notice —
-// rendered honestly, never faked).
+// status (engine/DuckDB availability, and whether the session is saved with
+// the document — rendered honestly, never faked).
 //
 // Built from host surfaces + React ONLY (no @paged-media/shell). Token-layer
 // styling (--pg-*, --space-*) reads native in both themes; prose is sans,
@@ -31,8 +31,9 @@
 import { useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 
-import type { DataSourceSession, RemoteFormat } from "../session";
+import type { DataSourceSession, RemoteFormat, SessionState } from "../session";
 import { DiagnosticsList } from "./diagnostics";
+import { useSessionSnapshot } from "./use-session";
 
 const wrap: CSSProperties = {
   display: "flex",
@@ -54,15 +55,23 @@ const mono: CSSProperties = {
   font: "var(--font-mono, 12px ui-monospace, monospace)",
 };
 
+/** What the panel says about saving, per persistence state. */
+const PERSISTENCE_NOTE: Record<SessionState["persistence"]["status"], string> = {
+  empty: "Sources and bindings you define are saved with the document.",
+  pending: "Saving the data definitions with the document…",
+  saved: "Sources, bindings and imported data are saved with the document.",
+  unavailable:
+    "This editor cannot save data definitions with the document — reopening it needs a new import.",
+};
+
 export function makeSourcesPanel(
   host: BundleHost,
   session: DataSourceSession,
 ): () => ReactElement {
   return function SourcesPanel(): ReactElement {
-    const [snapshot, setSnapshot] = useState(session.getState());
+    const [snapshot, refresh] = useSessionSnapshot(session);
     const [remoteUrl, setRemoteUrl] = useState("");
     const [remoteFormat, setRemoteFormat] = useState<RemoteFormat>("csv");
-    const refresh = () => setSnapshot(session.getState());
 
     function onAddRemote(): void {
       if (!remoteUrl) return;
@@ -192,7 +201,7 @@ export function makeSourcesPanel(
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
         <DiagnosticsList
           diagnostics={snapshot.diagnostics}
-          sources={["import"]}
+          sources={["import", "persist", "restore"]}
           onClear={() => {
             session.clearDiagnostics();
             refresh();
@@ -202,15 +211,15 @@ export function makeSourcesPanel(
             the vendored DuckDB-WASM (run scripts/vendor-duckdb.sh); the
             engine wasm is scripts/build-wasm.sh. Remote sources (M1) are
             inert until per-origin consent (D-03) and fetch at edit time
-            only — never on document open. Imported data is in-memory only —
-            reload re-imports (no OPFS, D-04). */}
+            only — never on document open. Sources, queries, bindings and the
+            imported data are saved with the document (the `session`
+            container part, persist.ts) on a host with container parts. */}
         {(snapshot.status === "duckdb-missing" ||
           snapshot.status === "engine-missing") && (
           <p style={note}>The query engine isn&apos;t bundled in this build.</p>
         )}
-        <p style={note}>
-          Imported data stays in memory only — reopening the document imports it
-          again.
+        <p style={note} data-data-persistence={snapshot.persistence.status}>
+          {PERSISTENCE_NOTE[snapshot.persistence.status]}
         </p>
       </div>
     );

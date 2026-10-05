@@ -1830,6 +1830,18 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         const e = await ensureEngine();
         // A rule is not a resolvable lowering — it applies a style decision over
         // a scope (D-13); route it through applyRule, not resolve_lowered.
+        // A record flow is defined and previewed; writing it into frames is
+        // the merge step, which this session does not have yet. Say so rather
+        // than failing the whole Lower on it.
+        if (bindingKinds.get(id) === "recordFlow") {
+          report({
+            level: "info",
+            source: "flow",
+            binding: id,
+            message: "a record flow is previewed only — placing it into frames is not built yet",
+          });
+          return;
+        }
         if (bindingKinds.get(id) === "rule") {
           await this.applyRule(id);
           state.status = "ready";
@@ -1973,6 +1985,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       try {
         const e = await ensureEngine();
         const kind = bindingKinds.get(bindingId);
+        // Rules and record flows have no per-record value to step through.
+        if (kind === "rule" || kind === "recordFlow") return;
 
         // Barcode: re-encode for the previewed record, scaled to its frame box.
         if (kind === "barcode") {
