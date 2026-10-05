@@ -221,6 +221,38 @@ describe.skipIf(!ready && !required)(
       expect(await s2.previewRecordFlow("rf")).toEqual(before);
     });
 
+    it("opening another document swaps the session; a pending write of the old one is dropped [data.plugin.persistence]", async () => {
+      expect(ready).toBe(true);
+      const mod = await loadBundleModule();
+      // Document B: one source, saved.
+      const hb = await open();
+      hb.loadBundle(mod.dataBundle);
+      const sb = mod.sessionFor(hb.host)!;
+      await sb.whenRestored();
+      await sb.registerCsvSource("people", "name\nAda\n");
+      sb.addQuery("qb", "SELECT name FROM people", "recordStream");
+      await hb.willSave.fire();
+      const docB = await exportPaged(hb.host);
+
+      // Document A, live in another host, with a change still pending.
+      const ha = await open();
+      ha.loadBundle(mod.dataBundle);
+      const sa = mod.sessionFor(ha.host)!;
+      await sa.whenRestored();
+      await sa.registerCsvSource("products", CSV);
+      await sa.flushPersist();
+      sa.addQuery("late", "SELECT 1", "scalar"); // debounced, not yet written
+
+      // File ▸ Open B in the same editor.
+      await ha.load(docB);
+      await sa.documentOpened();
+      await new Promise((r) => setTimeout(r, 600)); // past the write debounce
+      expect(sa.getState().sources).toEqual(["people"]);
+      expect(sa.getState().queries).toEqual(["qb"]);
+      const part = JSON.parse(new TextDecoder().decode((await ha.host.parts.read("session.json"))!));
+      expect(part.engine.queries.map((q: { id: string }) => q.id)).toEqual(["qb"]);
+    });
+
     it("a large CSV is stored once as its own content-addressed part [data.plugin.persistence]", async () => {
       expect(ready).toBe(true);
       const mod = await loadBundleModule();

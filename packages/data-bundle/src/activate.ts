@@ -64,6 +64,18 @@ export function activate(host: BundleHost): BundleHandle {
   // boots the data engine only when the document carries a session, and never
   // boots DuckDB or fetches a remote source by itself.
   void session.restore();
+  // Activation runs once, at app start; documents come and go after it. On
+  // every load the client broadcasts `documentLoaded`: the session drops the
+  // previous document's state and restores the new one's.
+  let unsubscribeDocs: (() => void) | null = null;
+  try {
+    unsubscribeDocs = host.editor.client.subscribe((msg) => {
+      if (msg.kind === "documentLoaded") void session.documentOpened();
+    });
+  } catch {
+    // no raw client (a headless or older host): the activate-time restore
+    // is the only one
+  }
 
   contributePanel(host, {
     id: SOURCES_PANEL_ID,
@@ -203,6 +215,7 @@ export function activate(host: BundleHost): BundleHandle {
 
   return {
     dispose() {
+      unsubscribeDocs?.();
       sessions.delete(host);
       session.dispose();
       menuSub.dispose();

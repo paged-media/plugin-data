@@ -626,6 +626,10 @@ export interface DataSourceSession {
   /** Restore the document's saved session part (activate calls this once).
    *  Never throws: what cannot be restored lands in `diagnostics`. */
   restore(): Promise<void>;
+  /** A different document is open (File ▸ Open / New): drop everything this
+   *  session held for the previous one — nothing of it may be written into
+   *  the new document — and restore the new document's own session part. */
+  documentOpened(): Promise<void>;
   /** Resolves once the document's saved session (if any) has been restored. */
   whenRestored(): Promise<void>;
   /** Write any pending session change to the document now (the debounced
@@ -705,6 +709,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   let persistChain: Promise<void> = Promise.resolve();
   let partsMissingReported = false;
   let restorePromise: Promise<void> | null = null;
+  // Bumped when another document opens: a write queued for the previous
+  // document checks it and is dropped instead of landing in the new one.
+  let docEpoch = 0;
   const listeners = new Set<() => void>();
   const PERSIST_DEBOUNCE_MS = 250;
 
@@ -835,11 +842,12 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       clearTimeout(persistTimer);
       persistTimer = null;
     }
+    const epoch = docEpoch;
     persistChain = persistChain.then(async () => {
-      if (!partsAvailable()) return;
+      if (!partsAvailable() || epoch !== docEpoch) return;
       try {
         const built = await buildPersisted();
-        if (!built) return;
+        if (!built || epoch !== docEpoch) return;
         const bytes = encodeSession(built);
         const text = new TextDecoder().decode(bytes);
         if (text !== lastWritten) {
@@ -2412,6 +2420,46 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     restore() {
       if (!restorePromise) restorePromise = restoreInternal();
       return restorePromise;
+    },
+
+    async documentOpened() {
+      docEpoch += 1;
+      if (persistTimer) clearTimeout(persistTimer);
+      persistTimer = null;
+      await restorePromise?.catch(() => {});
+      for (const h of providerHandles.values()) h.dispose();
+      providerHandles.clear();
+      sourceNames.length = 0;
+      bindingIds.length = 0;
+      diagnostics.length = 0;
+      queries.clear();
+      bindingKinds.clear();
+      visibilityTargets.clear();
+      imageTargets.clear();
+      barcodeTargets.clear();
+      placedVariables.clear();
+      ruleTargets.clear();
+      remoteSources.clear();
+      importedCsv.clear();
+      pendingCsv.clear();
+      loweredInto.clear();
+      pendingDefs.length = 0;
+      knownDataParts.clear();
+      bootPayload = null;
+      lastWritten = null;
+      persistence.status = "empty";
+      persistence.hash = null;
+      partsMissingReported = false;
+      engine?.free();
+      engine = null;
+      const oldDuck = duck;
+      duck = null;
+      void oldDuck?.close();
+      state.status = "idle";
+      state.message = "No data sources yet — import a CSV to begin.";
+      emit();
+      restorePromise = restoreInternal();
+      await restorePromise;
     },
 
     async whenRestored() {
