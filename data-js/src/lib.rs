@@ -44,6 +44,7 @@
 //! its Arrow result to a `RecordSet` JSON which `ingest_result` decodes.
 
 pub mod core;
+pub mod review;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -337,6 +338,71 @@ mod wasm {
             self.session.relink(&BindingId::from(binding));
         }
 
+        /// Override one binding's formatting locale (a tag such as `"fr"`);
+        /// `null` clears the override.
+        pub fn set_binding_locale(
+            &mut self,
+            binding: &str,
+            locale: JsValue,
+        ) -> Result<(), JsValue> {
+            let locale = if locale.is_null() || locale.is_undefined() {
+                None
+            } else {
+                Some(from_js(locale)?)
+            };
+            self.session
+                .set_binding_locale(&BindingId::from(binding), locale);
+            Ok(())
+        }
+
+        /// The per-binding locale overrides (`{ binding: tag }`).
+        pub fn binding_locales(&self) -> JsValue {
+            to_js_json(self.session.binding_locales()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Record every query's current result as the one the document was
+        /// written from (the "before" of `row_diff`).
+        pub fn mark_rows_applied(&mut self) {
+            self.session.mark_rows_applied();
+        }
+
+        /// The §8 row diff per query since `mark_rows_applied`
+        /// (`QueryRowDiff[]`). `opts` is `{ keys?, ruleQueries?, limit? }`.
+        pub fn row_diff(&self, opts: JsValue) -> Result<JsValue, JsValue> {
+            let opts = if opts.is_null() || opts.is_undefined() {
+                Default::default()
+            } else {
+                from_js(opts)?
+            };
+            to_js(&self.session.row_diff(&opts))
+        }
+
+        /// Check an expression (parse error, fields read, fields the query's
+        /// result lacks).
+        pub fn check_expression(&self, src: &str, query: Option<String>) -> JsValue {
+            let q = query.map(|q| QueryId::from(q.as_str()));
+            to_js(&self.session.check_expression(src, q.as_ref())).unwrap_or(JsValue::NULL)
+        }
+
+        /// Which records a condition fires on (`{ fires, total, error? }`).
+        pub fn preview_condition(&self, query: &str, when: &str) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_condition(&QueryId::from(query), when)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
+        /// A per-record binding's display text for a record, without
+        /// re-linking it (`null` for other kinds).
+        pub fn preview_display(&self, binding: &str, record: usize) -> Result<JsValue, JsValue> {
+            let out = self
+                .session
+                .preview_display(&BindingId::from(binding), record)
+                .map_err(map_err)?;
+            to_js(&out)
+        }
+
         /// The sync report (`[{binding,status}]`).
         pub fn sync_report(&self) -> JsValue {
             to_js(&self.session.sync_report()).unwrap_or(JsValue::NULL)
@@ -454,6 +520,25 @@ mod wasm {
     /// budgets) — `{enabled, resolves, stabilize_calls, key_allocs,
     /// fingerprints, diff_rows, ingest_cells, content_hashes,
     /// group_key_compares}`. Global to the wasm instance, not per engine.
+    /// Every formatting locale with formatted samples (`LocaleInfo[]`).
+    #[wasm_bindgen(js_name = locales)]
+    pub fn locales() -> Result<JsValue, JsValue> {
+        to_js(&crate::review::locale_catalog())
+    }
+
+    /// Wrap an expression in a display pattern (`{ kind, decimals?, symbol?,
+    /// pattern? }`).
+    #[wasm_bindgen(js_name = formatExpression)]
+    pub fn format_expression(inner: &str, pattern: JsValue) -> Result<String, JsValue> {
+        Ok(crate::review::format_expression(inner, from_js(pattern)?))
+    }
+
+    /// Split an expression into its inner expression and display pattern.
+    #[wasm_bindgen(js_name = splitExpression)]
+    pub fn split_expression(src: &str) -> Result<JsValue, JsValue> {
+        to_js(&crate::review::split_expression(src))
+    }
+
     #[wasm_bindgen(js_name = perfCounters)]
     pub fn perf_counters() -> Result<JsValue, JsValue> {
         to_js(&crate::core::perf_counters())
