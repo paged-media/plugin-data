@@ -63,13 +63,15 @@ jobs:
       # prebuilt, never compiled in-tree), which also stages the eh variant
       # as the governed bin/duckdb-engine.wasm. REQUIRE_REAL_DUCKDB=1 below
       # turns every "DuckDB not vendored" skip into a failure.
+      - name: install
+        run: pnpm install --frozen-lockfile --dir plugin-data
+      # after install: vendor-duckdb.sh bundles the DuckDB JS API with the
+      # installed apache-arrow (scripts/bundle-duckdb-api.mjs)
       - name: vendor DuckDB-WASM (MIT prebuilt)
         run: bash plugin-data/scripts/vendor-duckdb.sh
       - name: real-DuckDB artifact guard (fail, never skip)
         run: test -f plugin-data/packages/data-bundle/bin/duckdb-engine.wasm
       # ------------------------------------------------------------------
-      - name: install
-        run: pnpm install --frozen-lockfile --dir plugin-data
       - name: contract-import lint (fail fast)
         run: node plugin-data/scripts/check-contract-imports.mjs
       - name: typecheck

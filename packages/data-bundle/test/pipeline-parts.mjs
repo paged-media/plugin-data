@@ -1,17 +1,19 @@
-// End-to-end pipeline harness (spec §12.4) — proves the seam that the unit
-// tests cannot: the REAL data-js wasm engine, driven through its
-// serde-wasm-bindgen boundary, and (Part B) the REAL vendored DuckDB-WASM.
+// The real-wasm pipeline parts (spec §12.4) — the seam the unit tests cannot
+// prove: the REAL data-js wasm engine driven through its serde-wasm-bindgen
+// boundary. Formerly test-integration/pipeline.e2e.mjs, a standalone script
+// that nothing ran; its parts are now called by vitest:
 //
-// Gated like the oracle — NOT part of the default vitest run (it needs the
-// built wasm + the vendored DuckDB dist). Run after building both:
+//   test/pipeline-real.spec.ts  Parts A, C, D, E (REQUIRE_REAL_ENGINE gate)
+//   test/duckdb-real.spec.ts    Part B: real DuckDB → Arrow → recordset.ts →
+//                               the same engine (REQUIRE_REAL_DUCKDB gate)
 //
-//   bash scripts/build-wasm.sh && bash scripts/vendor-duckdb.sh
-//   node packages/data-bundle/test-integration/pipeline.e2e.mjs
+// Part A: hand-built RecordSet → wasm DataEngine → resolve → lower.
+// Part C: provider / governed catalog / batch plan shapes.
+// Part D: the v43 consumer lanes (variable / image / rule / live flow).
+// Part E: §9.8/§9.9 variables + data sets.
 //
-// Part A: hand-built RecordSet → wasm DataEngine → resolve → lower (proves the
-//         marshalling + the full Rust pipeline running IN wasm).
-// Part B: real DuckDB-WASM runs a CSV SELECT → Arrow → RecordSet → the SAME
-//         engine → identical lowered output (proves DuckDB ↔ engine).
+// Plain JS on purpose (types in pipeline-parts.d.mts): the parts poke at the
+// engine's JSON shapes exactly as they cross the boundary.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,49 +21,16 @@ import { dirname, resolve } from "node:path";
 import assert from "node:assert/strict";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BIN = resolve(HERE, "../bin");
-const TODAY = 20613; // 2026-06-08, days since 1970-01-01
+export const BIN = resolve(HERE, "../bin");
+export const TODAY = 20613; // 2026-06-08, days since 1970-01-01
 
 function eq(actual, expected, label) {
   assert.deepEqual(actual, expected, label);
   console.log(`  ✓ ${label}`);
 }
 
-// A minimal copy of the TS arrowToRecordSet (unit-tested in recordset.test.ts)
-// so the harness stays dependency-free (no TS loader).
-function classify(typeStr) {
-  const s = String(typeStr ?? "").toLowerCase();
-  if (/utf8|string|char|varchar/.test(s)) return "text";
-  if (/bool/.test(s)) return "bool";
-  if (/timestamp|datetime/.test(s)) return "datetime";
-  if (/date/.test(s)) return "date";
-  if (/float|double|decimal|real/.test(s)) return "float";
-  if (/int/.test(s)) return "int";
-  return "text";
-}
-function cell(raw, ty) {
-  if (raw === null || raw === undefined) return { t: "null" };
-  if (ty === "bool") return { t: "bool", v: Boolean(raw) };
-  if (ty === "int" || ty === "float") return { t: "number", v: Number(raw) };
-  if (ty === "date") return { t: "date", v: Number(raw) };
-  if (ty === "datetime") return { t: "datetime", v: Number(raw) };
-  return { t: "text", v: String(raw) };
-}
-function arrowToRecordSet(table) {
-  const fields = table.schema.fields.map((f) => ({
-    name: f.name,
-    ty: classify(f.type?.toString?.() ?? f.type),
-    nullable: true,
-  }));
-  const columns = fields.map((f, i) => {
-    const arr = table.getChildAt(i)?.toArray() ?? [];
-    return Array.from(arr, (c) => cell(c, f.ty));
-  });
-  return { schema: { fields }, columns, row_count: table.numRows };
-}
-
 // The recipe both parts feed the engine — a tiny product catalog.
-function defineCatalog(engine) {
+export function defineCatalog(engine) {
   engine.define_source({
     id: "products",
     kind: { kind: "inlineSeed", table: "products" },
@@ -86,7 +55,7 @@ function defineCatalog(engine) {
   });
 }
 
-function assertLowered(lowered, label) {
+export function assertLowered(lowered, label) {
   assert.equal(lowered.kind, "table", `${label}: kind`);
   // header + 2 data rows.
   assert.equal(lowered.rows.length, 3, `${label}: row count`);
@@ -100,14 +69,14 @@ function assertLowered(lowered, label) {
   return lowered;
 }
 
-async function bootEngine() {
+export async function bootEngine() {
   const mod = await import(resolve(BIN, "data_js.js"));
   await mod.default({ module_or_path: readFileSync(resolve(BIN, "data_js_bg.wasm")) });
   return new mod.DataEngine(TODAY);
 }
 
 // ── Part A — the wasm engine boundary ───────────────────────────────────────
-async function partA() {
+export async function partA() {
   console.log("\nPart A — real data-js wasm engine (hand-built RecordSet):");
   const engine = await bootEngine();
   defineCatalog(engine);
@@ -142,60 +111,11 @@ async function partA() {
   return lowered;
 }
 
-// ── Part B — real DuckDB-WASM (best-effort; needs the vendored node build) ──
-async function partB(expected) {
-  console.log("\nPart B — real DuckDB-WASM (CSV → Arrow → RecordSet → engine):");
-  let duckdb;
-  try {
-    duckdb = await import(resolve(HERE, "../../../vendor/duckdb-wasm/dist/duckdb-node-blocking.cjs"));
-  } catch (err) {
-    console.log(`  ⚠ skipped — vendored DuckDB node build not loadable: ${err.message}`);
-    console.log("    (run scripts/vendor-duckdb.sh; Part A already proved the engine boundary)");
-    return false;
-  }
-
-  try {
-    const DUCKDB_DIST = resolve(HERE, "../../../vendor/duckdb-wasm/dist");
-    const bundles = {
-      mvp: {
-        mainModule: resolve(DUCKDB_DIST, "duckdb-mvp.wasm"),
-        mainWorker: resolve(DUCKDB_DIST, "duckdb-node-mvp.worker.cjs"),
-      },
-    };
-    const logger = new duckdb.ConsoleLogger();
-    const db = await duckdb.createDuckDB(bundles, logger, duckdb.NODE_RUNTIME);
-    await db.instantiate();
-    const conn = db.connect();
-    // The real file-import path: register CSV bytes, let DuckDB auto-detect the
-    // types (price → DOUBLE), exactly as the bundle's registerCsvSource does.
-    db.registerFileText("products.csv", "sku,price\nA-1,9.99\nB-2,19.99\n");
-    conn.query("CREATE TABLE products AS SELECT * FROM read_csv_auto('products.csv')");
-    const table = conn.query("SELECT sku, price FROM products ORDER BY sku");
-    const records = arrowToRecordSet(table);
-
-    const engine = await bootEngine();
-    defineCatalog(engine);
-    engine.ingest_result("q1", records);
-    const lowered = engine.resolve_lowered("t1");
-    assertLowered(lowered, "Part B");
-
-    assert.deepEqual(lowered.text, expected.text, "Part B == Part A (DuckDB parity)");
-    console.log("  ✓ Part B lowered output == Part A (DuckDB ↔ engine parity)");
-    conn.close();
-    return true;
-  } catch (err) {
-    console.log(`  ⚠ DuckDB node API mismatch (v1.29.0): ${err.message}`);
-    console.log("    Part A already proved the engine boundary; the browser AsyncDuckDB path");
-    console.log("    is the production target (duckdb.ts). Recording as a known node-bootstrap gap.");
-    return false;
-  }
-}
-
 // ── Part C — the dataset surfaces through the wasm serde boundary ────────────
 // Proves the §7.1 provider / §7 governed catalog / §10 batch-plan methods
 // round-trip through serde-wasm-bindgen with the camelCase shapes the bundle
 // expects — the gap the unit tests (which mock the engine) cannot cover.
-async function partC() {
+export async function partC() {
   console.log("\nPart C — provider / governed catalog / batch plan (real wasm serde):");
   const engine = await bootEngine();
   engine.define_query({ id: "q1", sql: "SELECT * FROM s", params: [], shape: { shape: "recordStream" } });
@@ -336,7 +256,7 @@ async function partC() {
 //   D-14 image     → resolve_lowered → LoweredImage {kind, reference, fit, status}
 //   D-13 rule      → evaluate_rule   → RuleResult {scope, fires, apply{action,name}, total}
 //   D-12 flow live → lower_record_flow over a (live-shaped) FrameCapacity chain
-async function partD() {
+export async function partD() {
   console.log("\nPart D — v43 consumer lanes (variable / image / rule / live flow):");
   const engine = await bootEngine();
   engine.define_query({ id: "q1", sql: "x", params: [], shape: { shape: "recordStream" } });
@@ -442,7 +362,7 @@ async function partD() {
 // actually cross serde-wasm-bindgen (camelCase renames, Option<bool> → null,
 // the XML as a plain string) — which is where every previous lane's surprises
 // have come from.
-async function partE() {
+export async function partE() {
   console.log("\nPart E — §9.8/§9.9 variables + data sets:");
   const engine = await bootEngine();
 
@@ -541,12 +461,3 @@ async function partE() {
   assert.ok(bytes > 0 && bytes < 64 * 1024, `Part E: variable payload ${bytes} bytes is under the 64 KiB cap`);
   console.log(`  ✓ D-08 variable payload measured at ${bytes} bytes (cap 65536)`);
 }
-
-const expected = await partA();
-const duckOk = await partB(expected);
-await partC();
-await partD();
-await partE();
-console.log(
-  `\nE2E: Part A ✓${duckOk ? "  Part B ✓ (real DuckDB)" : "  Part B ⚠ (skipped/gap)"}  Part C ✓ (provider/governed/batch)  Part D ✓ (v43 lanes)  Part E ✓ (§9.8/§9.9 variables)`,
-);

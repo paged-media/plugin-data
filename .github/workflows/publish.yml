@@ -98,9 +98,11 @@ jobs:
         run: node scripts/package-hash.mjs --check
       - name: build wasm (stamps bin/SOURCE_HASH)
         run: bash scripts/build-wasm.sh
+      # install first: vendor-duckdb.sh bundles the DuckDB JS API with the
+      # installed apache-arrow (scripts/bundle-duckdb-api.mjs)
+      - run: pnpm install --frozen-lockfile
       - name: vendor DuckDB-WASM (stages bin/duckdb-engine.wasm)
         run: bash scripts/vendor-duckdb.sh
-      - run: pnpm install --frozen-lockfile
       # The TS suite against the wasm built above (wasm-fresh.spec.ts proves
       # it is the one these sources build) and the DuckDB vendored above;
       # the REQUIRE_* envs turn every "artifact missing" skip into a failure.
@@ -126,6 +128,9 @@ jobs:
             # pubcheck: the tarball carries the engine wasm, DuckDB
             # (bin/duckdb-engine.wasm) and both stamps, or nothing ships.
             bash scripts/pubcheck.sh "$tgz"
+            # contents beyond presence: one DuckDB variant, no vendor/,
+            # every wasm within its manifest maxBytes
+            node scripts/pubcheck.mjs --release
             echo "publish $name@$version via OIDC"
             npm publish "$tgz" --tag canary --access public
           done

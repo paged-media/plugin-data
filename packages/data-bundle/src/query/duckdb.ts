@@ -16,32 +16,46 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-// The DuckDB-WASM integration (spec §6) — the MIT query/ingest engine, vendored
-// under vendor/duckdb-wasm/ (scripts/vendor-duckdb.sh) and instantiated in the
-// bundle realm (BREAKAGE D-05/D-07: no host worker capability yet; the bundle
-// spawns the DuckDB worker from the vendored bundle). It registers inline/file
-// sources, runs parameterised SQL, and materialises the Arrow result into the
-// `RecordSetJson` the engine ingests (the swappable Arrow seam, §6.1).
+// The DuckDB-WASM integration (spec §6) — the MIT query/ingest engine. It
+// registers inline/file sources, runs SQL, and materialises the Arrow result
+// into the `RecordSetJson` the engine ingests (the swappable Arrow seam, §6.1).
 //
-// Loaded dynamically from the VENDORED dist (not an npm dependency — the engine
-// is a prebuilt artifact, spec §3/§4). Absent until vendored → DUCKDB_NOT_VENDORED.
+// WHAT RUNS: the governed artifact set in the bundle's own `bin/`, staged by
+// scripts/vendor-duckdb.sh and shipped in the npm tarball ("files": bin):
 //
-// FIRST-CLASS engine load (D-07b / D-11): the manifest declares DuckDB as a
-// `purpose: "engine"` wasm artifact (bin/duckdb-engine.wasm, staged by
-// scripts/vendor-duckdb.sh), so it earns the governed 64 MiB per-artifact
-// ceiling — NOT the 100 MB app-wide cap. That declaration is the GOVERNANCE
-// anchor (the plugin-cli size-gate verifies it; data-conformance asserts the
-// purpose); the runtime still selects the optimal coi/eh/mvp variant from the
-// vendored dist below at boot.
+//   bin/duckdb-engine.wasm           the manifest's `duckdb-engine` artifact,
+//                                    `purpose: "engine"`, maxBytes 48 MiB;
+//                                    the EH variant (exceptions, no threads)
+//   bin/duckdb-browser-eh.worker.js  the worker that instantiates it
+//   bin/duckdb-browser.mjs           the JS API, apache-arrow inlined
+//
+// Exactly one variant ships: mvp (40.6 MB) is over the cap and coi needs
+// threads plus cross-origin isolation. Nothing here reads vendor/ any more;
+// vendor/ is the local fetch cache and the Node test lane's source.
+//
+// WHY NOT `loadBundleWasm`: the plugin-sdk loader instantiates a module with
+// only the imports the caller passes and no worker. DuckDB is an Emscripten
+// module that its own worker instantiates with its own imports, so the bundle
+// resolves the file URL (src/bin-url.ts, the same mechanism as
+// `../bin/data_js.js`) and hands it to DuckDB's worker. The manifest
+// declaration stays the governance anchor: the plugin-cli size gate and
+// scripts/pubcheck.mjs check the shipped file against its maxBytes.
+//
+// Absent (not staged, or the host does not serve bin/) → DUCKDB_NOT_VENDORED,
+// which the sources panel shows as "duckdb-missing" — never faked.
 
+import { binUrl } from "../bin-url";
 import { arrowToRecordSet, type ArrowLikeTable, type RecordSetJson } from "./recordset";
 
 export const DUCKDB_NOT_VENDORED =
-  "DuckDB-WASM not vendored — run `bash scripts/vendor-duckdb.sh` (populates vendor/duckdb-wasm/dist)";
+  "DuckDB-WASM not available — run `bash scripts/vendor-duckdb.sh` (stages packages/data-bundle/bin/duckdb-engine.wasm), and make sure the host serves the bundle's bin/";
 
-// Computed specifiers so the type-checker does not resolve the (vendored)
-// dist; loaded at runtime in the bundle realm.
-const DUCKDB_DIST = "../../../../vendor/duckdb-wasm/dist/duckdb-browser.mjs";
+/** The shipped DuckDB files, by role, relative to the bundle's `bin/`. */
+export const DUCKDB_ARTIFACTS = {
+  module: "duckdb-engine.wasm",
+  worker: "duckdb-browser-eh.worker.js",
+  api: "duckdb-browser.mjs",
+} as const;
 
 /** A booted DuckDB session over the vendored engine. */
 export interface DuckDBHandle {
@@ -55,50 +69,26 @@ export interface DuckDBHandle {
   close(): Promise<void>;
 }
 
-/** Boot DuckDB-WASM from the vendored dist. Throws [`DUCKDB_NOT_VENDORED`] when
- *  the artifact is absent (the panel renders that honestly). */
-export async function bootDuckDB(): Promise<DuckDBHandle> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let duckdb: any = null;
-  try {
-    duckdb = await import(/* @vite-ignore */ DUCKDB_DIST);
-  } catch {
-    throw new Error(DUCKDB_NOT_VENDORED);
-  }
-  if (!duckdb) throw new Error(DUCKDB_NOT_VENDORED);
+/** The DuckDB database surface the handle drives. Both the browser
+ *  `AsyncDuckDB` (promises) and the Node blocking build (plain values) fit:
+ *  every call is awaited, so the real-DuckDB test lane runs the SAME handle
+ *  code as the editor. */
+export interface DuckDBLike {
+  registerFileText(name: string, text: string): unknown;
+  registerFileBuffer(name: string, bytes: Uint8Array): unknown;
+}
+export interface DuckDBConnectionLike {
+  insertCSVFromPath(path: string, opts: { name: string; schema: string; detect: boolean }): unknown;
+  query(sql: string): unknown;
+  close(): unknown;
+}
 
-  // Pick a bundle + spawn the worker from the VENDORED files, same-origin
-  // (own-realm; the editor is already cross-origin isolated — BREAKAGE D-05).
-  // NOT getJsDelivrBundles() — that points mainWorker at the jsDelivr CDN, and
-  // `new Worker(<cross-origin URL>)` is a SecurityError. The dist sits next to
-  // this module's `../../../../vendor/duckdb-wasm/dist/` import, so resolve the
-  // worker/wasm URLs relative to it; the bundle realm serves them same-origin.
-  const distBase = new URL("../../../../vendor/duckdb-wasm/dist/", import.meta.url);
-  const at = (file: string) => new URL(file, distBase).href;
-  const vendored = {
-    mvp: {
-      mainModule: at("duckdb-mvp.wasm"),
-      mainWorker: at("duckdb-browser-mvp.worker.js"),
-    },
-    eh: {
-      mainModule: at("duckdb-eh.wasm"),
-      mainWorker: at("duckdb-browser-eh.worker.js"),
-    },
-    coi: {
-      mainModule: at("duckdb-coi.wasm"),
-      mainWorker: at("duckdb-browser-coi.worker.js"),
-      pthreadWorker: at("duckdb-browser-coi.pthread.worker.js"),
-    },
-  };
-  const bundle = duckdb.selectBundle
-    ? await duckdb.selectBundle(vendored)
-    : vendored.eh;
-  const worker = new Worker(bundle.mainWorker);
-  const logger = new duckdb.ConsoleLogger();
-  const db = new duckdb.AsyncDuckDB(logger, worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const conn = await db.connect();
-
+/** Wrap a connected DuckDB (browser or Node) as the bundle's [`DuckDBHandle`]. */
+export function duckdbHandle(
+  db: DuckDBLike,
+  conn: DuckDBConnectionLike,
+  teardown: () => Promise<void> | void,
+): DuckDBHandle {
   return {
     async registerCsv(name: string, csvText: string) {
       await db.registerFileText(`${name}.csv`, csvText);
@@ -113,8 +103,40 @@ export async function bootDuckDB(): Promise<DuckDBHandle> {
     },
     async close() {
       await conn.close();
-      await db.terminate();
-      worker.terminate();
+      await teardown();
     },
   };
+}
+
+/** Boot DuckDB-WASM from the bundle's `bin/`. Throws [`DUCKDB_NOT_VENDORED`]
+ *  when the artifact is absent (the panel renders that honestly). */
+export async function bootDuckDB(): Promise<DuckDBHandle> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let duckdb: any = null;
+  try {
+    duckdb = await import(/* @vite-ignore */ binUrl(DUCKDB_ARTIFACTS.api));
+  } catch {
+    throw new Error(DUCKDB_NOT_VENDORED);
+  }
+  if (!duckdb) throw new Error(DUCKDB_NOT_VENDORED);
+
+  // Spawn the worker from the bundle's own bin/, same-origin. NOT
+  // getJsDelivrBundles(): a Worker on a cross-origin URL is a SecurityError,
+  // and the plugin never fetches its engine from a CDN (BREAKAGE D-05).
+  const worker = new Worker(binUrl(DUCKDB_ARTIFACTS.worker));
+  const logger = new duckdb.ConsoleLogger();
+  const db = new duckdb.AsyncDuckDB(logger, worker);
+  try {
+    await db.instantiate(binUrl(DUCKDB_ARTIFACTS.module));
+  } catch (err) {
+    worker.terminate();
+    throw new Error(
+      `${DUCKDB_NOT_VENDORED} (instantiate failed: ${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  const conn = await db.connect();
+  return duckdbHandle(db, conn, async () => {
+    await db.terminate();
+    worker.terminate();
+  });
 }

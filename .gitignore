@@ -16,6 +16,10 @@ packages/data-bundle/bin/*.js
 packages/data-bundle/bin/*.d.ts
 packages/data-bundle/bin/SOURCE_HASH
 packages/data-bundle/bin/PACKAGE_HASH
+# the staged DuckDB engine set (scripts/vendor-duckdb.sh): duckdb-engine.wasm,
+# duckdb-browser-eh.worker.js, duckdb-browser.mjs — shipped in the tarball,
+# never committed
+packages/data-bundle/bin/*.mjs
 
 # vendored DuckDB-WASM dist — acquired by scripts/vendor-duckdb.sh, NOT
 # committed (multi-MB MIT artifact; SOURCE.md records provenance). The

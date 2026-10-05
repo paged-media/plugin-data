@@ -192,11 +192,11 @@ panels, seven commands and one edit context, `dataBinding`.
 
 Neither wasm file goes through a host loader. The engine is imported from
 `../bin/data_js.js`, the `wasm-bindgen --target web` glue, which fetches its `.wasm`. DuckDB
-is imported from `vendor/duckdb-wasm/dist/` by a path relative to the source module, and
-the bundle starts DuckDB's worker itself from the same folder. That folder is outside the
-files the npm package lists, so an application that installs `@paged-media/data` has to
-serve it; the editor's Vite configuration resolves it from a checkout of this repo
-(`editor: apps/canvas/vite.config.ts:47-66`).
+is loaded the same way, from the package's own `bin/` (`packages/data-bundle/src/bin-url.ts`):
+`duckdb-browser.mjs` (the DuckDB JS API with apache-arrow bundled in), the eh worker and
+`duckdb-engine.wasm`. The bundle starts DuckDB's worker itself. All of them are in the files
+the npm package lists, so an application serves the installed package's `bin/`; the editor
+copies it into its build output.
 
 The plugin offers two things to others: the published data set described above, and the
 exports of `@paged-media/data`, among them `createSession`, `bootEngine` and `bootDuckDB`.
@@ -213,7 +213,9 @@ exports of `@paged-media/data`, among them `createSession`, `bootEngine` and `bo
 - TypeScript: `pnpm test` runs the import lint, then vitest in both packages. The bundle's
   unit tests use hand-written fake hosts and fake engines. `test/engine-real.spec.ts` loads
   the built wasm; when the file is absent it is skipped, or fails if `REQUIRE_REAL_ENGINE=1`.
-  `test-integration/pipeline.e2e.mjs` drives the real wasm and the real DuckDB, by hand.
+  `test/pipeline-real.spec.ts` and `test/duckdb-real.spec.ts` (`pnpm --filter @paged-media/data
+  test:e2e`) drive the real wasm and the real DuckDB (Node build over the shipped engine); they
+  fail instead of skipping under `REQUIRE_REAL_DUCKDB=1`.
 - CI (`.github/workflows/`), on pushes to `main`: `rust.yml` runs format, clippy with
   warnings as errors, the two `cargo tree` checks, `cargo-deny`, the tests, the coverage gate
   and the wasm build; `vitest.yml` builds the wasm, runs the import lint and vitest;

@@ -70,13 +70,13 @@ of work, with file and line references, is
   it is not derived from consent grants (`editor: apps/canvas/src/plugin-consent.ts:36-41`).
 - **DuckDB was not in the npm package.** Every version up to 0.1.0-canary.9 shipped without
   `bin/duckdb-engine.wasm`. The publish workflow now runs `scripts/vendor-duckdb.sh` and
-  refuses a tarball without it (`scripts/pubcheck.sh`). The bundle still loads DuckDB from
-  `vendor/duckdb-wasm/dist/`, which the host application has to serve
-  ([ADR 015](adr/015-duckdb-wasm-vendored.md)).
-- **Smaller gaps.** A barcode's `quietZone` option reaches no encoder. The column list is
-  built with an empty metadata sidecar, so every column shows as undocumented. A note in
-  `packages/data-bundle/src/query/recordset.ts` says Arrow decimal columns are read without
-  their scale. The variable-library XML was not checked against the application whose
+  refuses a tarball without it (`scripts/pubcheck.sh`, `scripts/pubcheck.mjs`). The bundle now
+  loads DuckDB from the package's own `bin/` (one variant, eh: `duckdb-engine.wasm`, its worker
+  and `duckdb-browser.mjs`), so a host serves the installed package rather than a checkout of
+  this repo ([ADR 015](adr/015-duckdb-wasm-vendored.md)). The first version that ships it is
+  the next one published.
+- **Smaller gaps.** The column list is built with an empty metadata sidecar, so every column
+  shows as undocumented. The variable-library XML was not checked against the application whose
   format it follows ([ADR 557](adr/557-variables-and-data-sets.md)).
 - **Tests gate CI since 2026-10-05.** A failing Rust or TypeScript test fails its job, both
   lanes run on pull requests, the TypeScript lane typechecks, vendors DuckDB and runs with

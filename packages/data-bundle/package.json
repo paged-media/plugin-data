@@ -13,7 +13,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "NODE_PATH=node_modules node test-integration/pipeline.e2e.mjs",
+    "test:e2e": "vitest run test/pipeline-real.spec.ts test/duckdb-real.spec.ts",
+    "test:duckdb": "REQUIRE_REAL_DUCKDB=1 vitest run test/duckdb-real.spec.ts",
+    "pubcheck": "pnpm run build && node ../../scripts/pubcheck.mjs",
     "build": "tsup",
     "prepublishOnly": "pnpm run build"
   },
@@ -35,7 +37,15 @@
   },
   "files": [
     "dist",
-    "bin",
+    "bin/data_js.js",
+    "bin/data_js.d.ts",
+    "bin/data_js_bg.wasm",
+    "bin/data_js_bg.wasm.d.ts",
+    "bin/duckdb-engine.wasm",
+    "bin/duckdb-browser-eh.worker.js",
+    "bin/duckdb-browser.mjs",
+    "bin/SOURCE_HASH",
+    "bin/PACKAGE_HASH",
     "manifest.json"
   ],
   "publishConfig": {
