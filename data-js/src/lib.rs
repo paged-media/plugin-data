@@ -366,9 +366,12 @@ mod wasm {
             to_js(&self.session.authorize_report()).unwrap_or(JsValue::NULL)
         }
 
-        /// The document payload (recipe; credentials redacted, §11/D-11).
+        /// The document payload (recipe; credentials redacted, §11/D-11). Built
+        /// JSON-compatible (maps as plain objects): the bundle saves it with
+        /// `JSON.stringify`, and a flattened binding definition otherwise
+        /// crosses as a JS `Map`, which stringifies to `{}`.
         pub fn payload(&self) -> JsValue {
-            to_js(&self.session.payload()).unwrap_or(JsValue::NULL)
+            to_js_json(&self.session.payload()).unwrap_or(JsValue::NULL)
         }
 
         /// Replace the recipe with a saved payload (the shape `payload()`
@@ -459,6 +462,14 @@ mod wasm {
 
     fn to_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Like [`to_js`], but every map crosses as a plain object, so the value
+    /// survives `JSON.stringify` (used for what the bundle persists).
+    fn to_js_json<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
+        value
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// The hash of the sources this wasm was built from

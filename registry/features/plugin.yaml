@@ -10,6 +10,17 @@
   tests:
     rust: ["data-conformance/tests/roundtrip.rs::data_plugin_payload_roundtrip"]
 
+- id: data.plugin.persistence
+  title: The data session survives save and reopen (the paged.data/session container part)
+  spec: plugin-data packages/data-bundle/src/{persist,session}.ts + data-js/src/core.rs (load_payload)
+  status: implemented
+  provenance: ["load_payload replaces the recipe in place; re-definitions upsert by id; the session part round-trips through a real .paged save + reopen (real core, data-js, DuckDB)"]
+  tests:
+    rust:
+      - "data-conformance/tests/roundtrip.rs::data_plugin_load_payload_in_place__feat__data_plugin_persistence"
+      - "data-conformance/tests/roundtrip.rs::data_plugin_redefine_replaces_in_the_payload__feat__data_plugin_persistence"
+    vitest: ["packages/data-bundle/test/persist-real-core.spec.ts"]
+
 - id: data.plugin.bundle
   title: paged.data bundle (media.paged.data) — manifest + activate + panels
   spec: plugin-data packages/data-bundle (base-idea §2)

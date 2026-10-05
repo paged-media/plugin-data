@@ -204,12 +204,23 @@ fn data_plugin_redefine_replaces_in_the_payload__feat__data_plugin_persistence()
     s.define_binding(before.bindings[0].clone());
     let after = s.payload();
     assert_eq!(after.queries.len(), 1);
-    assert_eq!(after.queries[0].sql, "SELECT sku FROM pricing", "the newer definition wins");
+    assert_eq!(
+        after.queries[0].sql, "SELECT sku FROM pricing",
+        "the newer definition wins"
+    );
     assert_eq!(after.sources.len(), before.sources.len());
     assert_eq!(after.bindings.len(), before.bindings.len());
     assert_eq!(
-        after.bindings.iter().map(|b| b.id.to_string()).collect::<Vec<_>>(),
-        before.bindings.iter().map(|b| b.id.to_string()).collect::<Vec<_>>(),
+        after
+            .bindings
+            .iter()
+            .map(|b| b.id.to_string())
+            .collect::<Vec<_>>(),
+        before
+            .bindings
+            .iter()
+            .map(|b| b.id.to_string())
+            .collect::<Vec<_>>(),
         "a replaced definition keeps its place"
     );
 }

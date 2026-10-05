@@ -87,12 +87,23 @@ function tableIdOf(created: ElementId): string {
   return "";
 }
 
+/** What a lowering records in the metadata label of the content it creates:
+ *  the binding it came from, the hash of that binding's definition, and the
+ *  hash of the saved session part it was lowered under. The label is written
+ *  through `mutate`, so it follows undo with the content. */
+export interface LowerStamp {
+  binding: string;
+  def: string | null;
+  session: string | null;
+}
+
 /** Commit a lowered dynamic table to a fresh page frame (the degraded tab-text +
  *  rules path, D-02). Returns the created frame's id, or null on any failure
  *  (mutate-never-throws: outcomes are checked, not caught). */
 export async function commitLoweredTable(
   host: BundleHost,
   table: LoweredTable,
+  stamp?: LowerStamp,
 ): Promise<string | null> {
   const pageId = await activePageId(host);
   if (!pageId) {
@@ -100,7 +111,7 @@ export async function commitLoweredTable(
     return null;
   }
   const placement = defaultPlacement(pageId, table.bounds);
-  const envelope = makeEnvelope({ kind: "table", region: table.region });
+  const envelope = makeEnvelope({ kind: "table", region: table.region, ...(stamp ?? {}) });
   const [top, left] = placement.bounds;
 
   // Phase 1 — the frame (both the native + degraded paths attach to its story).
@@ -493,6 +504,7 @@ export async function commitLoweredBarcode(
   host: BundleHost,
   barcode: LoweredBarcode,
   elementId?: string | null,
+  stamp?: LowerStamp,
 ): Promise<number> {
   if (barcode.modules.length === 0) {
     host.log.info(
@@ -522,6 +534,7 @@ export async function commitLoweredBarcode(
 
   const placement: BarcodePlacement = { pageId, topPt, leftPt };
   const envelope = makeEnvelope({
+    ...(stamp ?? {}),
     kind: "barcode",
     target: barcode.target,
     symbology: barcode.symbology,
