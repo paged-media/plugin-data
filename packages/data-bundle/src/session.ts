@@ -3169,7 +3169,12 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       }
       if (!queries.has(options.query)) return fail(`no query "${options.query}"`);
       // The merge reads the query's result as delivered: run it if it has none.
-      if ((e.query_record_count?.(options.query) ?? 0) === 0) await this.refreshData();
+      if ((e.query_record_count?.(options.query) ?? 0) === 0) {
+        await this.refreshData();
+        if (state.status === "error" && (e.query_record_count?.(options.query) ?? 0) === 0) {
+          return fail(`the query did not run: ${state.message}`);
+        }
+      }
 
       const mergeId = options.mergeId ?? `merge-${options.query}`;
       const mode = options.template ?? "keep";

@@ -227,10 +227,17 @@ export function makeBindingsPanel(
     /** Merge the chosen query's records through the template on the active
      *  page (every text frame with a <<field>>), InDesign Data Merge style. */
     async function runMerge(): Promise<void> {
-      const query = mergeQuery || session.getState().queries[0];
+      let query = mergeQuery || session.getState().queries[0];
       if (!query) {
-        setMergeMsg("define a query first");
-        return;
+        // No query yet: merge the first source as it is, like the binding
+        // kinds above do.
+        const source = session.getState().sources[0];
+        if (!source) {
+          setMergeMsg("import a data source first");
+          return;
+        }
+        session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
+        query = "q_all";
       }
       const r = await session.mergeRecords({
         query,
