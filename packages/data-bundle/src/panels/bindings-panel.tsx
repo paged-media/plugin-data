@@ -29,6 +29,7 @@ import type { BundleHost } from "@paged-media/plugin-api";
 import type { IdmlFit } from "../../../data-host-model/src";
 
 import type { BarcodeSymbology, ChangeReport, ColumnMapping, DataSourceSession } from "../session";
+import { DiagnosticsList } from "./diagnostics";
 
 /** The IDML FittingOnEmptyFrame choices an image binding offers (D-14). */
 const FIT_OPTIONS: { value: IdmlFit; label: string }[] = [
@@ -217,7 +218,10 @@ export function makeBindingsPanel(
       const id = `${bindKind}_${field}_${bindSeq}`;
       setBindSeq(bindSeq + 1);
       if (bindKind === "variable") {
-        session.addVariableBinding(id, field, q, "");
+        // The chosen field IS the expression: a bare field reference, which the
+        // engine resolves per record (a column the DSL cannot reference bare
+        // shows up as a resolve diagnostic, never a silent blank).
+        session.addVariableBinding(id, field, q, field);
         setBindMsg(`variable binding ${id} — Resolve + lower places the field`);
       } else {
         const target = host.selection.get().find((e) => e.kind === "rectangle");
@@ -465,6 +469,14 @@ export function makeBindingsPanel(
           )}
         </div>
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
+        <DiagnosticsList
+          diagnostics={snapshot.diagnostics}
+          sources={["refresh", "preview", "binding", "variables"]}
+          onClear={() => {
+            session.clearDiagnostics();
+            refresh();
+          }}
+        />
         {/* Developer knowledge (was user-facing copy) — the live lanes as of
             v43: in-text variables place a tagged FIELD and re-resolve via the
             refresh loop (D-01); images place onto the bound rectangle with the
@@ -474,9 +486,10 @@ export function makeBindingsPanel(
             barcodes/QR encode the field value (clean-room, in Rust) and draw
             as native VECTOR modules scaled to the bound rectangle (§9.7 —
             resolution-free, no asset-store door; raster is BLOCKED since
-            placeImage needs a uri). Honest gap: a NEW variable field lands at
-            the story start, not the user's caret — no caret-read door for a
-            bundle yet (D-01 caret residual). */}
+            placeImage needs a uri). A NEW variable field lands at the
+            user's text caret when the host exposes one (C-9,
+            host.text.caret), else at the start of the selected frame's
+            story, else in a fresh frame. */}
         <p style={note}>Bindings re-resolve when you refresh data.</p>
       </div>
     );
