@@ -48,7 +48,7 @@ import {
   type VisibilityTargetKind,
 } from "../../data-host-model/src";
 
-import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
+import { bootEngine, ENGINE_NOT_BUILT, ingestColumnBatch, type DataEngineLike } from "./engine";
 import {
   DATA_PART_DIR,
   SESSION_PART,
@@ -1853,8 +1853,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         const e = await ensureEngine();
         const d = await ensureDuck();
         for (const q of queries.values()) {
-          const records = await d.query(q.sql);
-          e.ingest_result(q.id, records);
+          // Typed column buffers (one copy per column); a re-delivery of the
+          // same data is recognised by the engine and decodes nothing.
+          if (typeof d.queryColumns === "function") {
+            ingestColumnBatch(e, q.id, await d.queryColumns(q.sql));
+          } else {
+            e.ingest_result(q.id, await d.query(q.sql));
+          }
         }
         state.status = "ready";
         state.message = "Data refreshed from sources.";

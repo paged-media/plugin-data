@@ -125,6 +125,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // handles (`$h:frame`, `$h:table`), and the minted frame comes back in
   // `minted` — no hitTest (D-16). hostCalls 11 → 7, reads 3 → 2, mutates
   // 4 → 1, undo steps 4 → 1.
+  // Column door (Wave 2): the result crosses as typed column buffers — begin + one push per column + finish (+4 wasm calls) instead of 1 500 `{t, v}` cells (cellsIn 0; bytes in 41.5 KB → 16.9 KB).
   const W1_LOWER: Measured = {
     hostCalls: 7,
     hostReads: 2,
@@ -132,8 +133,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 1506,
     undoSteps: 1,
     placeholdersRead: 0,
-    wasmCalls: 4,
-    cellsIn: 1500,
+    wasmCalls: 8,
+    cellsIn: 0,
     resolves: 1,
     stabilizeCalls: 1,
     // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
@@ -387,6 +388,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // `$h:frame` (C-15) — no elementGeometry, no hitTest (D-16). Per variable:
   // 2 supports, selection.get, one mutate, one log. hostCalls 240 → 102,
   // reads 120 → 2, mutates 40 → 20, undo steps 40 → 20.
+  // Column door (Wave 2): begin + per-column push + finish replace one `{t, v}` ingest of 150 cells.
   const W5: Measured = {
     hostCalls: 102,
     hostReads: 2,
@@ -394,8 +396,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 40,
     undoSteps: 20,
     placeholdersRead: 0,
-    wasmCalls: 21,
-    cellsIn: 150,
+    wasmCalls: 25,
+    cellsIn: 0,
     resolves: 20,
     stabilizeCalls: 0,
     keyAllocs: 0,
