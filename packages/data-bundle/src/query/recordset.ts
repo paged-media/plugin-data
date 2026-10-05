@@ -64,6 +64,11 @@ export interface ArrowLikeField {
 }
 export interface ArrowLikeColumn {
   toArray(): ArrayLike<unknown>;
+  /** Per-row read that honours the validity bitmap (Arrow `Vector.get`).
+   *  Optional so a plain fake satisfies the interface. */
+  get?(index: number): unknown;
+  /** Null slots in the column (Arrow `Vector.nullCount`). */
+  nullCount?: number;
 }
 export interface ArrowLikeTable {
   numRows: number;
@@ -83,11 +88,28 @@ export function classifyType(field: ArrowLikeField): FieldTypeJson {
   if (/float|double|decimal|real/.test(s)) return "float";
   if (/int/.test(s)) return "int";
   return "text";
-  // NOTE: Arrow Decimal columns (DB-attach, M1) carry an UNSCALED integer +
-  // a scale; `Number(raw)` reads the unscaled value, so a Decimal price would
-  // need scale division. The M0 path is CSV/Parquet → DOUBLE (handled), so
-  // Decimal scale handling rides with the M1 DB-attach source (BREAKAGE — see
-  // data.source.db-attach, planned). Proven by test-integration/pipeline.e2e.mjs.
+}
+
+/** The scale of an Arrow Decimal field, or null for any other type. Arrow JS
+ *  stores a decimal as its UNSCALED integer (`get` returns a big-number view
+ *  whose `String()` is that integer), so the scale is needed to read it. */
+export function decimalScale(field: ArrowLikeField): number | null {
+  const t = field.type as { typeId?: unknown; scale?: unknown; toString?(): string } | null;
+  if (!t || typeof t !== "object") return null;
+  const isDecimal =
+    t.typeId === 7 /* Arrow Type.Decimal */ || /^decimal/i.test(String(t.toString?.() ?? ""));
+  return isDecimal && typeof t.scale === "number" ? t.scale : null;
+}
+
+/** An unscaled decimal integer (as its decimal string) at `scale` → the
+ *  nearest number. Built as a decimal string and parsed once, so it rounds
+ *  like the decimal does instead of dividing an already-rounded double. */
+export function decimalToNumber(unscaled: string, scale: number): number {
+  if (scale <= 0) return Number(unscaled + "0".repeat(-scale));
+  const neg = unscaled.startsWith("-");
+  const digits = (neg ? unscaled.slice(1) : unscaled).padStart(scale + 1, "0");
+  const cut = digits.length - scale;
+  return Number(`${neg ? "-" : ""}${digits.slice(0, cut)}.${digits.slice(cut)}`);
 }
 
 /** Wrap one raw Arrow cell as a tagged `ValueJson` for the given field type. */
@@ -117,8 +139,25 @@ export function arrowToRecordSet(table: ArrowLikeTable): RecordSetJson {
     nullable: true,
   }));
   const columns: ValueJson[][] = fields.map((f, i) => {
-    const raw = table.getChildAt(i)?.toArray() ?? [];
-    return Array.from(raw, (cell) => cellToValue(cell, f.ty));
+    const col = table.getChildAt(i);
+    if (!col) return [];
+    const scale = decimalScale(table.schema.fields[i]);
+    if (scale !== null && typeof col.get === "function") {
+      // A decimal's toArray() is its raw 32-bit words (four per row), so read
+      // per row and apply the scale.
+      return Array.from({ length: table.numRows }, (_, r) => {
+        const cell = col.get!(r);
+        return cell == null
+          ? ({ t: "null" } as const)
+          : ({ t: "number", v: decimalToNumber(String(cell), scale) } as const);
+      });
+    }
+    if ((col.nullCount ?? 0) > 0 && typeof col.get === "function") {
+      // toArray() of a primitive column ignores the validity bitmap (a null
+      // reads as 0), so a column with nulls is read per row.
+      return Array.from({ length: table.numRows }, (_, r) => cellToValue(col.get!(r), f.ty));
+    }
+    return Array.from(col.toArray(), (cell) => cellToValue(cell, f.ty));
   });
   return { schema: { fields }, columns, row_count: table.numRows };
 }
