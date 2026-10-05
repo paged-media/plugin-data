@@ -16,3 +16,7 @@ data-expr = { path = "../data-expr" }
 data-query = { path = "../data-query" }
 serde.workspace = true
 thiserror.workspace = true
+
+[features]
+# Work counters for the perf budgets (data-query/src/perf.rs).
+perf-counters = ["data-query/perf-counters"]

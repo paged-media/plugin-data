@@ -453,6 +453,21 @@ mod wasm {
         serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// The engine's work counters since the last reset (campaign Wave 1 perf
+    /// budgets) — `{enabled, resolves, stabilize_calls, key_allocs,
+    /// fingerprints, diff_rows, ingest_cells, content_hashes,
+    /// group_key_compares}`. Global to the wasm instance, not per engine.
+    #[wasm_bindgen(js_name = perfCounters)]
+    pub fn perf_counters() -> Result<JsValue, JsValue> {
+        to_js(&crate::core::perf_counters())
+    }
+
+    /// Zero the work counters.
+    #[wasm_bindgen(js_name = resetPerfCounters)]
+    pub fn reset_perf_counters() {
+        crate::core::reset_perf_counters();
+    }
+
     /// The hash of the sources this wasm was built from
     /// (`scripts/source-hash.mjs`, stamped by `scripts/build-wasm.sh`;
     /// "unstamped" for any other build). `packages/data-bundle/test/

@@ -277,6 +277,44 @@ pub struct ChangeReportOut {
     pub removed: usize,
 }
 
+/// The engine's work counters (campaign Wave 1 perf budgets): how many
+/// resolves, sorts, sort-key allocations, fingerprints, diff rows and ingested
+/// cells the engine has spent since the last reset. `enabled` is false in a
+/// build without the `perf-counters` feature, where every count reads 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct PerfCountersOut {
+    pub enabled: bool,
+    pub resolves: u64,
+    pub stabilize_calls: u64,
+    pub key_allocs: u64,
+    pub fingerprints: u64,
+    pub diff_rows: u64,
+    pub ingest_cells: u64,
+    pub content_hashes: u64,
+    pub group_key_compares: u64,
+}
+
+/// The counters as they stand (this thread; the wasm engine has one).
+pub fn perf_counters() -> PerfCountersOut {
+    let c = data_query::perf::snapshot();
+    PerfCountersOut {
+        enabled: data_query::perf::ENABLED,
+        resolves: c.resolves,
+        stabilize_calls: c.stabilize_calls,
+        key_allocs: c.key_allocs,
+        fingerprints: c.fingerprints,
+        diff_rows: c.diff_rows,
+        ingest_cells: c.ingest_cells,
+        content_hashes: c.content_hashes,
+        group_key_compares: c.group_key_compares,
+    }
+}
+
+/// Zero the work counters.
+pub fn reset_perf_counters() {
+    data_query::perf::reset();
+}
+
 /// The full engine session.
 pub struct DataSession {
     engine: ResolutionEngine,

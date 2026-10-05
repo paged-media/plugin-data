@@ -51,6 +51,10 @@
 
 use data_core::{Query, RecordSet, ResolveStamp, ResultShape, Value};
 
+pub mod perf;
+
+use perf::Counter;
+
 /// A result reshaped per a query's [`ResultShape`] (spec §6).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shaped {
@@ -111,7 +115,13 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
                 None => Value::Null,
             })
             .collect();
-        match order.iter().position(|k| k == &key) {
+        let found = order.iter().position(|k| k == &key);
+        // One count per key compared (the scan's length), added once per row.
+        perf::add(
+            Counter::GroupKeyCompares,
+            found.map_or(order.len(), |i| i + 1) as u64,
+        );
+        match found {
             Some(i) => groups[i].rows.push(row),
             None => {
                 order.push(key.clone());
@@ -183,6 +193,7 @@ pub fn apply_order(records: &RecordSet, order: &[usize]) -> RecordSet {
 
 /// Stabilize a record set by the named keys (`order_rows` + `apply_order`).
 pub fn stabilize(records: &RecordSet, keys: &[String]) -> RecordSet {
+    perf::bump(Counter::StabilizeCalls);
     let order = order_rows(records, keys);
     apply_order(records, &order)
 }
@@ -234,6 +245,7 @@ fn hash_value(h: &mut u64, v: &Value) {
 /// A stable content hash of a record set (schema + every value). Bit-stable —
 /// the basis for [`ResolveStamp`] invalidation (§8).
 pub fn content_hash(records: &RecordSet) -> u64 {
+    perf::bump(Counter::ContentHashes);
     let mut h = FNV_OFFSET;
     for f in &records.schema.fields {
         fnv_bytes(&mut h, f.name.as_bytes());
@@ -284,6 +296,7 @@ pub fn stamp(source_content_hash: u64, query: &Query, params: &[(String, Value)]
 /// A total, type-aware sort key for a value (used by `order_rows`/`group_by`).
 /// Orders by type tag, then by content; numbers by bits-preserving order.
 fn value_key(v: &Value) -> (u8, Vec<u8>) {
+    perf::bump(Counter::KeyAllocs);
     match v {
         Value::Null => (0, Vec::new()),
         Value::Bool(b) => (1, vec![*b as u8]),

@@ -37,6 +37,8 @@
 //! wiring — spec §12.4). Determinism: expression eval + binding resolution are
 //! CPU/`f64` bit-stable (no GPU, no tolerance).
 
+pub mod perf_workloads;
+
 use data_core::{FieldType, RecordSet, Schema, Value};
 use data_expr::{eval_str, EvalCtx, SimpleCtx};
 

@@ -307,6 +307,10 @@ impl ResolutionEngine {
     /// data change marks dependent `Linked` bindings `Stale`; `Pinned`/
     /// `Overridden` bindings are left untouched (non-destructive, §8/D-6).
     pub fn set_result(&mut self, query: QueryId, records: RecordSet) {
+        data_query::perf::add(
+            data_query::perf::Counter::IngestCells,
+            (records.row_count * records.columns.len()) as u64,
+        );
         let new_hash = content_hash(&records);
         let changed = self.results_hash.get(&query) != Some(&new_hash);
         self.results.insert(query.clone(), records);
@@ -444,6 +448,7 @@ impl ResolutionEngine {
     /// change report must NOT mutate sync states (it only reports what a refresh
     /// would change), so it resolves through here, never `resolve_at`.
     pub fn resolve_content(&self, id: &BindingId, record: usize) -> Result<Resolved, ResolveError> {
+        data_query::perf::bump(data_query::perf::Counter::Resolves);
         let binding = self
             .bindings
             .get(id)
