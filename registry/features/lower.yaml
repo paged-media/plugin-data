@@ -46,6 +46,26 @@
         "data-conformance/tests/oracle.rs::data_oracle_indesign",
       ]
 
+- id: data.lower.merge-writer
+  title: Data Merge writer — template read off a page, merged into the document, overset measured (Wave 5)
+  spec: plugin-data packages/data-bundle/src/merge.ts (docs/design/oracles.md §2)
+  status: implemented
+  provenance: ["frames minted at the planned bounds with text, story formatting and label in ONE batch via bindCreated/$h handles; pages first when needed (2 undo steps: a page minted in a batch cannot be named); overset measured through host.text.measureString + data-lower merge_overset (DM-7); merge INTO the current document (no plugin door creates a document); real-core replay of all 8 InDesign recordings"]
+  tests:
+    vitest:
+      [
+        "packages/data-bundle/src/__tests__/merge.test.ts",
+        "packages/data-bundle/test/merge-real-core.spec.ts",
+      ]
+
+- id: data.lower.relower-in-place
+  title: Re-lower updates in place — a table reuses its frame, barcode/flow/merge content is replaced, not duplicated
+  spec: plugin-data packages/data-bundle/src/relower.ts
+  status: implemented
+  provenance: ["pure planner over the scene tree's labels plus the session's minted record; the session wiring is Wave 5 phase B"]
+  tests:
+    vitest: ["packages/data-bundle/src/__tests__/relower.test.ts"]
+
 - id: data.lower.pagination
   title: Pagination convergence — repeated/continued headers, tall-record handling
   spec: plugin-data data-lower/src/lib.rs (base-idea §9.4)

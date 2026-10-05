@@ -273,6 +273,23 @@ mod wasm {
             to_js(&plan)
         }
 
+        /// The distinct words of a merge plan's texts per template frame
+        /// (`string[][]`, the space included) — what the writer measures
+        /// against the host's fonts before asking [`merge_overset`].
+        pub fn merge_words(&self, plan: JsValue, frames: usize) -> Result<JsValue, JsValue> {
+            let plan: data_lower::merge::MergePlan = from_js(plan)?;
+            to_js(&data_lower::merge::merge_words(&plan, frames))
+        }
+
+        /// Per record, per frame: is the merged text overset (DM-7)?
+        /// `metrics` is `FrameMetrics[]` (`{ leadingPt, advances }` per
+        /// template frame); answers `boolean[][]`.
+        pub fn merge_overset(&self, plan: JsValue, metrics: JsValue) -> Result<JsValue, JsValue> {
+            let plan: data_lower::merge::MergePlan = from_js(plan)?;
+            let metrics: Vec<data_lower::merge::FrameMetrics> = from_js(metrics)?;
+            to_js(&data_lower::merge::merge_overset(&plan, &metrics))
+        }
+
         /// Plan a §10 batch run over a query's result (`mode` is `BatchMode`):
         /// `{ mode, units: [{ label, recordIndices }], totalRecords }` — which
         /// records feed which output document (per-record / per-group / one

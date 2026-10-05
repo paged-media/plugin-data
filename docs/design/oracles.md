@@ -148,7 +148,11 @@ rewriting all of them at once hides which answer changed.
    holds nothing but fields and every one of them is empty. Field text is inserted verbatim.
    This is the rule the Wave 5 merge writer implements.
 
-2. **The engine.** `DataSession` resolves a record-flow binding whose template comes from the
+2. **The merge planner** (Wave 5). `DataSession::plan_merge` (`data-lower/src/merge.rs`) plans
+   the merge from the fixture's template frames over the same text ingest. Every planned text
+   frame is put on the grid from its bounds, as InDesign's frames are.
+
+   **The record flow** (reference lane). `DataSession` resolves a record-flow binding whose template comes from the
    fixture lines. It ingests the CSV with every field as text, as Data Merge reads it, and with
    empty fields as null, as DuckDB reads them. `paginate_flow` packs the records into the
    natural chain: one frame per page of the template frame's height for Single Record, and one
@@ -174,7 +178,13 @@ rewriting all of them at once hides which answer changed.
 
   Every lane's score is pinned per fixture.
 
-**Agreement today** (engine / paginator, placements agreeing out of records):
+**Agreement today.** The merge planner agrees with all 8 recordings in pages, placements, texts
+and images. The one exception is the overset flag of `overset` (1 of 2): the planner does not
+measure text. The host writer measures it, and the writer lane below agrees in full.
+
+The record flow and the paginator are reference lanes (flow / paginator, placements agreeing out
+of records). The record flow is EasyCatalog-style continuous flow, not Data Merge, so its
+divergences are what it is:
 
 | Fixture | Pages (ours/InDesign) | Placements | Texts |
 |---|---|---|---|
@@ -195,7 +205,28 @@ arithmetic agrees for every columns-first layout.
 `data-js` record flow, and compares texts only. 81 of 90 records agree. DuckDB keeps leading
 zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 
-**Defects pinned** (Wave 5 fixes the merge writer):
+**The writer lane** (`packages/data-bundle/test/merge-real-core.spec.ts`, real core and the
+real data-js wasm). It opens each `templates/<id>.idml`, reads the template off the page
+(`src/merge.ts` `readMergeTemplate`), merges the CSV into the document with the template page
+consumed, and reads the result back through the host, independently of the plan:
+
+- page count;
+- text frames per page;
+- at each recorded frame's centre, our frame's page-local bounds (±0.5 pt) and story text;
+- the overset flag of every record;
+- the placed image names per page.
+
+All 8 fixtures agree in full. Undoing the merge's mutates (one, or two when pages are added)
+restores the template.
+
+One core defect is pinned there (`it.fails`): the IDML import moves a paragraph mark that sits
+between two adjacent `HyperlinkTextSource` elements two characters into the second one. Every
+Data Merge placeholder is such a source, so `<<name>>¶<<subtitle>>` reads back as
+`<<name>><<¶subtitle>>`. This affects `empty-field-lines` and `overset`. Their writer check uses
+the template text InDesign holds.
+
+**Defects** (DM-1 to DM-7 are closed for Data Merge by the planner and writer; the record-flow
+lane still shows them, by design):
 
 - **DM-1.** There is no Single Record mode: the flow packs as many records as fit into a frame.
 - **DM-2.** The record flow re-sorts records by full row content (`stabilize`). Data Merge keeps

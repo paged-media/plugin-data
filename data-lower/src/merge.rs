@@ -47,8 +47,13 @@
 //! - **Image fields** (DM-6): the frame's field names a column whose value is
 //!   the image reference; an empty value leaves the frame empty.
 //!
-//! Overset (DM-7) needs real text measurement, so it is the writer's job: it
-//! measures each merged text against the host's fonts after planning.
+//! Overset (DM-7) needs real text measurement. The writer asks this module
+//! for the words each template frame's texts use ([`merge_words`]), measures
+//! them once against the host's fonts, and hands the widths back to
+//! [`merge_overset`], which wraps every merged text and compares its lines ×
+//! leading with the frame.
+
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -423,6 +428,102 @@ pub fn plan_merge(spec: &MergeSpec, records: &RecordSet) -> MergePlan {
     }
 }
 
+// ── overset (DM-7) ──────────────────────────────────────────────────────────
+
+/// The distinct words of every merged text, per template frame (index =
+/// [`MergeSpec::frames`] index; image frames get none). A word is a run of
+/// characters between spaces within a line; the space itself is listed too,
+/// since the wrap needs its width.
+pub fn merge_words(plan: &MergePlan, frames: usize) -> Vec<Vec<String>> {
+    let mut sets: Vec<BTreeSet<String>> = vec![BTreeSet::new(); frames];
+    for r in &plan.records {
+        for f in &r.frames {
+            let (Some(text), Some(set)) = (&f.text, sets.get_mut(f.template)) else {
+                continue;
+            };
+            if text.is_empty() {
+                continue;
+            }
+            set.insert(" ".to_string());
+            for line in text.split('\n') {
+                for w in line.split(' ').filter(|w| !w.is_empty()) {
+                    set.insert(w.to_string());
+                }
+            }
+        }
+    }
+    sets.into_iter().map(|s| s.into_iter().collect()).collect()
+}
+
+/// The measured font of one template frame: its leading and the advance of
+/// every word [`merge_words`] listed for it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameMetrics {
+    pub leading_pt: f64,
+    #[serde(default)]
+    pub advances: HashMap<String, f64>,
+}
+
+/// How many lines `text` takes in a column `width` wide: greedy word wrap
+/// per line, an empty line is one line, and a word wider than the column
+/// takes the lines its width needs. Unmeasured words count as zero width.
+pub fn count_lines(text: &str, width: f64, advances: &HashMap<String, f64>) -> usize {
+    let adv = |w: &str| advances.get(w).copied().unwrap_or(0.0);
+    let space = adv(" ");
+    let span = |a: f64| -> usize {
+        if width <= 0.0 {
+            1
+        } else {
+            ((a / width).ceil() as usize).max(1)
+        }
+    };
+    let mut lines = 0;
+    for line in text.split('\n') {
+        let mut used: Option<f64> = None;
+        for w in line.split(' ').filter(|w| !w.is_empty()) {
+            let a = adv(w);
+            match used {
+                Some(u) if u + space + a <= width + 1e-6 => used = Some(u + space + a),
+                _ => {
+                    lines += span(a);
+                    used = Some(if a > width && width > 0.0 {
+                        a % width
+                    } else {
+                        a
+                    });
+                }
+            }
+        }
+        if used.is_none() {
+            lines += 1;
+        }
+    }
+    lines
+}
+
+/// Per record, per frame: is the merged text overset? A text frame is
+/// overset when its wrapped lines × leading exceed the frame height by more
+/// than half a point (Data Merge never grows a frame). Image frames never are.
+pub fn merge_overset(plan: &MergePlan, metrics: &[FrameMetrics]) -> Vec<Vec<bool>> {
+    plan.records
+        .iter()
+        .map(|r| {
+            r.frames
+                .iter()
+                .map(|f| match (&f.text, metrics.get(f.template)) {
+                    (Some(text), Some(m)) if !text.is_empty() => {
+                        let width = f.bounds[3] - f.bounds[1];
+                        let height = f.bounds[2] - f.bounds[0];
+                        count_lines(text, width, &m.advances) as f64 * m.leading_pt > height + 0.5
+                    }
+                    _ => false,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,5 +691,52 @@ mod tests {
                 column_spacing_pt: 0.0
             }
         );
+    }
+
+    #[test]
+    fn data_lower_merge_overset_wraps_measured_words_against_the_frame() {
+        let rs = records(
+            &["name", "d"],
+            &[
+                &["Short", "Fits easily."],
+                &["Long", "aaaa bbbb cccc dddd eeee ffff"],
+            ],
+        );
+        let spec = MergeSpec {
+            margin_box: LETTER_MARGINS,
+            // 36 pt tall at 12 pt leading: three lines fit.
+            frames: vec![text_frame([36.0, 36.0, 72.0, 86.0], "<<name>>\n<<d>>")],
+            records_per_page: RecordsPerPage::Single,
+            remove_blank_lines: false,
+        };
+        let plan = plan_merge(&spec, &rs);
+        let words = merge_words(&plan, 1);
+        assert!(words[0].contains(&" ".to_string()) && words[0].contains(&"Fits".to_string()));
+        // Every word 20 pt, a space 5 pt: a 50 pt column holds two words.
+        let advances = words[0]
+            .iter()
+            .map(|w| (w.clone(), if w == " " { 5.0 } else { 20.0 }))
+            .collect();
+        let m = FrameMetrics {
+            leading_pt: 12.0,
+            advances,
+        };
+        assert_eq!(count_lines("Fits easily.", 50.0, &m.advances), 1);
+        assert_eq!(
+            count_lines("aaaa bbbb cccc dddd eeee ffff", 50.0, &m.advances),
+            3
+        );
+        assert_eq!(count_lines("a\n\nb", 50.0, &m.advances), 3);
+        let over = merge_overset(&plan, &[m]);
+        // Short: 2 lines = 24 pt. Long: 1 + 3 lines = 48 pt > 36 pt.
+        assert_eq!(over, vec![vec![false], vec![true]]);
+    }
+
+    #[test]
+    fn data_lower_merge_a_word_wider_than_the_column_takes_its_lines() {
+        let advances: HashMap<String, f64> =
+            [("w".to_string(), 120.0), (" ".to_string(), 5.0)].into();
+        assert_eq!(count_lines("w", 50.0, &advances), 3);
+        assert_eq!(count_lines("w w", 50.0, &advances), 6);
     }
 }
