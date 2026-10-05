@@ -125,6 +125,31 @@ async function readLiveChain(host: BundleHost, storyId: string): Promise<LiveFra
   });
 }
 
+/** One binding's decision from the engine's `refresh_field_values`. */
+type FieldRefreshOut =
+  | { outcome: "value"; binding: string; value: string | null }
+  | { outcome: "kept"; binding: string; status: string }
+  | { outcome: "notVariable"; binding: string }
+  | { outcome: "failed"; binding: string; error?: string };
+
+/** The index of the batch child a rejected batch names, or null. Core rolls a
+ *  failed batch back and says which child failed:
+ *  `Mutation::Batch child 3 (setFieldValue): … — batch rolled back`. */
+export function failedBatchChild(error: unknown): number | null {
+  let text: string;
+  if (typeof error === "string") text = error;
+  else if (error instanceof Error) text = error.message;
+  else {
+    try {
+      text = JSON.stringify(error) ?? "";
+    } catch {
+      text = String(error);
+    }
+  }
+  const m = /Batch child (\d+)/.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
 /** Map an explicit IDML FittingOnEmptyFrame choice back to the engine's coarse
  *  `ImgFit` (fit/fill/crop) for the binding `policy`. The engine ImgFit is only
  *  a default hint; the explicit IDML `fit` overrides at commit time. */
@@ -977,27 +1002,42 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   }
 
   /** Write `value` into every given field, back to front per story, off the
-   *  addresses just read. Returns the number of writes the host applied; each
-   *  rejection is reported. */
+   *  addresses just read, as ONE mutate — one rebuild and one undo step for
+   *  the whole refresh (core applies such a batch atomically). Returns the
+   *  number of writes the host applied.
+   *
+   *  A rejected batch is rolled back whole, and core names the child that
+   *  failed ("Mutation::Batch child N"). That write is reported against its
+   *  binding and the batch is sent again without it, so one bad field does not
+   *  hold back the others (the addresses stay valid: nothing landed). A
+   *  rejection that names no child is reported against every write in it. */
   async function writeFields(
     source: SessionDiagnostic["source"],
     writes: readonly { storyId: string; offset: number; key: string; value: string | null }[],
   ): Promise<number> {
-    let applied = 0;
-    for (const w of backToFront(writes)) {
-      const out = await host.document.mutate(setFieldValueMutation(w.storyId, w.offset, w.value));
-      if (out.applied) {
-        applied += 1;
-      } else {
-        report({
-          level: "error",
-          source,
-          binding: w.key,
-          message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(out.error)})`,
-        });
+    let pending = backToFront(writes);
+    const rejected = (w: (typeof pending)[number], err: unknown) =>
+      report({
+        level: "error",
+        source,
+        binding: w.key,
+        message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(err)})`,
+      });
+    while (pending.length > 0) {
+      const ops = pending.map((w) => setFieldValueMutation(w.storyId, w.offset, w.value));
+      const out = await host.document.mutate(
+        ops.length === 1 ? ops[0]! : { op: "batch", args: { ops } },
+      );
+      if (out.applied) return pending.length;
+      const child = ops.length === 1 ? 0 : failedBatchChild(out.error);
+      if (child === null || child >= pending.length) {
+        for (const w of pending) rejected(w, out.error);
+        return 0;
       }
+      rejected(pending[child]!, out.error);
+      pending = pending.filter((_, i) => i !== child);
     }
-    return applied;
+    return 0;
   }
 
   /** The engine's sync status for a binding (`"linked"`, `"pinned"`, …), or
@@ -2119,10 +2159,34 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       if (fields === null) return 0;
 
       const writes: { storyId: string; offset: number; key: string; value: string | null }[] = [];
-      // Resolve each binding once, however many copies of its field exist.
-      const resolved = new Map<string, { value: string | null } | "kept" | "failed">();
-      for (const f of fields) {
-        if (bindingKinds.get(f.key) !== "variable") continue; // a known variable binding
+      // Resolve each binding once, however many copies of its field exist —
+      // all of them in ONE engine call when the wasm has it.
+      const resolved = new Map<string, { value: string | null } | "kept" | "failed" | "same">();
+      const ours = fields.filter((f) => bindingKinds.get(f.key) === "variable");
+      if (typeof e.refresh_field_values === "function" && ours.length > 0) {
+        let decided: FieldRefreshOut[] = [];
+        try {
+          decided = (e.refresh_field_values([...new Set(ours.map((f) => f.key))]) as FieldRefreshOut[] | null) ?? [];
+        } catch (err) {
+          report({ level: "error", source: "refresh", message: `the engine could not resolve the fields: ${errText(err)}` });
+          return 0;
+        }
+        for (const d of decided) {
+          if (d.outcome === "value") resolved.set(d.binding, { value: d.value ?? null });
+          else if (d.outcome === "kept") resolved.set(d.binding, "kept");
+          else if (d.outcome === "notVariable") resolved.set(d.binding, "same");
+          else {
+            report({
+              level: "warn",
+              source: "refresh",
+              binding: d.binding,
+              message: `did not resolve — the field keeps its value: ${d.error ?? "unknown error"}`,
+            });
+            resolved.set(d.binding, "failed");
+          }
+        }
+      }
+      for (const f of ours) {
         let r = resolved.get(f.key);
         if (r === undefined) {
           const status = syncStatus(e, f.key);
@@ -2149,7 +2213,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           }
           resolved.set(f.key, r);
         }
-        if (r === "kept" || r === "failed") continue;
+        if (r === "kept" || r === "failed" || r === "same") continue;
         if (r.value === f.value) continue; // minimal: only changed → a write
         writes.push({ storyId: f.storyId, offset: f.offset, key: f.key, value: r.value });
       }

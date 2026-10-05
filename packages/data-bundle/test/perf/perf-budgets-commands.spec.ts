@@ -53,7 +53,6 @@ import {
   sessionOver,
   undoMark,
   undoSteps,
-  undoStepsSince,
   type CountedDuck,
   type CountedEngine,
   type Measured,
@@ -182,17 +181,20 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
 
   // ── W2: refresh 100 fields in one story ───────────────────────────────────
   // AS FOUND: one placeholders() read, then ONE awaited setFieldValue mutate
-  // per changed field — 100 rebuilds and 100 undo steps for one refresh.
-  // (Measured beside it: today's core applies a back-to-front BATCH of
-  // setFieldValue ops atomically as one step — see the probe below.)
+  // per changed field — 100 rebuilds and 100 undo steps for one refresh, and
+  // two wasm calls per field (sync_state + resolve_lowered).
+  // Wave 2: the writes are ONE back-to-front batch (one rebuild, one undo
+  // step), and the engine decides every field in ONE `refresh_field_values`
+  // call. hostCalls 102 → 3, mutates 100 → 1, undo 89 (unreachable) → 1,
+  // wasm calls 200 → 1.
   const W2: Measured = {
-    hostCalls: 102,
+    hostCalls: 3,
     hostReads: 1,
-    mutates: 100,
+    mutates: 1,
     mutationOps: 100,
-    undoSteps: 89,
+    undoSteps: 1,
     placeholdersRead: 100,
-    wasmCalls: 200,
+    wasmCalls: 1,
     cellsIn: 0,
     resolves: 100,
     stabilizeCalls: 0,
@@ -215,16 +217,21 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     for (let i = 0; i < N; i++) s.addVariableBinding(`v${i}`, "anchor", "q1", `c${i}`);
     await s.refreshData();
     // The fields are already in ONE story, stale ("x"), separated by spaces.
+    // The spaces go in first and each field is inserted INTO them: a space
+    // inserted at a field's start would join the field's run (the core
+    // defect pinned in field-offsets-real-core.spec.ts), and the field write
+    // would then erase it. (The Wave 1 fixture did that; its "89 undo steps,
+    // history exhausted" was that defect, not a bounded history.)
     const story = await newStory(h, [100, 100, 600, 500]);
+    await h.host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: " ".repeat(N - 1) } });
     for (let i = N - 1; i >= 0; i--) {
       const ins = await h.host.document.mutate({
         op: "insertField",
-        args: { storyId: story, offset: 0, field: { placeholder: { plugin: PLUGIN, key: `v${i}`, value: "x" } } },
+        args: { storyId: story, offset: i, field: { placeholder: { plugin: PLUGIN, key: `v${i}`, value: "x" } } },
       } as never);
       expect(ins.applied).toBe(true);
-      if (i > 0) await h.host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: " " } });
     }
-    expect((await ourFields(h)).length).toBe(N);
+    expect((await ourFields(h)).map((f) => f.key)).toEqual(Array.from({ length: N }, (_, i) => `v${i}`));
 
     const mark = await undoMark(h);
     resetAll(work, engine, d);
@@ -239,13 +246,15 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     expect(written).toBe(N);
     const after = await ourFields(h);
     expect(after.every((f) => f.value === `value-${f.key.slice(1)}`)).toBe(true);
-    // AS FOUND: 100 separate steps — more than the engine's bounded undo
-    // history reaches: the walk runs out after 89 undos, before it gets back to the mark,
-    // so the user cannot undo back past the refresh at all. The pin is the
-    // reachable count; the one-batch refresh brings it to 1, reached.
-    const walk = await undoStepsSince(h, mark);
-    const m = { ...pre, undoSteps: walk.steps };
-    report("W2.refresh-100-fields", m, { ms, ...bytes, detail: { undoReached: walk.reached } }, snap, engine);
+    // ...and the separators between them survived the writes.
+    const text = await h.host.document.storyContent(story);
+    expect(text?.paragraphs.map((p) => p.runs.map((r) => r.text).join("")).join("")).toBe(
+      Array.from({ length: N }, (_, i) => `value-${i}`).join(" "),
+    );
+    // One undo step takes the whole refresh back.
+    const m = { ...pre, undoSteps: await undoSteps(h, mark) };
+    expect((await ourFields(h)).every((f) => f.value === "x")).toBe(true);
+    report("W2.refresh-100-fields", m, { ms, ...bytes, detail: {} }, snap, engine);
     expectBudget("W2", m, W2);
   });
 

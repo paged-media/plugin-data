@@ -342,6 +342,14 @@ mod wasm {
             to_js(&self.session.sync_report()).unwrap_or(JsValue::NULL)
         }
 
+        /// The field-refresh decision for each named binding, in one call
+        /// (`[{outcome, binding, …}]`; see `DataSession::refresh_field_values`).
+        /// A hidden value crosses as `null`.
+        pub fn refresh_field_values(&mut self, bindings: Vec<String>) -> Result<JsValue, JsValue> {
+            let ids: Vec<BindingId> = bindings.into_iter().map(BindingId::from).collect();
+            to_js_json(&self.session.refresh_field_values(&ids))
+        }
+
         /// The visible data-source manifest (§11).
         pub fn source_manifest(&self) -> JsValue {
             to_js(&self.session.source_manifest()).unwrap_or(JsValue::NULL)

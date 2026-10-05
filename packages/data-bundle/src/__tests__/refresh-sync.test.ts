@@ -161,11 +161,65 @@ describe("refreshFields writes back to front off one read [data.lower.v43-consum
     const s = await sessionWith(fake.host, engine);
     for (const id of ["a", "b", "c"]) s.addVariableBinding(id, "anchor", "q", id);
     expect(await s.refreshFields()).toBe(4);
-    const order = fake.mutations.map((m) => {
+    // ONE mutate: a batch, which core applies as one rebuild and one undo step.
+    expect(fake.mutations.length).toBe(1);
+    const batch = fake.mutations[0] as { op: string; args: { ops: Mutation[] } };
+    expect(batch.op).toBe("batch");
+    const order = batch.args.ops.map((m) => {
       const a = (m as { args: { storyId: string; offset: number } }).args;
       return `${a.storyId}@${a.offset}`;
     });
     expect(order).toEqual(["s1@25", "s1@10", "s1@0", "s2@3"]);
+  });
+
+  it("a rejected batch names its child: that field is reported, the rest are written [data.lower.v43-consumers]", async () => {
+    const fake = fakeHost({ placeholders: () => [field("a", 0, "1"), field("b", 10, "2"), field("c", 20, "3")] });
+    const sent: number[] = [];
+    (fake.host.document as { mutate: unknown }).mutate = async (m: { op: string; args: { ops: Mutation[] } }) => {
+      const ops = m.op === "batch" ? m.args.ops : [m];
+      sent.push(ops.length);
+      // Core rolls the batch back and names the child (b, at offset 10).
+      const bad = ops.findIndex((o) => (o as { args: { offset: number } }).args.offset === 10);
+      if (bad >= 0) {
+        return {
+          applied: false,
+          error: { kind: "notImplemented", details: { what: `Mutation::Batch child ${bad} (SetFieldValue): no placeholder field at offset 10 — batch rolled back` } },
+        };
+      }
+      return { applied: true, createdId: null, pageIds: [] };
+    };
+    const s = await sessionWith(fake.host, fakeEngine({ resolve_lowered: (id: string) => variable(`${id}-new`) }));
+    for (const id of ["a", "b", "c"]) s.addVariableBinding(id, "anchor", "q", id);
+    expect(await s.refreshFields()).toBe(2);
+    expect(sent).toEqual([3, 2]); // the batch, then the batch without b
+    const d = s.getState().diagnostics.filter((x) => x.message.includes("rejected"));
+    expect(d.map((x) => x.binding)).toEqual(["b"]);
+  });
+
+  it("asks the engine for every field in ONE call when the wasm has refresh_field_values [data.bind.engine]", async () => {
+    const fake = fakeHost({ placeholders: () => [field("a", 0, "old"), field("k", 5, "kept"), field("a", 9, "old")] });
+    const asked: string[][] = [];
+    const engine = fakeEngine({
+      refresh_field_values: (ids: string[]) => {
+        asked.push(ids);
+        return [
+          { outcome: "value", binding: "a", value: "new" },
+          { outcome: "kept", binding: "k", status: "pinned" },
+        ];
+      },
+      sync_state: () => {
+        throw new Error("the one-call lane must not ask per binding");
+      },
+      resolve_lowered: () => {
+        throw new Error("the one-call lane must not resolve per binding");
+      },
+    });
+    const s = await sessionWith(fake.host, engine);
+    s.addVariableBinding("a", "anchor", "q", "a");
+    s.addVariableBinding("k", "anchor", "q", "k");
+    expect(await s.refreshFields()).toBe(2);
+    expect(asked).toEqual([["a", "k"]]);
+    expect(s.getState().message).toMatch(/1 pinned/);
   });
 });
 

@@ -234,6 +234,27 @@ pub struct SyncEntry {
     pub status: Status,
 }
 
+/// One binding's field-refresh decision ([`DataSession::refresh_field_values`]),
+/// tagged by `outcome`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum FieldRefresh {
+    /// Pinned or Overridden: the field keeps its value (never resolved).
+    Kept { binding: String, status: Status },
+    /// The resolved display; `None` when the missing policy hides it (the
+    /// field then shows its `<key>` token).
+    Value {
+        binding: String,
+        value: Option<String>,
+    },
+    /// The binding lowers to something other than a variable: a field bound
+    /// to it keeps its value.
+    #[serde(rename = "notVariable")]
+    NotVariable { binding: String },
+    /// The resolve failed; the field keeps its value.
+    Failed { binding: String, error: String },
+}
+
 /// One binding's entry in the §8 refresh change report crossed to the host
 /// (`{binding, kind, before, after}`). `kind` is `"changed"`/`"unchanged"`/
 /// `"added"`/`"removed"`; `before`/`after` are the opaque resolved-content
@@ -751,6 +772,45 @@ impl DataSession {
                 status,
             })
             .collect()
+    }
+
+    /// The field-refresh decision for every binding named, in ONE call (the
+    /// bundle's `refreshFields`; it used to cost two boundary calls per field,
+    /// `sync_state` + `resolve_lowered`). The §8 conflict policy is applied
+    /// here, before anything resolves: a `Pinned` or `Overridden` binding is
+    /// [`FieldRefresh::Kept`] and is NOT resolved, because a resolve re-links.
+    /// Each binding is decided once, in the order given (duplicates are
+    /// answered once, at their first position).
+    pub fn refresh_field_values(&mut self, ids: &[BindingId]) -> Vec<FieldRefresh> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let binding = id.to_string();
+            if let Some(st) = self.engine.sync_state(id) {
+                if matches!(st.status, Status::Pinned | Status::Overridden) {
+                    out.push(FieldRefresh::Kept {
+                        binding,
+                        status: st.status,
+                    });
+                    continue;
+                }
+            }
+            out.push(match self.resolve_lowered(id) {
+                Ok(LoweredOutput::Variable(v)) => FieldRefresh::Value {
+                    binding,
+                    value: if v.hidden { None } else { Some(v.text) },
+                },
+                Ok(_) => FieldRefresh::NotVariable { binding },
+                Err(e) => FieldRefresh::Failed {
+                    binding,
+                    error: e.to_string(),
+                },
+            });
+        }
+        out
     }
 
     /// The **remote invalidation key** (§6.2/§8, the M1 remote slice): the

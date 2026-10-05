@@ -31,6 +31,7 @@ import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
 import type { DataEngineLike } from "../src/engine";
 import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { undoMark, undoSteps } from "./perf/harness";
 
 const run = ENGINE_ANCHOR !== null || REQUIRE_REAL_CORE;
 const PLUGIN = "media.paged.data";
@@ -200,4 +201,65 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
     expect(stories.length).toBe(1);
     expect((await ours(h)).map((p) => p.value)).toEqual(["BETA"]);
   });
+  it("refreshFields is ONE undo step, and one undo takes every field back [data.lower.v43-consumers]", async () => {
+    h = await openRealHost();
+    const story = await newStory(h);
+    const host = h.host;
+    // "<k0:x> <k1:x> <k2:x>": the spaces first, each field inserted into them.
+    await host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: "  " } });
+    for (const i of [2, 1, 0]) {
+      await host.document.mutate({
+        op: "insertField",
+        args: { storyId: story, offset: i, field: { placeholder: { plugin: PLUGIN, key: `k${i}`, value: "x" } } },
+      });
+    }
+    const values: Record<string, string> = { k0: "first value", k1: "b", k2: "third" };
+    const engine = fakeEngine({
+      resolve_lowered: (id: string) => ({ kind: "variable", target: id, text: values[id], hidden: false }),
+    });
+    const s = await sessionOver(h, engine);
+    for (const k of Object.keys(values)) s.addVariableBinding(k, "anchor", "q", k);
+
+    const mark = await undoMark(h);
+    expect(await s.refreshFields()).toBe(3);
+    const text = async () =>
+      (await host.document.storyContent(story))?.paragraphs.map((p) => p.runs.map((r) => r.text).join("")).join("");
+    expect(await text()).toBe("first value b third");
+    expect(await undoSteps(h, mark)).toBe(1);
+    expect((await ours(h)).map((p) => p.value)).toEqual(["x", "x", "x"]);
+  });
+
+  // DEFECT (core 0.67, paged-mutate): `insertText` at a placeholder run's
+  // START goes INTO that run, so the inserted text becomes part of the field.
+  // `setFieldValue` then replaces the run's text with the new display and the
+  // inserted text is gone; undoing that write fails with "undo log empty" and
+  // drops the history record. The Wave 1 W2 fixture built its separators this
+  // way, which read as "the undo history is bounded at 89". Goes green when
+  // core keeps text inserted at a field boundary out of the field.
+  it.fails("DEFECT core: text inserted at a field's start joins the field and a field write erases it [data.lower.v43-consumers]", async () => {
+    h = await openRealHost();
+    const story = await newStory(h);
+    const host = h.host;
+    for (const i of [1, 0]) {
+      await host.document.mutate({
+        op: "insertField",
+        args: { storyId: story, offset: 0, field: { placeholder: { plugin: PLUGIN, key: `k${i}`, value: "x" } } },
+      });
+      if (i > 0) await host.document.mutate({ op: "insertText", args: { storyId: story, offset: 0, text: " " } });
+    }
+    const engine = fakeEngine({
+      resolve_lowered: (id: string) => ({ kind: "variable", target: id, text: `${id}-value`, hidden: false }),
+    });
+    const s = await sessionOver(h, engine);
+    s.addVariableBinding("k0", "anchor", "q", "k0");
+    s.addVariableBinding("k1", "anchor", "q", "k1");
+    const mark = await undoMark(h);
+    expect(await s.refreshFields()).toBe(2);
+    const text = (await host.document.storyContent(story))?.paragraphs
+      .map((p) => p.runs.map((r) => r.text).join(""))
+      .join("");
+    expect(text).toBe("k0-value k1-value");
+    expect(await undoSteps(h, mark)).toBe(1);
+  });
 });
+
