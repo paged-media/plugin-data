@@ -1,0 +1,447 @@
+{
+  "fixture": "long-record-set",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 84, 276],
+            "text": "<<name>>\rSKU: <<sku>>\rStock: <<stock>>",
+            "lines": 3,
+            "overset": false,
+            "story_length": 38
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 3,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [684, 288, 732, 528],
+            "text": "Olive 32\rSKU: L-25\rStock: 5",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [630, 288, 678, 528],
+            "text": "Kiwi 33\rSKU: L-88\rStock: 32",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [576, 288, 624, 528],
+            "text": "Peach 34\rSKU: L-51\rStock: 19",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [522, 288, 570, 528],
+            "text": "Banana 35\rSKU: L-14\rStock: 6",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [468, 288, 516, 528],
+            "text": "Plum 36\rSKU: L-77\rStock: 33",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [414, 288, 462, 528],
+            "text": "Cherry 37\rSKU: L-40\rStock: 20",
+            "lines": 3,
+            "overset": false,
+            "story_length": 29
+          },
+          {
+            "bounds": [360, 288, 408, 528],
+            "text": "Quince 38\rSKU: L-03\rStock: 7",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [306, 288, 354, 528],
+            "text": "Lemon 39\rSKU: L-66\rStock: 34",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [252, 288, 300, 528],
+            "text": "Pear 40\rSKU: L-29\rStock: 21",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [198, 288, 246, 528],
+            "text": "Fig 41\rSKU: L-92\rStock: 8",
+            "lines": 3,
+            "overset": false,
+            "story_length": 25
+          },
+          {
+            "bounds": [144, 288, 192, 528],
+            "text": "Zebra 42\rSKU: L-55\rStock: 35",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [90, 288, 138, 528],
+            "text": "Grape 43\rSKU: L-18\rStock: 22",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [36, 288, 84, 528],
+            "text": "Apple 44\rSKU: L-81\rStock: 9",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [684, 36, 732, 276],
+            "text": "Date 45\rSKU: L-44\rStock: 36",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [630, 36, 678, 276],
+            "text": "Mango 46\rSKU: L-07\rStock: 23",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [576, 36, 624, 276],
+            "text": "Olive 47\rSKU: L-70\rStock: 10",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [522, 36, 570, 276],
+            "text": "Kiwi 48\rSKU: L-33\rStock: 37",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [468, 36, 516, 276],
+            "text": "Peach 49\rSKU: L-96\rStock: 24",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [414, 36, 462, 276],
+            "text": "Banana 50\rSKU: L-59\rStock: 11",
+            "lines": 3,
+            "overset": false,
+            "story_length": 29
+          },
+          {
+            "bounds": [360, 36, 408, 276],
+            "text": "Plum 51\rSKU: L-22\rStock: 38",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [306, 36, 354, 276],
+            "text": "Cherry 52\rSKU: L-85\rStock: 25",
+            "lines": 3,
+            "overset": false,
+            "story_length": 29
+          },
+          {
+            "bounds": [252, 36, 300, 276],
+            "text": "Quince 53\rSKU: L-48\rStock: 12",
+            "lines": 3,
+            "overset": false,
+            "story_length": 29
+          },
+          {
+            "bounds": [198, 36, 246, 276],
+            "text": "Lemon 54\rSKU: L-11\rStock: 39",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [144, 36, 192, 276],
+            "text": "Pear 55\rSKU: L-74\rStock: 26",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [90, 36, 138, 276],
+            "text": "Fig 56\rSKU: L-37\rStock: 13",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [36, 36, 84, 276],
+            "text": "Zebra 57\rSKU: L-00\rStock: 0",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "2",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [684, 288, 732, 528],
+            "text": "Plum 6\rSKU: L-87\rStock: 23",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [630, 288, 678, 528],
+            "text": "Cherry 7\rSKU: L-50\rStock: 10",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [576, 288, 624, 528],
+            "text": "Quince 8\rSKU: L-13\rStock: 37",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [522, 288, 570, 528],
+            "text": "Lemon 9\rSKU: L-76\rStock: 24",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [468, 288, 516, 528],
+            "text": "Pear 10\rSKU: L-39\rStock: 11",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [414, 288, 462, 528],
+            "text": "Fig 11\rSKU: L-02\rStock: 38",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [360, 288, 408, 528],
+            "text": "Zebra 12\rSKU: L-65\rStock: 25",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [306, 288, 354, 528],
+            "text": "Grape 13\rSKU: L-28\rStock: 12",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [252, 288, 300, 528],
+            "text": "Apple 14\rSKU: L-91\rStock: 39",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [198, 288, 246, 528],
+            "text": "Date 15\rSKU: L-54\rStock: 26",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [144, 288, 192, 528],
+            "text": "Mango 16\rSKU: L-17\rStock: 13",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [90, 288, 138, 528],
+            "text": "Olive 17\rSKU: L-80\rStock: 0",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [36, 288, 84, 528],
+            "text": "Kiwi 18\rSKU: L-43\rStock: 27",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [684, 36, 732, 276],
+            "text": "Peach 19\rSKU: L-06\rStock: 14",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [630, 36, 678, 276],
+            "text": "Banana 20\rSKU: L-69\rStock: 1",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [576, 36, 624, 276],
+            "text": "Plum 21\rSKU: L-32\rStock: 28",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [522, 36, 570, 276],
+            "text": "Cherry 22\rSKU: L-95\rStock: 15",
+            "lines": 3,
+            "overset": false,
+            "story_length": 29
+          },
+          {
+            "bounds": [468, 36, 516, 276],
+            "text": "Quince 23\rSKU: L-58\rStock: 2",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [414, 36, 462, 276],
+            "text": "Lemon 24\rSKU: L-21\rStock: 29",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [360, 36, 408, 276],
+            "text": "Pear 25\rSKU: L-84\rStock: 16",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [306, 36, 354, 276],
+            "text": "Fig 26\rSKU: L-47\rStock: 3",
+            "lines": 3,
+            "overset": false,
+            "story_length": 25
+          },
+          {
+            "bounds": [252, 36, 300, 276],
+            "text": "Zebra 27\rSKU: L-10\rStock: 30",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [198, 36, 246, 276],
+            "text": "Grape 28\rSKU: L-73\rStock: 17",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          },
+          {
+            "bounds": [144, 36, 192, 276],
+            "text": "Apple 29\rSKU: L-36\rStock: 4",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [90, 36, 138, 276],
+            "text": "Date 30\rSKU: L-99\rStock: 31",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [36, 36, 84, 276],
+            "text": "Mango 31\rSKU: L-62\rStock: 18",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "3",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [252, 36, 300, 276],
+            "text": "Mango 1\rSKU: L-72\rStock: 8",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [198, 36, 246, 276],
+            "text": "Olive 2\rSKU: L-35\rStock: 35",
+            "lines": 3,
+            "overset": false,
+            "story_length": 27
+          },
+          {
+            "bounds": [144, 36, 192, 276],
+            "text": "Kiwi 3\rSKU: L-98\rStock: 22",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [90, 36, 138, 276],
+            "text": "Peach 4\rSKU: L-61\rStock: 9",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          },
+          {
+            "bounds": [36, 36, 84, 276],
+            "text": "Banana 5\rSKU: L-24\rStock: 36",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}

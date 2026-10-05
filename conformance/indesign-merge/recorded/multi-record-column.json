@@ -1,0 +1,125 @@
+{
+  "fixture": "multi-record-column",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 96, 436],
+            "text": "<<name>>\rSKU: <<sku>>\rPrice: <<price>>",
+            "lines": 3,
+            "overset": false,
+            "story_length": 38
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 2,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [684, 36, 744, 436],
+            "text": "Item 10\rSKU: S-010\rPrice: 12.50",
+            "lines": 3,
+            "overset": false,
+            "story_length": 31
+          },
+          {
+            "bounds": [612, 36, 672, 436],
+            "text": "Item 09\rSKU: S-009\rPrice: 11.25",
+            "lines": 3,
+            "overset": false,
+            "story_length": 31
+          },
+          {
+            "bounds": [540, 36, 600, 436],
+            "text": "Item 08\rSKU: S-008\rPrice: 10.00",
+            "lines": 3,
+            "overset": false,
+            "story_length": 31
+          },
+          {
+            "bounds": [468, 36, 528, 436],
+            "text": "Item 07\rSKU: S-007\rPrice: 8.75",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [396, 36, 456, 436],
+            "text": "Item 06\rSKU: S-006\rPrice: 7.50",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [324, 36, 384, 436],
+            "text": "Item 05\rSKU: S-005\rPrice: 6.25",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [252, 36, 312, 436],
+            "text": "Item 04\rSKU: S-004\rPrice: 5.00",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [180, 36, 240, 436],
+            "text": "Item 03\rSKU: S-003\rPrice: 3.75",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [108, 36, 168, 436],
+            "text": "Item 02\rSKU: S-002\rPrice: 2.50",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          },
+          {
+            "bounds": [36, 36, 96, 436],
+            "text": "Item 01\rSKU: S-001\rPrice: 1.25",
+            "lines": 3,
+            "overset": false,
+            "story_length": 30
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "2",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [108, 36, 168, 436],
+            "text": "Item 12\rSKU: S-012\rPrice: 15.00",
+            "lines": 3,
+            "overset": false,
+            "story_length": 31
+          },
+          {
+            "bounds": [36, 36, 96, 436],
+            "text": "Item 11\rSKU: S-011\rPrice: 13.75",
+            "lines": 3,
+            "overset": false,
+            "story_length": 31
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}
