@@ -422,6 +422,7 @@ name = "data-barcode"
 version = "0.0.0"
 dependencies = [
  "data-core",
+ "rqrr",
  "serde",
  "thiserror",
 ]
