@@ -31,6 +31,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# An independent QR decoder for the barcode round-trip oracle (MIT OR Apache-2.0).
+rqrr = "0.10"
 # Wall-clock benches over the perf workloads (benches/engine.rs) — trended,
 # never gated; the gated budgets are the counts in tests/perf_counts.rs.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

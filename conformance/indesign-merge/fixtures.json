@@ -1,0 +1,58 @@
+{
+  "$comment": "InDesign Data Merge oracle fixtures (docs/design/oracles.md). Geometry in points; bounds are InDesign geometricBounds [y1, x1, y2, x2]. A text frame's lines are paragraphs; <<field>> marks a Data Merge text placeholder (record.jsx turns each into a real placeholder). An image frame names its @field. record.sh builds each template in InDesign, saves it as templates/<id>.idml, merges csv/<id>.csv and writes recorded/<id>.json. data-conformance/tests/oracle.rs replays the recordings.",
+  "page": { "width": 612, "height": 792, "margins": { "top": 36, "left": 36, "bottom": 36, "right": 36 } },
+  "text": { "font": "Minion Pro\tRegular", "size": 10, "leading": 12 },
+  "fixtures": [
+    {
+      "id": "single-record",
+      "what": "one record per page: every record gets its own copy of the page",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 136, 336], "lines": ["<<name>>", "SKU: <<sku>>", "Price: <<price>>"] }],
+      "merge": { "recordsPerPage": "single" }
+    },
+    {
+      "id": "multi-record-column",
+      "what": "multiple records per page in one column with row spacing; spills to a second page",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 96, 436], "lines": ["<<name>>", "SKU: <<sku>>", "Price: <<price>>"] }],
+      "merge": { "recordsPerPage": "multiple", "arrangeBy": "rows", "rowSpacing": 12, "columnSpacing": 18 }
+    },
+    {
+      "id": "multi-record-grid",
+      "what": "multiple records per page in a 2-column grid, rows first",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 96, 276], "lines": ["<<name>>", "Code: <<sku>>"] }],
+      "merge": { "recordsPerPage": "multiple", "arrangeBy": "rows", "rowSpacing": 12, "columnSpacing": 18 }
+    },
+    {
+      "id": "long-record-set",
+      "what": "57 unsorted records over several pages, 2 columns, columns first",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 84, 276], "lines": ["<<name>>", "SKU: <<sku>>", "Stock: <<stock>>"] }],
+      "merge": { "recordsPerPage": "multiple", "arrangeBy": "columns", "rowSpacing": 6, "columnSpacing": 12 }
+    },
+    {
+      "id": "empty-field-lines",
+      "what": "Remove Blank Lines for Empty Fields: a line whose only content is an empty field disappears; an empty field after a label keeps its line",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 136, 336], "lines": ["<<name>>", "<<subtitle>>", "Price: <<price>>"] }],
+      "merge": { "recordsPerPage": "single", "removeBlankLines": true }
+    },
+    {
+      "id": "overset",
+      "what": "a record whose text does not fit its frame stays overset (Data Merge never grows the frame)",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 72, 236], "lines": ["<<name>>", "<<description>>"] }],
+      "merge": { "recordsPerPage": "single" }
+    },
+    {
+      "id": "number-text",
+      "what": "Data Merge inserts field text verbatim: en/de number text, leading zeros, signs and exponents are not reformatted",
+      "frames": [{ "kind": "text", "bounds": [36, 36, 136, 336], "lines": ["<<label>>", "EN: <<price_en>>", "DE: <<price_de>>", "Qty: <<qty>>"] }],
+      "merge": { "recordsPerPage": "single" }
+    },
+    {
+      "id": "image-field",
+      "what": "an @field image placeholder: each record's frame gets that record's image, fitted proportionally",
+      "frames": [
+        { "kind": "text", "bounds": [36, 36, 60, 236], "lines": ["<<name>>"] },
+        { "kind": "image", "bounds": [72, 36, 172, 186], "field": "@photo" }
+      ],
+      "merge": { "recordsPerPage": "single", "fitting": "proportional", "centerImage": true }
+    }
+  ]
+}

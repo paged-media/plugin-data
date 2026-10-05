@@ -1,0 +1,69 @@
+{
+  "fixture": "empty-field-lines",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "<<name>>\r<<subtitle>>\rPrice: <<price>>",
+            "lines": 3,
+            "overset": false,
+            "story_length": 38
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 3,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "Alpha\rFirst line\rPrice: 1.00",
+            "lines": 3,
+            "overset": false,
+            "story_length": 28
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "2",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "Beta﻿﻿\rPrice: 2.00",
+            "lines": 2,
+            "overset": false,
+            "story_length": 18
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "3",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 136, 336],
+            "text": "Gamma\rThird line\rPrice: ﻿﻿",
+            "lines": 3,
+            "overset": false,
+            "story_length": 26
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}

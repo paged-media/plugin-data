@@ -1,0 +1,55 @@
+{
+  "fixture": "overset",
+  "indesign_version": "20.0.1.32",
+  "template": {
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 72, 236],
+            "text": "<<name>>\r<<description>>",
+            "lines": 2,
+            "overset": false,
+            "story_length": 24
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  },
+  "merged": {
+    "page_count": 2,
+    "pages": [
+      {
+        "name": "1",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 72, 236],
+            "text": "Short\rFits easily.",
+            "lines": 2,
+            "overset": false,
+            "story_length": 18
+          }
+        ],
+        "rectangles": []
+      },
+      {
+        "name": "2",
+        "bounds": [0, 0, 792, 612],
+        "text_frames": [
+          {
+            "bounds": [36, 36, 72, 236],
+            "text": "Long\rThis description is deliberately much longer than the frame can hold, so InDesign must report the ",
+            "lines": 3,
+            "overset": true,
+            "story_length": 373
+          }
+        ],
+        "rectangles": []
+      }
+    ]
+  }
+}
