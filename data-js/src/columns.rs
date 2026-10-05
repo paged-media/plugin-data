@@ -138,7 +138,7 @@ impl ColumnIngest {
         let mut hash = WordHash::new();
         for f in &schema.fields {
             hash.bytes(f.name.as_bytes());
-            hash.bytes(format!("{:?}", f.ty).as_bytes());
+            hash.bytes(format!("{:?} {:?}", f.ty, f.scale).as_bytes());
         }
         hash.word(rows as u64);
         ColumnIngest {

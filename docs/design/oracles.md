@@ -207,7 +207,10 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 - **DM-6.** A record-flow template has no image field.
 - **DM-7.** The record height is not measured text, so an overset record is not flagged.
 - **DM-8.** A CSV column that DuckDB sniffs as DOUBLE loses its trailing zeros (`1234.50` prints
-  as `1234.5`). Data Merge prints the field text.
+  as `1234.5`). Data Merge prints the field text. PARTLY FIXED (Wave 2): a DECIMAL(p, s) column
+  now carries its scale (`Field.scale`), and a bare reference to it displays `1234.50`. A
+  DOUBLE-sniffed CSV column has no scale left to carry, so this lane stays pinned until the CSV
+  import keeps the text or declares the column type (a sources change).
 
 ## 3. Property lane
 

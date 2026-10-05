@@ -103,7 +103,8 @@ describe("arrowToRecordSet over real Arrow vectors [data.query.seam]", () => {
     });
     const rs = arrowToRecordSet(table as unknown as ArrowLikeTable);
     expect(rs.row_count).toBe(4);
-    expect(rs.schema.fields).toEqual([{ name: "price", ty: "float", nullable: true }]);
+    // The scale crosses with the field, so `price` displays as 12.34 / 1.00.
+    expect(rs.schema.fields).toEqual([{ name: "price", ty: "float", nullable: true, scale: 2 }]);
     expect(rs.columns[0]).toEqual([
       { t: "number", v: 12.34 },
       { t: "number", v: -5.6 },

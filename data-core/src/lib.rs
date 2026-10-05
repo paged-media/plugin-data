@@ -61,4 +61,4 @@ pub use model::{
     DataSource, DbEngine, Field, FieldType, FileFormat, Locale, ParamDecl, ParamType, Query,
     RecordError, RecordSet, RefreshPolicy, ResultShape, Schema, SourceKind,
 };
-pub use value::{Value, ValueError};
+pub use value::{fmt_number_scaled, Value, ValueError};

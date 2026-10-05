@@ -46,7 +46,7 @@ use data_core::{
     Placeholder, PlaceholderRef, Query, QueryId, RecordSet, ResolveStamp, ResultShape, ScopeRef,
     Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
-use data_expr::{eval_str, EvalCtx, RecordCtx, SimpleCtx};
+use data_expr::{eval, eval_str, parse, EvalCtx, ParseError, RecordCtx, SimpleCtx};
 use data_query::{content_hashes, first_stable_row, stable_order, stamp, Fnv};
 
 pub use diff::{
@@ -889,13 +889,14 @@ fn resolve_variable(
         params,
     };
     let ec = EvalCtx::new(&ctx, today).with_locale(locale);
-    let value = eval_str(expr, &ec);
+    let compiled = Compiled::new(expr, &records.schema);
+    let value = compiled.eval(&ec);
     if value.is_null() {
         return apply_missing(target, value, missing);
     }
     ResolvedVariable {
         target,
-        display: value.as_display(),
+        display: compiled.display(&value),
         value,
         hidden: false,
     }
@@ -1008,6 +1009,11 @@ fn resolve_table(
     locale: Locale,
 ) -> ResolvedTable {
     let headers: Vec<String> = columns.iter().map(|c| c.header.clone()).collect();
+    // Parse each column expression ONCE, not once per row.
+    let compiled: Vec<Compiled> = columns
+        .iter()
+        .map(|c| Compiled::new(&c.expr, &records.schema))
+        .collect();
     let mut rows = Vec::with_capacity(order.len());
     for &row in order {
         let ctx = RowCtx {
@@ -1016,10 +1022,7 @@ fn resolve_table(
             params,
         };
         let ec = EvalCtx::new(&ctx, today).with_locale(locale);
-        let cells: Vec<String> = columns
-            .iter()
-            .map(|c| eval_str(&c.expr, &ec).as_display())
-            .collect();
+        let cells: Vec<String> = compiled.iter().map(|c| c.display(&c.eval(&ec))).collect();
         rows.push(cells);
     }
     ResolvedTable {
@@ -1087,6 +1090,11 @@ fn resolve_record_flow(
         .filter_map(|n| records.schema.index_of(n))
         .collect();
     let instance_height = template.fields.len() as f64 * template.line_height_pt;
+    let compiled: Vec<Compiled> = template
+        .fields
+        .iter()
+        .map(|f| Compiled::new(&f.expr, &records.schema))
+        .collect();
 
     // The footer's sum column (§9.4 section footer), resolved once.
     let footer_sum_col = options
@@ -1151,7 +1159,8 @@ fn resolve_record_flow(
         let cells: Vec<String> = template
             .fields
             .iter()
-            .map(|f| format!("{}{}", f.label, eval_str(&f.expr, &ec).as_display()))
+            .zip(&compiled)
+            .map(|(f, c)| format!("{}{}", f.label, c.display(&c.eval(&ec))))
             .collect();
         groups
             .last_mut()
@@ -1338,5 +1347,48 @@ fn collect_field_refs(src: &str, out: &mut Vec<String>) {
     }
     if let Ok(expr) = data_expr::parse(src) {
         walk(&expr, out);
+    }
+}
+
+/// A binding expression parsed once (per resolve, not per row), plus the
+/// display rule for its value. Evaluates exactly like `eval_str`: a parse
+/// failure is the constant `#NAME` / `#PARSE` error value.
+struct Compiled {
+    expr: Result<data_core::Expr, Value>,
+    /// The declared decimal scale when the expression is a bare reference to
+    /// a DECIMAL(p, s) field: its numbers display with exactly `s` digits
+    /// (`1234.50`), as the source renders them (oracle defect DM-8).
+    scale: Option<u8>,
+}
+
+impl Compiled {
+    fn new(src: &str, schema: &data_core::Schema) -> Self {
+        let expr = parse(src).map_err(|e| match e {
+            ParseError::UnknownFunction(_) => Value::Error(data_core::ValueError::Name),
+            _ => Value::Error(data_core::ValueError::Parse),
+        });
+        let scale = match &expr {
+            Ok(data_core::Expr::Field(name)) => schema
+                .fields
+                .iter()
+                .find(|f| f.name == name.as_str())
+                .and_then(|f| f.scale),
+            _ => None,
+        };
+        Compiled { expr, scale }
+    }
+
+    fn eval(&self, ec: &EvalCtx) -> Value {
+        match &self.expr {
+            Ok(e) => eval(e, ec),
+            Err(v) => v.clone(),
+        }
+    }
+
+    fn display(&self, v: &Value) -> String {
+        match (v, self.scale) {
+            (Value::Number(n), Some(s)) => data_core::fmt_number_scaled(*n, s),
+            _ => v.as_display(),
+        }
     }
 }

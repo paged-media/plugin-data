@@ -252,6 +252,13 @@ pub struct Field {
     pub ty: FieldType,
     #[serde(default = "default_true")]
     pub nullable: bool,
+    /// The declared decimal scale of a DECIMAL(p, s) column (digits after the
+    /// point), when the source has one. A bare reference to the field then
+    /// displays with exactly `s` digits (`1234.50`, not `1234.5`) — the value
+    /// itself is still an f64. Absent for every other type. (Additive
+    /// amendment, Wave 2: oracle defect DM-8.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
 }
 
 fn default_true() -> bool {
@@ -336,6 +343,7 @@ impl Schema {
                     name,
                     ty,
                     nullable: true,
+                    scale: None,
                 })
                 .collect(),
         }

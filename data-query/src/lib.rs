@@ -323,11 +323,24 @@ pub fn content_hashes(records: &RecordSet) -> (u64, Vec<u64>) {
     for f in &records.schema.fields {
         fnv_bytes(&mut h, f.name.as_bytes());
         fnv_bytes(&mut h, &[0xff]);
+        // A declared decimal scale changes the display, so it is content;
+        // hashed only when present, so other results hash as before.
+        if let Some(s) = f.scale {
+            fnv_bytes(&mut h, &[0xfe, s]);
+        }
     }
     fnv_bytes(&mut h, &records.row_count.to_le_bytes());
     let mut per_column = Vec::with_capacity(records.columns.len());
     for col in &records.columns {
         let mut ch = FNV_OFFSET;
+        if let Some(s) = records
+            .schema
+            .fields
+            .get(per_column.len())
+            .and_then(|f| f.scale)
+        {
+            fnv_bytes(&mut ch, &[0xfe, s]);
+        }
         for v in col {
             hash_value(&mut h, v);
             hash_value(&mut ch, v);

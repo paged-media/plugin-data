@@ -192,3 +192,22 @@ describe.skipIf(!duck || !engineBuilt)("DuckDB SQL oracle: data-js ingests every
     });
   }
 });
+
+describe.skipIf(!duck || !engineBuilt)("DECIMAL keeps its declared scale through the engine (DM-8) [data.query.seam]", () => {
+  it("a bare DECIMAL(10,2) field displays 1234.50, a DOUBLE 1234.5 [data.query.seam]", async () => {
+    const sql = "SELECT 1234.50::DECIMAL(10,2) AS dec, 1234.50::DOUBLE AS dbl";
+    const rs = await duck!.handle.query(sql);
+    expect(rs.schema.fields.map((f) => f.scale)).toEqual([2, undefined]);
+    const engine = await bootEngine();
+    engine.define_query({ id: "q", sql, params: [], shape: { shape: "recordStream" } });
+    engine.ingest_result("q", rs);
+    const text = (id: string, expr: string) => {
+      engine.define_binding({ id, kind: "variable", target: id, query: "q", expr, missing: { missing: "blank" } });
+      return (engine.resolve_lowered(id) as { text: string }).text;
+    };
+    expect(text("a", "dec")).toBe("1234.50");
+    // DuckDB sniffs a CSV "1234.50" as DOUBLE: the scale is gone before the
+    // engine sees it — still DM-8 in the InDesign lane.
+    expect(text("b", "dbl")).toBe("1234.5");
+  });
+});

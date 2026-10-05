@@ -65,6 +65,9 @@ export interface FieldJson {
   name: string;
   ty: FieldTypeJson;
   nullable: boolean;
+  /** The declared scale of a DECIMAL(p, s) column: a bare reference to it
+   *  displays with exactly `s` digits (`1234.50`). Absent for other types. */
+  scale?: number;
 }
 
 /** The `data-core::RecordSet` serde shape (note `row_count` snake_case). */
@@ -494,7 +497,13 @@ function timeText(c: unknown): string {
 }
 
 function schemaOf(table: ArrowLikeTable): FieldJson[] {
-  return table.schema.fields.map((f) => ({ name: f.name, ty: classifyType(f), nullable: true }));
+  return table.schema.fields.map((f) => {
+    const ty = classifyType(f);
+    const scale = decimalScale(f);
+    // A DECIMAL keeps its scale for display (oracle defect DM-8); HUGEINT
+    // (an int) has none.
+    return scale !== null && ty === "float" ? { name: f.name, ty, nullable: true, scale } : { name: f.name, ty, nullable: true };
+  });
 }
 
 /** Read an Arrow table into typed column buffers — the boundary form
