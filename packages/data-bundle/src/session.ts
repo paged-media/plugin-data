@@ -1094,6 +1094,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     const frames: Record<string, string> = {};
     const elements: Record<string, ElementId> = {};
 
+    // Elements without a known kind resolve from ONE scene-tree read.
+    const ctx: LowerContext = {};
     const wantsField = applies.some((a) => a.applicable && a.kind === "text");
     if (wantsField && host.supports("document.placeholders@1")) {
       try {
@@ -1121,7 +1123,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         if (!t) continue;
         const el = t.kind
           ? visibilityTarget(t.kind, t.elementId)
-          : await resolveElementId(host, t.elementId);
+          : await resolveElementId(host, t.elementId, ctx);
         if (el) elements[a.variable] = el;
       }
     }
@@ -1974,7 +1976,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           // §9.8: show/hide the bound element via its own elementVisible property.
           const tgt = visibilityTargets.get(id);
           const el = tgt?.kind ? visibilityTarget(tgt.kind, tgt.elementId) : null;
-          await commitLoweredVisibility(host, lowered as never, el);
+          await commitLoweredVisibility(host, lowered as never, el, lowerCtx);
         }
         state.status = "ready";
         state.message = `Resolved + lowered "${id}".`;

@@ -174,6 +174,37 @@ describe("data_lower_visibility session lane (§9.8)", () => {
     });
   });
 
+  it("lowerAll reads the scene tree ONCE for every kindless visibility binding", async () => {
+    let treeReads = 0;
+    const fake = fakeHost({
+      tree: () => {
+        treeReads += 1;
+        return [
+          {
+            kind: "page",
+            label: "1",
+            children: [
+              { id: { kind: "oval", id: "u77" }, kind: "oval", label: "o" },
+              { id: { kind: "polygon", id: "u78" }, kind: "polygon", label: "p", children: [] },
+            ],
+          },
+        ];
+      },
+    });
+    const engine = fakeEngine({
+      resolve_lowered: (id: string) => ({ kind: "visibility", target: id === "A" ? "u77" : "u78", visible: false }),
+    });
+    const s = await sessionWith(fake.host, engine);
+    s.addVisibilityBinding("A", "u77", "q1", "in_stock");
+    s.addVisibilityBinding("B", "u78", "q1", "in_stock");
+    await s.lowerAll();
+    expect(treeReads).toBe(1);
+    expect(fake.mutations.map((m) => (m.args as { elementId: unknown }).elementId)).toEqual([
+      { kind: "oval", id: "u77" },
+      { kind: "polygon", id: "u78" },
+    ]);
+  });
+
   it("writes NOTHING for the Leave policy and nothing for a vanished element", async () => {
     // Leave ⇒ visible null ⇒ no write at all.
     const leave = fakeHost();

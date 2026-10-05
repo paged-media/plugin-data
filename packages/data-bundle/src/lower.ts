@@ -57,6 +57,8 @@ import {
 /** What one command's lowerings share: the active page, read once. */
 export interface LowerContext {
   page?: Promise<PageId | null>;
+  /** The scene tree indexed by raw id, built once (see `sceneIndex`). */
+  scene?: Promise<Map<string, ElementId> | null>;
 }
 
 /** The active page id, read once per command when a context is given. */
@@ -368,30 +370,40 @@ export async function commitLoweredVariable(
   return { storyId, offset };
 }
 
-/** Resolve a raw Self id to a typed `ElementId` by walking the live scene tree
+/** Resolve a raw Self id to a typed `ElementId` from the live scene tree
  *  (§9.8). `setElementProperty` carries a KIND, and a binding payload stores
  *  only the id, so the kind has to come from the document. The scene tree is the
  *  read door that answers it; when the host has none (or the element is gone —
  *  deleted artwork), we return null and the caller SKIPS, never guessing
- *  `rectangle` and writing a property at a wrong address. */
+ *  `rectangle` and writing a property at a wrong address. With a context, the
+ *  tree is read and indexed once for every element the command resolves. */
 export async function resolveElementId(
   host: BundleHost,
   rawId: string,
+  ctx?: LowerContext,
 ): Promise<ElementId | null> {
+  const index = await (ctx ? (ctx.scene ??= sceneIndex(host)) : sceneIndex(host));
+  return index?.get(rawId) ?? null;
+}
+
+/** One pass over the live scene tree: every element by its raw id (the first
+ *  occurrence wins), or null when the host has no tree. */
+export async function sceneIndex(host: BundleHost): Promise<Map<string, ElementId> | null> {
   let roots: SceneNode[] = [];
   try {
     roots = (await host.document.tree()) as SceneNode[];
   } catch {
     return null;
   }
-  const stack: SceneNode[] = [...roots];
+  const index = new Map<string, ElementId>();
+  const stack: SceneNode[] = [...roots].reverse();
   while (stack.length > 0) {
     const node = stack.pop()!;
     const id = node.id;
-    if (id && typeof id.id === "string" && id.id === rawId) return id as ElementId;
-    if (node.children) stack.push(...node.children);
+    if (id && typeof id.id === "string" && !index.has(id.id)) index.set(id.id, id as ElementId);
+    if (node.children) for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
   }
-  return null;
+  return index;
 }
 
 /** The shape of a scene-tree node this bundle reads (the SDK type, narrowed to
@@ -417,6 +429,7 @@ export async function commitLoweredVisibility(
   host: BundleHost,
   lowered: LoweredVisibility,
   elementId?: ElementId | null,
+  ctx?: LowerContext,
 ): Promise<boolean> {
   if (lowered.visible === null) {
     host.log.info(
@@ -425,7 +438,7 @@ export async function commitLoweredVisibility(
     );
     return false;
   }
-  const target = elementId ?? (await resolveElementId(host, lowered.target));
+  const target = elementId ?? (await resolveElementId(host, lowered.target, ctx));
   if (!target) {
     host.log.warn(
       `visibility "${lowered.target}": the bound element is not in the document ` +
