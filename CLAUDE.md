@@ -52,10 +52,15 @@ The ENGINE is far ahead of what a user can reach from the panels:
   container part and restored on open (`src/persist.ts`, `load_payload`); the
   Bindings panel defines every binding kind, over `SELECT *`. Still open: record
   flow defines and previews but has no writer, so it never becomes document
-  content; local import is CSV/TSV only. Remote sources declare `network: { origins: "consent" }` and
-  fetch only consented origins, but the editor's CSP `connect-src 'self'`
-  still blocks them in the browser (RFI D-03). Still not built: DB-attach
-  execution, worker-hosted DuckDB, merge to a document.
+  content. SOURCES + QUERY (wave 6): local import of CSV/TSV/JSON/Parquet/XLSX
+  (XLSX via `data-xlsx`/calamine — DuckDB-WASM 1.29.0 has no offline reader),
+  saved with the document; a Data query panel (SQL + builders + preview);
+  every query passes a DuckDB-parser guard (`src/query/sql.ts`: one SELECT over
+  source tables, no file/URL reads); refresh policies act (`src/refresh.ts`).
+  Remote sources fetch only consented origins AND only origins the editor
+  build lists (editor ADR 218, `PAGED_DATA_ORIGINS`; RFI D-03 residual).
+  Still not built: SQLite/DB-attach execution (sqlite_scanner cannot open
+  DuckDB-WASM's registered files), worker-hosted DuckDB, merge to a document.
 
 ## Project State & Feature Matrix (cockpit)
 
