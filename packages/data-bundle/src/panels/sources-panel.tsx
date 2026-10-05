@@ -17,8 +17,10 @@
  */
 
 // The Data sources panel — a React expert-leaf factory closing over the
-// BundleHost + the session. It owns the CSV import (the platform picker via
-// shell.pickFile@1, with the raw file input kept as the harness-host fallback),
+// BundleHost + the session. It owns the local import (CSV, TSV, JSON, Parquet,
+// XLSX — the platform picker via shell.pickFile@1, with the raw file input
+// kept as the harness-host fallback), the worksheet choice of a workbook, each
+// source's refresh policy (src/refresh.ts),
 // the source list, the remote-source lane (M1, D-03: per-source consent state,
 // request-consent + edit-time load — inert until granted), and the HONEST
 // status (engine/DuckDB availability, and whether the session is saved with
@@ -31,6 +33,8 @@
 import { useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
 import type { BundleHost } from "@paged-media/plugin-api";
 
+import { IMPORT_ACCEPT } from "../query/import";
+import { MIN_INTERVAL_SECS, policyLabel, type RefreshPolicy } from "../refresh";
 import type { DataSourceSession, RemoteFormat, SessionState } from "../session";
 import { DiagnosticsList } from "./diagnostics";
 import { useSessionSnapshot } from "./use-session";
@@ -95,10 +99,29 @@ export function makeSourcesPanel(
       refresh();
     }
 
-    async function importCsv(fileName: string, text: string): Promise<void> {
-      const name =
-        fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_") || "data";
-      await session.registerCsvSource(name, text);
+    const [policyNote, setPolicyNote] = useState<string | null>(null);
+
+    async function importBytes(fileName: string, bytes: Uint8Array): Promise<void> {
+      await session.importFile(fileName, bytes);
+      refresh();
+    }
+
+    async function onSheet(source: string, sheet: string): Promise<void> {
+      await session.selectSheet(source, sheet);
+      refresh();
+    }
+
+    function onPolicy(source: string, value: string, remote: boolean): void {
+      const policy: RefreshPolicy =
+        value === "interval"
+          ? { policy: "interval", secs: remote ? 300 : 0 }
+          : ({ policy: value } as RefreshPolicy);
+      setPolicyNote(session.setRefreshPolicy(source, policy));
+      refresh();
+    }
+
+    function onInterval(source: string, secs: number): void {
+      setPolicyNote(session.setRefreshPolicy(source, { policy: "interval", secs }));
       refresh();
     }
 
@@ -107,16 +130,46 @@ export function makeSourcesPanel(
     // ONLY as the fallback for hosts without the door (the SDK test
     // harness), so the bundle's own tests keep driving the import.
     async function onPick(): Promise<void> {
-      const picked = await host.shell.pickFile({ accept: [".csv", ".tsv"] });
+      const picked = await host.shell.pickFile({ accept: [...IMPORT_ACCEPT] });
       const file = picked[0];
       if (!file) return;
-      await importCsv(file.name, new TextDecoder().decode(file.bytes));
+      await importBytes(file.name, file.bytes);
     }
 
     async function onFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
       const file = event.target.files?.[0];
       if (!file) return;
-      await importCsv(file.name, await file.text());
+      await importBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+    }
+
+    const fileOf = new Map(snapshot.files.map((f) => [f.source, f]));
+    const remoteNames = new Set(snapshot.remote.map((r) => r.name));
+    const policyOf = (name: string): RefreshPolicy => snapshot.refresh[name] ?? { policy: "manual" };
+
+    function PolicyPicker({ name }: { name: string }): ReactElement {
+      const p = policyOf(name);
+      const remote = remoteNames.has(name);
+      return (
+        <span data-data-refresh-policy={name}>
+          {" "}· refresh{" "}
+          <select value={p.policy} onChange={(e) => onPolicy(name, e.target.value, remote)}>
+            <option value="manual">manual</option>
+            <option value="onOpen">on open</option>
+            {remote ? <option value="interval">every …</option> : null}
+            <option value="never">never (snapshot)</option>
+          </select>
+          {p.policy === "interval" ? (
+            <input
+              type="number"
+              min={MIN_INTERVAL_SECS}
+              value={p.secs}
+              style={{ width: 64 }}
+              onChange={(e) => onInterval(name, Number(e.target.value))}
+            />
+          ) : null}
+          {snapshot.polling.includes(name) ? <span style={note}> polling ({policyLabel(p)})</span> : null}
+        </span>
+      );
     }
 
     return (
@@ -125,25 +178,51 @@ export function makeSourcesPanel(
           <button
             type="button"
             data-data-import-csv
+            data-data-import-file
             onClick={() => void onPick()}
             style={{ alignSelf: "flex-start", padding: "4px 10px" }}
           >
-            Import CSV…
+            Import file…
           </button>
         ) : (
           <label>
-            Import CSV{" "}
-            <input type="file" accept=".csv,.tsv" onChange={onFile} />
+            Import file{" "}
+            <input type="file" accept={IMPORT_ACCEPT.join(",")} onChange={onFile} />
           </label>
         )}
+        <span style={note}>CSV, TSV, JSON, Parquet or Excel (.xlsx) — one worksheet per source.</span>
         <div>
           {snapshot.sources.length === 0 ? (
             <span style={note}>No sources yet.</span>
           ) : (
             <ul>
-              {snapshot.sources.map((s) => (
-                <li key={s} style={mono}>{s}</li>
-              ))}
+              {snapshot.sources.map((s) => {
+                const f = fileOf.get(s);
+                return (
+                  <li key={s} data-data-source={s}>
+                    <span style={mono}>{s}</span>
+                    {f ? (
+                      <span style={note}>
+                        {" "}· {f.format} · {f.fileName}
+                      </span>
+                    ) : null}
+                    {f?.sheets && f.sheets.length > 1 ? (
+                      <select
+                        data-data-sheet={s}
+                        value={f.sheet}
+                        onChange={(e) => void onSheet(s, e.target.value)}
+                      >
+                        {f.sheets.map((sh) => (
+                          <option key={sh} value={sh}>{sh}</option>
+                        ))}
+                      </select>
+                    ) : f?.sheet ? (
+                      <span style={note}> · sheet {f.sheet}</span>
+                    ) : null}
+                    {remoteNames.has(s) ? null : <PolicyPicker name={s} />}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -192,12 +271,23 @@ export function makeSourcesPanel(
                   ) : (
                     <button onClick={() => void onLoadRemote(r.name)}>Load</button>
                   )}
+                  <PolicyPicker name={r.name} />
                   <div style={note}>{r.message}</div>
                 </li>
               ))}
             </ul>
           )}
         </div>
+        {policyNote ? (
+          <p style={note} role="alert" data-data-policy-note>
+            {policyNote}
+          </p>
+        ) : null}
+        <p style={note}>
+          A local file is read once at import; a browser page cannot watch it for changes. Import
+          it again, or let it refresh on open. Remote sources can poll — only while their origin
+          is allowed.
+        </p>
         <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
         <DiagnosticsList
           diagnostics={snapshot.diagnostics}

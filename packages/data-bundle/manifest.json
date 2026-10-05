@@ -41,7 +41,8 @@
     "panels": [
       "media.paged.data.panel.sources",
       "media.paged.data.panel.bindings",
-      "media.paged.data.panel.dataset"
+      "media.paged.data.panel.dataset",
+      "media.paged.data.panel.query"
     ],
     "commands": [
       "media.paged.data.command.importData",
@@ -50,7 +51,11 @@
       "media.paged.data.command.lowerBinding",
       "media.paged.data.command.openDataset",
       "media.paged.data.command.captureDataSet",
-      "media.paged.data.command.applyDataSet"
+      "media.paged.data.command.applyDataSet",
+      "media.paged.data.command.editQuery"
+    ],
+    "importers": [
+      "media.paged.data.importer.table"
     ],
     "editContexts": [
       {
@@ -69,6 +74,24 @@
         "type": "data",
         "role": "source",
         "format": "csv",
+        "linkable": false
+      },
+      {
+        "type": "data-json",
+        "role": "source",
+        "format": "json",
+        "linkable": false
+      },
+      {
+        "type": "data-parquet",
+        "role": "source",
+        "format": "parquet",
+        "linkable": false
+      },
+      {
+        "type": "data-xlsx",
+        "role": "source",
+        "format": "xlsx",
         "linkable": false
       }
     ]

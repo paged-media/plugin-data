@@ -145,8 +145,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // lazy: the first command pays). The engine and DuckDB boot times are the
   // first-command price, trended.
   // Wave 4 (persistence): restore on open: +1 parts.read, onDidChange (document switch), onWillSave (flush before save), editor.client.subscribe, +1 log.
+  // Wave 6 (sources and query): +5 — contribute.panel (Data query),
+  // supports("contribute.importer@1"), contribute.importer (JSON/Parquet),
+  // contribute.command (editQuery), contribute.menu (Data ▸ Query…).
   const W7: Measured = {
-    hostCalls: 26,
+    hostCalls: 31,
     hostReads: 1,
     mutates: 0,
     mutationOps: 0,
@@ -193,8 +196,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     await settle();
     const snap = work!.snapshot();
     const m = measure(snap, null, null, null);
-    // Behaviour: three panels and seven commands registered, no engine booted.
-    expect(h.panelsContributed().length).toBe(3);
+    // Behaviour: four panels, eight commands and the importer registered, no
+    // engine booted.
+    expect(h.panelsContributed().length).toBe(4);
+    expect(h.importersContributed().map((c) => c.id)).toEqual(["media.paged.data.importer.table"]);
     expect(h.contributions.filter((c) => c.kind === "command").length).toBeGreaterThanOrEqual(7);
     expect(boots).toEqual({ engine: 0, duck: 0 });
 

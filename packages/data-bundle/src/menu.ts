@@ -36,6 +36,7 @@ const ENTRIES: [path: string, suffix: string, group: string][] = [
   // spec already found it — and paged.data owns it now.
   ["Object/Insert data binding…", "defineBinding", "insert-plugin"],
   ["Data/Dataset catalog…", "openDataset", "panel"],
+  ["Data/Query…", "editQuery", "panel"],
   ["Data/Refresh from sources", "resolveBindings", "resolve"],
   ["Data/Place bindings on the page", "lowerBinding", "resolve"],
   ["Data/Capture current values as a data set", "captureDataSet", "dataset"],

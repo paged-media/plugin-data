@@ -120,14 +120,16 @@ describe("data_plugin_bundle_activate", () => {
     expect(ctx.matches?.({ metadata: null })).toBe(false);
   });
 
-  it("registers the sources + bindings panels under their declared ids", () => {
+  it("registers the sources, bindings, dataset and query panels under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
     expect(fake.panels.map((p) => p.id)).toEqual([
       "media.paged.data.panel.sources",
       "media.paged.data.panel.bindings",
       "media.paged.data.panel.dataset",
+      "media.paged.data.panel.query",
     ]);
+    expect(fake.panels[3].title).toBe("Data query");
     expect(fake.panels[0].title).toBe("Data sources");
     expect(fake.panels[1].title).toBe("Bindings");
     // "Dataset preview" (U12): distinct from the editor Window menu's
@@ -135,7 +137,7 @@ describe("data_plugin_bundle_activate", () => {
     expect(fake.panels[2].title).toBe("Dataset preview");
   });
 
-  it("registers the seven commands under their declared ids", () => {
+  it("registers the eight commands under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
     expect(fake.commands.map((c) => c.id)).toEqual([
@@ -146,6 +148,7 @@ describe("data_plugin_bundle_activate", () => {
       "media.paged.data.command.openDataset",
       "media.paged.data.command.captureDataSet",
       "media.paged.data.command.applyDataSet",
+      "media.paged.data.command.editQuery",
     ]);
   });
 
