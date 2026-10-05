@@ -242,11 +242,14 @@ pub struct ResolutionEngine {
     params: HashMap<String, Value>,
     today: i32,
     locale: Locale,
+    /// Per-binding locale overrides (a field formatted for another market than
+    /// the session's). Absent → the session locale.
+    binding_locales: HashMap<BindingId, Locale>,
 }
 
 impl ResolutionEngine {
     /// A fresh engine with an injected `today` serial (days since 1970-01-01).
-    /// The formatting locale defaults to [`Locale::En`]; set it with
+    /// The formatting locale defaults to [`Locale::EN`]; set it with
     /// [`set_locale`].
     pub fn new(today: i32) -> Self {
         ResolutionEngine {
@@ -263,6 +266,30 @@ impl ResolutionEngine {
     /// The formatting locale in effect (§9.1).
     pub fn locale(&self) -> Locale {
         self.locale
+    }
+
+    /// Override the formatting locale for ONE binding (`None` clears it, so the
+    /// binding follows the session locale again). Display output only; the
+    /// canonical value and every content hash stay locale-free.
+    pub fn set_binding_locale(&mut self, id: &BindingId, locale: Option<Locale>) {
+        match locale {
+            Some(l) => {
+                self.binding_locales.insert(id.clone(), l);
+            }
+            None => {
+                self.binding_locales.remove(id);
+            }
+        }
+    }
+
+    /// A binding's own locale override, if it has one.
+    pub fn binding_locale(&self, id: &BindingId) -> Option<Locale> {
+        self.binding_locales.get(id).copied()
+    }
+
+    /// The locale a binding formats with: its override, else the session's.
+    pub fn locale_for(&self, id: &BindingId) -> Locale {
+        self.binding_locales.get(id).copied().unwrap_or(self.locale)
     }
 
     /// Register a query (the recipe).
@@ -413,7 +440,21 @@ impl ResolutionEngine {
     /// [`resolve`](Self::resolve); a preview resolve is still an explicit user
     /// action that re-links. Re-resolution is idempotent (§12.4).
     pub fn resolve_at(&mut self, id: &BindingId, record: usize) -> Result<Resolved, ResolveError> {
-        let resolved = self.resolve_content(id, record)?;
+        let resolved = match self.resolve_content(id, record) {
+            Ok(r) => r,
+            Err(err) => {
+                // A known binding that cannot resolve is in `Error` (§8), unless
+                // the user froze it: a pinned or overridden binding keeps its
+                // content AND its status — the failure is not theirs to see as
+                // a sync decision being undone.
+                if let Some(st) = self.sync.get_mut(id) {
+                    if st.accepts_refresh() {
+                        st.status = Status::Error;
+                    }
+                }
+                return Err(err);
+            }
+        };
         // Stamp + relink (non-destructive policy already protected pinned/
         // overridden by short-circuiting before a manual resolve is requested;
         // an explicit resolve is the user action that re-links).
@@ -452,6 +493,7 @@ impl ResolutionEngine {
             .get(query_id)
             .ok_or_else(|| ResolveError::NoResult(query_id.clone()))?;
         let query = self.queries.get(query_id);
+        let locale = self.locale_for(id);
 
         let resolved = match binding {
             Binding::Variable {
@@ -467,7 +509,7 @@ impl ResolutionEngine {
                 record,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
                 query.map(|q| &q.shape),
             )),
             Binding::Table {
@@ -482,7 +524,7 @@ impl ResolutionEngine {
                 records,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::RecordFlow {
                 chain,
@@ -501,7 +543,7 @@ impl ResolutionEngine {
                     records,
                     &self.params,
                     self.today,
-                    self.locale,
+                    locale,
                 ))
             }
             Binding::Image {
@@ -517,7 +559,7 @@ impl ResolutionEngine {
                 record,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Barcode {
                 target,
@@ -534,7 +576,7 @@ impl ResolutionEngine {
                 record,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Visibility {
                 target,
@@ -549,7 +591,7 @@ impl ResolutionEngine {
                 record,
                 &self.params,
                 self.today,
-                self.locale,
+                locale,
             )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
@@ -592,6 +634,36 @@ impl ResolutionEngine {
             Binding::Rule { scope, when, apply } => (scope.clone(), when.clone(), apply.clone()),
             _ => return Err(ResolveError::Unsupported("not a rule")),
         };
+        let locale = self.locale_for(rule_id);
+        let (fires, total) = self.condition_fires(query_id, &when, locale)?;
+        Ok(RuleEvaluation {
+            scope,
+            fires,
+            apply,
+            total,
+        })
+    }
+
+    /// Evaluate a `when` condition over a query's records WITHOUT a rule
+    /// defined — the rules editor's "which records fire" preview. The same
+    /// evaluation [`evaluate_rule`](Self::evaluate_rule) runs, so a preview and
+    /// the applied rule agree. Returns the stabilized indices that fired and the
+    /// record count. A condition that does not parse fires nowhere; check it
+    /// with `data_expr::parse` first to show the error.
+    pub fn evaluate_condition(
+        &self,
+        query_id: &QueryId,
+        when: &str,
+    ) -> Result<(Vec<usize>, usize), ResolveError> {
+        self.condition_fires(query_id, when, self.locale)
+    }
+
+    fn condition_fires(
+        &self,
+        query_id: &QueryId,
+        when: &str,
+        locale: Locale,
+    ) -> Result<(Vec<usize>, usize), ResolveError> {
         let records = self
             .results
             .get(query_id)
@@ -604,22 +676,14 @@ impl ResolutionEngine {
                 row,
                 params: &self.params,
             };
-            if eval_str(
-                &when,
-                &EvalCtx::new(&ctx, self.today).with_locale(self.locale),
-            )
-            .as_bool()
-            .unwrap_or(false)
+            if eval_str(when, &EvalCtx::new(&ctx, self.today).with_locale(locale))
+                .as_bool()
+                .unwrap_or(false)
             {
                 fires.push(row);
             }
         }
-        Ok(RuleEvaluation {
-            scope,
-            fires,
-            apply,
-            total: stable.row_count,
-        })
+        Ok((fires, stable.row_count))
     }
 
     /// The resolve stamp for a query's current result + params (§8).

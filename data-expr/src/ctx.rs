@@ -41,18 +41,18 @@ pub struct EvalCtx<'a> {
     records: &'a dyn RecordCtx,
     /// Days since 1970-01-01 for `TODAY()` (injected, deterministic).
     today: i32,
-    /// The formatting locale for the display kernels (default [`Locale::En`]).
+    /// The formatting locale for the display kernels (default [`Locale::EN`]).
     locale: Locale,
 }
 
 impl<'a> EvalCtx<'a> {
     /// Build a context over a record view and an injected `today` serial. The
-    /// locale defaults to [`Locale::En`]; set it with [`with_locale`].
+    /// locale defaults to [`Locale::EN`]; set it with [`with_locale`].
     pub fn new(records: &'a dyn RecordCtx, today: i32) -> Self {
         EvalCtx {
             records,
             today,
-            locale: Locale::En,
+            locale: Locale::EN,
         }
     }
 

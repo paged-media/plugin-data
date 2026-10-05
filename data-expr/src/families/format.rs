@@ -35,25 +35,21 @@ pub fn number(args: &[Value], ctx: &EvalCtx) -> Value {
     Value::text(fmt_fixed(n, decimals, ctx.locale()))
 }
 
-/// `CURRENCY(value, [decimals=2], [symbol])` — `symbol` defaults to the locale's
-/// (`$` leading for en, `€` trailing for de).
+/// `CURRENCY(value, [decimals=2], [symbol])` — `symbol` defaults to the locale's,
+/// and the locale's currency pattern places it (`$1,234.50`, `1.234,50 €`).
 pub fn currency(args: &[Value], ctx: &EvalCtx) -> Value {
     let n = match args[0].as_number() {
         Ok(n) => n,
         Err(e) => return Value::Error(e),
     };
     let decimals = opt_usize(args.get(1), 2);
-    let amount = fmt_fixed(n, decimals, ctx.locale());
-    let (default_symbol, trailing) = ctx.locale().currency();
+    let locale = ctx.locale();
+    let amount = fmt_fixed(n, decimals, locale);
     let symbol = match args.get(2) {
         Some(v) => v.as_display(),
-        None => default_symbol.to_string(),
+        None => locale.currency_symbol().to_string(),
     };
-    if trailing {
-        Value::text(format!("{amount} {symbol}"))
-    } else {
-        Value::text(format!("{symbol}{amount}"))
-    }
+    Value::text(locale.place_currency(&amount, &symbol))
 }
 
 /// `PERCENT(fraction, [decimals=0])` — `0.125 → "12.5%"` (locale-aware decimal).
@@ -114,7 +110,11 @@ fn fmt_fixed(n: f64, decimals: usize, locale: Locale) -> String {
     if neg {
         out.push('-');
     }
-    out.push_str(&group_thousands(int_part, locale.group_sep()));
+    out.push_str(&group_thousands(
+        int_part,
+        locale.group_sep(),
+        locale.min_grouping(),
+    ));
     if let Some(f) = frac {
         out.push(locale.decimal_sep());
         out.push_str(f);
@@ -123,9 +123,14 @@ fn fmt_fixed(n: f64, decimals: usize, locale: Locale) -> String {
 }
 
 /// Insert `sep` every three digits from the right. `int_part` is digits only.
-fn group_thousands(int_part: &str, sep: char) -> String {
+/// Nothing is grouped while the integer part has fewer than `3 + min_grouping`
+/// digits (CLDR `minimumGroupingDigits`).
+fn group_thousands(int_part: &str, sep: char, min_grouping: usize) -> String {
     let len = int_part.len();
-    let mut out = String::with_capacity(len + len / 3);
+    if len < 3 + min_grouping.max(1) {
+        return int_part.to_string();
+    }
+    let mut out = String::with_capacity(len + len / 3 * sep.len_utf8());
     for (i, ch) in int_part.chars().enumerate() {
         if i > 0 && (len - i).is_multiple_of(3) {
             out.push(sep);
