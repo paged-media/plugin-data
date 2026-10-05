@@ -42,7 +42,7 @@ use data_conformance::perf_workloads::{
 };
 use data_core::{BindingId, QueryId};
 use data_js::core::{perf_counters, reset_perf_counters, LoweredOutput, PerfCountersOut};
-use data_lower::FlowLayoutOpts;
+use data_lower::{FlowBlock, FlowLayoutOpts};
 
 fn show(name: &str, c: &PerfCountersOut) {
     if std::env::var_os("PERF_SHOW").is_some() {
@@ -67,17 +67,26 @@ fn data_perf_count_table_resolve_10k() {
     let c = perf_counters();
     show("table_resolve_10k", &c);
     match out {
-        // 10 000 records + the header row.
-        LoweredOutput::Table(t) => assert_eq!(t.rows.len(), 10_001),
+        LoweredOutput::Table(t) => {
+            // 10 000 records + the header row.
+            assert_eq!(t.rows.len(), 10_001);
+            // Behaviour beside the key budget: the rows really are sorted
+            // (no keys → every column; the SKU column decides, and the
+            // shuffled input puts SKU-000000 … SKU-009999 in order).
+            let skus: Vec<&str> = t.rows[1..].iter().map(|r| r.cells[0].as_str()).collect();
+            assert!(skus.windows(2).all(|w| w[0] < w[1]), "rows not stabilized");
+            assert_eq!(skus[0], "SKU-000000");
+        }
         other => panic!("expected a table, got {other:?}"),
     }
     assert_eq!(c.resolves, 1);
     assert_eq!(c.stabilize_calls, 1);
-    // stabilize sorts with NO keys → every column is a key; each comparison
-    // builds two fresh Vec<u8> keys per column it reaches.
+    // stabilize sorts with NO keys → every column is a key. Wave 2 compares
+    // values in place (data_query::cmp_values); it used to build two fresh
+    // Vec<u8> keys per column per comparison (288 478 at 10k rows).
     assert_eq!(c.key_allocs, BUDGET_TABLE_10K_KEY_ALLOCS);
 }
-const BUDGET_TABLE_10K_KEY_ALLOCS: u64 = 288_478;
+const BUDGET_TABLE_10K_KEY_ALLOCS: u64 = 0;
 
 #[test]
 fn data_perf_count_catalog_lower_7k() {
@@ -90,11 +99,17 @@ fn data_perf_count_catalog_lower_7k() {
     show("catalog_lower_7k", &c);
     assert!(!flow.overflow);
     assert_eq!(flow.placed, 7_000);
+    // Behaviour: the flow is in stabilized order — SKU-000000 is row 0.
+    match &flow.frames[0].blocks[0] {
+        FlowBlock::Record { cells, .. } => assert_eq!(cells[0], "item 0"),
+        other => panic!("expected a record first, got {other:?}"),
+    }
     assert_eq!(c.resolves, 1);
     assert_eq!(c.stabilize_calls, 1);
+    // Was 185 110 (two Vec<u8> per column per comparison); in-place now.
     assert_eq!(c.key_allocs, BUDGET_CATALOG_7K_KEY_ALLOCS);
 }
-const BUDGET_CATALOG_7K_KEY_ALLOCS: u64 = 185_110;
+const BUDGET_CATALOG_7K_KEY_ALLOCS: u64 = 0;
 
 #[test]
 fn data_perf_count_change_report_50_bindings() {
@@ -120,7 +135,8 @@ fn data_perf_count_change_report_50_bindings() {
     assert_eq!(c.diff_rows, 0, "the O(n) row diff() is not on this path");
     assert_eq!(c.key_allocs, BUDGET_REPORT_50_KEY_ALLOCS);
 }
-const BUDGET_REPORT_50_KEY_ALLOCS: u64 = 210_560;
+// Was 210 560: ten table sorts building keys per comparison.
+const BUDGET_REPORT_50_KEY_ALLOCS: u64 = 0;
 
 #[test]
 fn data_perf_count_diff_5k() {
@@ -160,4 +176,5 @@ fn data_perf_count_group_plan_2k_by_100() {
     assert_eq!(c.key_allocs, BUDGET_GROUP_2K_KEY_ALLOCS);
 }
 const BUDGET_GROUP_2K_COMPARES: u64 = 100_900;
-const BUDGET_GROUP_2K_KEY_ALLOCS: u64 = 48_166;
+// Was 48 166 (the plan's stabilize building keys per comparison).
+const BUDGET_GROUP_2K_KEY_ALLOCS: u64 = 0;

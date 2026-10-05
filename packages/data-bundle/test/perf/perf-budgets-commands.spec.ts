@@ -131,7 +131,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     cellsIn: 1500,
     resolves: 1,
     stabilizeCalls: 1,
-    keyAllocs: 9840,
+    // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
+    keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 1,
   };

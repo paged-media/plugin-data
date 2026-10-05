@@ -127,33 +127,39 @@ fn group_by(records: &RecordSet, by: &[String]) -> Vec<Group> {
 /// (or, when `keys` is empty, by every column left-to-right). DuckDB result
 /// iteration is unordered without `ORDER BY`; this stabilizes it so record
 /// identity is stable across refreshes (the sync-diff precondition, §8).
+///
+/// The comparison is allocation-free: values compare in place by the same
+/// total, type-aware order [`value_key`] defines (type tag, then content). The
+/// sort-key columns come first; the tie-break then walks the REMAINING columns
+/// only (a key column already compared equal cannot decide it), so rows with
+/// identical content are equal and all others order by content — the order is
+/// permutation-invariant.
 pub fn order_rows(records: &RecordSet, keys: &[String]) -> Vec<usize> {
-    let key_cols: Vec<usize> = if keys.is_empty() {
-        (0..records.columns.len()).collect()
+    let ncols = records.columns.len();
+    let mut cols: Vec<usize> = if keys.is_empty() {
+        (0..ncols).collect()
     } else {
         keys.iter()
             .filter_map(|n| records.schema.index_of(n))
             .collect()
     };
-    let mut idx: Vec<usize> = (0..records.row_count).collect();
-    let ncols = records.columns.len();
-    idx.sort_by(|&a, &b| {
-        // Key columns first.
-        for &c in &key_cols {
-            let va = records.value(a, c).map(value_key).unwrap_or_default();
-            let vb = records.value(b, c).map(value_key).unwrap_or_default();
-            match va.cmp(&vb) {
-                std::cmp::Ordering::Equal => continue,
-                other => return other,
-            }
+    // Tie-break on FULL row content (not the original index): every column
+    // not already a key, left to right.
+    let mut is_key = vec![false; ncols];
+    for &c in &cols {
+        if let Some(k) = is_key.get_mut(c) {
+            *k = true;
         }
-        // Tiebreak on FULL row content (not the original index) so the order is
-        // permutation-invariant: rows with identical content are equal, others
-        // order by their content — stable identity across refreshes (§8).
-        for c in 0..ncols {
-            let va = records.value(a, c).map(value_key).unwrap_or_default();
-            let vb = records.value(b, c).map(value_key).unwrap_or_default();
-            match va.cmp(&vb) {
+    }
+    cols.extend((0..ncols).filter(|&c| !is_key[c]));
+    let columns: Vec<&[Value]> = cols
+        .iter()
+        .map(|&c| records.columns[c].as_slice())
+        .collect();
+    let mut idx: Vec<usize> = (0..records.row_count).collect();
+    idx.sort_by(|&a, &b| {
+        for col in &columns {
+            match cmp_values(col.get(a), col.get(b)) {
                 std::cmp::Ordering::Equal => continue,
                 other => return other,
             }
@@ -161,6 +167,34 @@ pub fn order_rows(records: &RecordSet, keys: &[String]) -> Vec<usize> {
         std::cmp::Ordering::Equal
     });
     idx
+}
+
+/// Compare two (possibly absent) values in the total order [`value_key`]
+/// defines, without building the keys. An absent value orders as `Null`.
+pub fn cmp_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    let (ta, na, ba) = key_parts(a);
+    let (tb, nb, bb) = key_parts(b);
+    ta.cmp(&tb).then(na.cmp(&nb)).then_with(|| ba.cmp(bb))
+}
+
+/// The borrowed parts of a value's sort key: `(type tag, fixed-width content
+/// as an unsigned integer, variable-width content bytes)`. Comparing the
+/// triple lexicographically is the same order as comparing [`value_key`]'s
+/// `(tag, big-endian bytes)`: within a tag the content is either one
+/// fixed-width big-endian word (bool, number, date, datetime — compared as
+/// the unsigned integer the bytes spell) or a byte string.
+#[inline]
+fn key_parts(v: Option<&Value>) -> (u8, u64, &[u8]) {
+    match v {
+        None | Some(Value::Null) => (0, 0, &[]),
+        Some(Value::Bool(b)) => (1, *b as u64, &[]),
+        Some(Value::Number(n)) => (2, order_f64(*n), &[]),
+        Some(Value::Date(d)) => (3, (*d as i64) as u64, &[]),
+        Some(Value::DateTime(ms)) => (3, *ms as u64, &[]),
+        Some(Value::Text(t)) => (4, 0, t.as_bytes()),
+        Some(Value::Bytes(b)) => (5, 0, b.as_slice()),
+        Some(Value::Error(e)) => (6, 0, e.code().as_bytes()),
+    }
 }
 
 /// Apply a row permutation, returning a new record set with rows reordered.
@@ -279,9 +313,12 @@ pub fn stamp(source_content_hash: u64, query: &Query, params: &[(String, Value)]
     }
 }
 
-/// A total, type-aware sort key for a value (used by `order_rows`/`group_by`).
-/// Orders by type tag, then by content; numbers by bits-preserving order.
-fn value_key(v: &Value) -> (u8, Vec<u8>) {
+/// A total, type-aware sort key for a value: orders by type tag, then by
+/// content; numbers by bits-preserving order. This DEFINES the stabilize
+/// order; [`order_rows`] compares in the same order without building it
+/// ([`cmp_values`]), and the property tests hold the two together. Each call
+/// allocates a fresh `Vec<u8>` (counted as [`Counter::KeyAllocs`]).
+pub fn value_key(v: &Value) -> (u8, Vec<u8>) {
     perf::bump(Counter::KeyAllocs);
     match v {
         Value::Null => (0, Vec::new()),
