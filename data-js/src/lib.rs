@@ -403,6 +403,22 @@ mod wasm {
             to_js(&out)
         }
 
+        /// Every formatting locale with formatted samples (`LocaleInfo[]`).
+        pub fn locales(&self) -> JsValue {
+            to_js(&crate::review::locale_catalog()).unwrap_or(JsValue::NULL)
+        }
+
+        /// Wrap an expression in a display pattern (`{ kind, decimals?,
+        /// symbol?, pattern? }`).
+        pub fn format_expression(&self, inner: &str, pattern: JsValue) -> Result<String, JsValue> {
+            Ok(crate::review::format_expression(inner, from_js(pattern)?))
+        }
+
+        /// Split an expression into `{ inner, pattern }`.
+        pub fn split_expression(&self, src: &str) -> JsValue {
+            to_js(&crate::review::split_expression(src)).unwrap_or(JsValue::NULL)
+        }
+
         /// The sync report (`[{binding,status}]`).
         pub fn sync_report(&self) -> JsValue {
             to_js(&self.session.sync_report()).unwrap_or(JsValue::NULL)
@@ -520,25 +536,6 @@ mod wasm {
     /// budgets) — `{enabled, resolves, stabilize_calls, key_allocs,
     /// fingerprints, diff_rows, ingest_cells, content_hashes,
     /// group_key_compares}`. Global to the wasm instance, not per engine.
-    /// Every formatting locale with formatted samples (`LocaleInfo[]`).
-    #[wasm_bindgen(js_name = locales)]
-    pub fn locales() -> Result<JsValue, JsValue> {
-        to_js(&crate::review::locale_catalog())
-    }
-
-    /// Wrap an expression in a display pattern (`{ kind, decimals?, symbol?,
-    /// pattern? }`).
-    #[wasm_bindgen(js_name = formatExpression)]
-    pub fn format_expression(inner: &str, pattern: JsValue) -> Result<String, JsValue> {
-        Ok(crate::review::format_expression(inner, from_js(pattern)?))
-    }
-
-    /// Split an expression into its inner expression and display pattern.
-    #[wasm_bindgen(js_name = splitExpression)]
-    pub fn split_expression(src: &str) -> Result<JsValue, JsValue> {
-        to_js(&crate::review::split_expression(src))
-    }
-
     #[wasm_bindgen(js_name = perfCounters)]
     pub fn perf_counters() -> Result<JsValue, JsValue> {
         to_js(&crate::core::perf_counters())
