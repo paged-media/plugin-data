@@ -57,6 +57,10 @@ function fakeHost(opts?: FakeOpts) {
         if (m.op === "insertTextFrame") {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
         }
+        if (m.op === "batch" && (m.args as { ops: Mutation[] }).ops.some((o) => o.op === "bindCreated")) {
+          const element = { kind: "textFrame", id: "frame-new" };
+          return { applied: true, createdId: element, pageIds: [], minted: [{ handle: "frame", element, storyId: "story-new" }] };
+        }
         return { applied: true, createdId: null, pageIds: [] };
       },
       placeholders: async () => opts?.placeholders?.() ?? [],
@@ -265,17 +269,20 @@ describe("data_lower_variable_caret placement (C-9 / the D-01 residual)", () => 
     void s;
   });
 
-  it("MEASURES the two-step cost of the mint-a-frame path (RFI D-16)", async () => {
-    // No caret, no selection ⇒ the bundle mints a frame, then inserts the field.
-    // That is TWO mutate calls = two undo steps, and `bindCreated` cannot
-    // collapse it: it names a created ELEMENT id, and `insertField` addresses a
-    // STORY, which the new frame mints and which has no handle spelling.
+  it("the mint-a-frame path is ONE mutate: frame + field in one batch, story by handle (RFI D-16)", async () => {
+    // No caret, no selection ⇒ the bundle mints a frame and inserts the field
+    // in ONE batch (one undo step): `bindCreated` names the frame and a
+    // `storyId` of `$h:frame` addresses the story it mints (core C-15). It
+    // was two mutates, plus a hitTest to find the new story.
     const fake = fakeHost({ caret: () => null, selection: () => [] });
     const s = await sessionWith(fake.host, engine());
     s.addVariableBinding("Name", "anchor", "q1", "name");
     await s.lowerBinding("Name");
-    expect(fake.mutations.map((m) => m.op)).toEqual(["insertTextFrame", "insertField"]);
-    expect(fake.calls()).toBe(2);
+    expect(fake.calls()).toBe(1);
+    const batch = fake.mutations[0] as { op: string; args: { ops: Mutation[] } };
+    expect(batch.op).toBe("batch");
+    expect(batch.args.ops.map((m) => m.op)).toEqual(["insertTextFrame", "bindCreated", "insertField"]);
+    expect((batch.args.ops[2] as { args: { storyId: string } }).args.storyId).toBe("$h:frame");
   });
 });
 

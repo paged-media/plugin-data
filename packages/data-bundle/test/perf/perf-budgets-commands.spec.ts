@@ -121,12 +121,16 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     duckQueries: 0,
   };
   // Wave 4 (persistence): +1 parts.write (the session part), +1 supports, +1 log; +1 payload +1 sync_report to build it (one payload, shared with the lowered label's definition hash).
+  // Wave 2: frame + table + cells + label are ONE batch addressed by C-15
+  // handles (`$h:frame`, `$h:table`), and the minted frame comes back in
+  // `minted` — no hitTest (D-16). hostCalls 11 → 7, reads 3 → 2, mutates
+  // 4 → 1, undo steps 4 → 1.
   const W1_LOWER: Measured = {
-    hostCalls: 11,
-    hostReads: 3,
-    mutates: 4,
+    hostCalls: 7,
+    hostReads: 2,
+    mutates: 1,
     mutationOps: 1506,
-    undoSteps: 4,
+    undoSteps: 1,
     placeholdersRead: 0,
     wasmCalls: 4,
     cellsIn: 1500,
@@ -167,11 +171,13 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     const lowerWork = work.snapshot();
     const bytes = { bytesIn: engine.log.bytesIn, bytesOut: engine.log.bytesOut };
     const pre = measure(lowerWork, engine, d, null);
-    // Behaviour: one table of 501 rows (header + 500) × 3, every cell filled.
-    const insert = lowerWork.mutations.find((m) => m.op === "insertTable");
-    expect(insert).toBeTruthy();
-    expect(lowerWork.mutations.some((m) => m.op === "batch" && m.ops === 501 * 3)).toBe(true);
+    // Behaviour: one table of 501 rows (header + 500) × 3, every cell filled —
+    // the frame, the table, 1,503 cells and the label in ONE batch (the two
+    // bindCreated names are not counted), which applied: the minted frame is
+    // selected.
+    expect(lowerWork.mutations.map((m) => `${m.op}(${m.ops})`)).toEqual([`batch(${2 + 501 * 3 + 1})`]);
     expect(s.getState().status).toBe("ready");
+    expect(h.host.selection.get().map((e) => e.kind)).toEqual(["textFrame"]);
     const undo = await undoSteps(h, mark);
     const low = { ...pre, undoSteps: undo };
     report("W1.lower-table-500", low, { ms: lowerMs, ...bytes, detail: {} }, lowerWork, engine);
@@ -364,12 +370,17 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 20 variables places its field in a FRESH frame: meta + pages + insertText-
   // Frame + elementGeometry + meta + hitTest + insertField — two undo steps
   // and five reads per variable (D-16: the minted story is not addressable).
+  // Wave 2: the active page is read once per command (meta + collection),
+  // and each variable's frame + field are ONE batch whose `storyId` is
+  // `$h:frame` (C-15) — no elementGeometry, no hitTest (D-16). Per variable:
+  // 2 supports, selection.get, one mutate, one log. hostCalls 240 → 102,
+  // reads 120 → 2, mutates 40 → 20, undo steps 40 → 20.
   const W5: Measured = {
-    hostCalls: 240,
-    hostReads: 120,
-    mutates: 40,
+    hostCalls: 102,
+    hostReads: 2,
+    mutates: 20,
     mutationOps: 40,
-    undoSteps: 40,
+    undoSteps: 20,
     placeholdersRead: 0,
     wasmCalls: 21,
     cellsIn: 150,

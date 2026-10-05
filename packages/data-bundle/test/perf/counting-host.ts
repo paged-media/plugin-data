@@ -41,7 +41,9 @@ import type { BundleHost } from "@paged-media/plugin-api";
 export interface CountedMutation {
   /** The op name; `"batch"` for a batch. */
   op: string;
-  /** How many ops it carried — 1 unless it is a batch. */
+  /** How many ops it carried — 1 unless it is a batch. A `bindCreated`
+   *  child is not counted: it only names what the op before it minted
+   *  (C-15) and writes nothing. */
   ops: number;
 }
 
@@ -144,10 +146,13 @@ export function countingHost(host: BundleHost): {
     if (door === "document.elementGeometry") {
       if (Array.isArray(args[0])) s.geometryIdsAsked += args[0].length;
     } else if (door === "document.mutate") {
-      const m = args[0] as { op?: string; args?: { ops?: unknown[] } };
+      const m = args[0] as { op?: string; args?: { ops?: { op?: string }[] } };
       s.mutations.push({
         op: m?.op ?? "?",
-        ops: m?.op === "batch" ? (m.args?.ops?.length ?? 0) : 1,
+        ops:
+          m?.op === "batch"
+            ? (m.args?.ops?.filter((o) => o?.op !== "bindCreated").length ?? 0)
+            : 1,
       });
     }
   };

@@ -72,7 +72,9 @@ import {
   commitLoweredVariable,
   commitLoweredVisibility,
   commitRule,
+  failedBatchChild,
   resolveElementId,
+  type LowerContext,
 } from "./lower";
 import {
   buildRemoteUrl,
@@ -143,24 +145,6 @@ type FieldRefreshOut =
   | { outcome: "kept"; binding: string; status: string }
   | { outcome: "notVariable"; binding: string }
   | { outcome: "failed"; binding: string; error?: string };
-
-/** The index of the batch child a rejected batch names, or null. Core rolls a
- *  failed batch back and says which child failed:
- *  `Mutation::Batch child 3 (setFieldValue): … — batch rolled back`. */
-export function failedBatchChild(error: unknown): number | null {
-  let text: string;
-  if (typeof error === "string") text = error;
-  else if (error instanceof Error) text = error.message;
-  else {
-    try {
-      text = JSON.stringify(error) ?? "";
-    } catch {
-      text = String(error);
-    }
-  }
-  const m = /Batch child (\d+)/.exec(text);
-  return m ? Number(m[1]) : null;
-}
 
 /** Map an explicit IDML FittingOnEmptyFrame choice back to the engine's coarse
  *  `ImgFit` (fit/fill/crop) for the binding `policy`. The engine ImgFit is only
@@ -824,6 +808,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       });
     }
   }
+
+  /** Set while `lowerAll` runs: what its lowerings share (the active page). */
+  let lowerCtx: LowerContext | undefined;
 
   /** The recipe `buildPersisted` serialised last (reused by `stampFor`). */
   let lastPayload: unknown;
@@ -1945,7 +1932,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         }
         const lowered = e.resolve_lowered(id) as { kind?: string } | null;
         if (lowered?.kind === "table") {
-          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id));
+          const frameId = await commitLoweredTable(host, lowered as never, await stampFor(id), lowerCtx);
           if (frameId) {
             loweredInto.set(id, { kind: "textFrame", id: frameId } as ElementId);
             markDirty();
@@ -1954,7 +1941,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           // D-01: place the variable as a tagged placeholder field ONCE (keyed by
           // the binding id), then re-resolve it through the placeholders() loop.
           if (!placedVariables.has(id)) {
-            const placed = await commitLoweredVariable(host, lowered as never, id);
+            const placed = await commitLoweredVariable(host, lowered as never, id, null, lowerCtx);
             if (placed) placedVariables.add(id);
           } else {
             // Already placed — a re-lower just re-resolves the live field.
@@ -1987,8 +1974,14 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
 
     async lowerAll() {
       await this.refreshData();
-      for (const id of [...bindingIds]) {
-        await this.lowerBinding(id);
+      // One command: its lowerings share one read of the active page.
+      lowerCtx = {};
+      try {
+        for (const id of [...bindingIds]) {
+          await this.lowerBinding(id);
+        }
+      } finally {
+        lowerCtx = undefined;
       }
     },
 
