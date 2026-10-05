@@ -1,0 +1,16 @@
+[package]
+name = "data-xlsx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "paged.data XLSX reader: one worksheet of an imported .xlsx as a header row plus typed rows, emitted as JSON records for DuckDB's read_json_auto. Exists because DuckDB-WASM 1.29.0 has no offline XLSX reader (the excel extension has no wasm build for v1.1.1 and spatial is 22.8 MB). Wraps calamine (MIT)."
+
+[lints]
+workspace = true
+
+[dependencies]
+calamine = { version = "0.31", default-features = false }
+serde_json.workspace = true
+thiserror.workspace = true
