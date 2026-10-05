@@ -36,6 +36,7 @@ const defineSourceCalls: unknown[] = [];
 const keyCalls: { source: string; byteLen: number }[] = [];
 const registerCsvCalls: { name: string; text: string }[] = [];
 const registerBufferCalls: string[] = [];
+const execCalls: string[] = [];
 
 vi.mock("../engine", () => ({
   ENGINE_NOT_BUILT: "engine not built",
@@ -64,6 +65,13 @@ vi.mock("../query/duckdb", () => ({
     async query() {
       throw new Error("unused in this suite");
     },
+    async rows() {
+      return { columns: [], rows: [] };
+    },
+    async exec(sql: string) {
+      execCalls.push(sql);
+    },
+    async dropFile() {},
     async close() {},
   }),
 }));
@@ -99,6 +107,7 @@ beforeEach(() => {
   keyCalls.length = 0;
   registerCsvCalls.length = 0;
   registerBufferCalls.length = 0;
+  execCalls.length = 0;
   fetchSpy.mockClear();
   vi.stubGlobal("fetch", fetchSpy);
 });
@@ -167,12 +176,17 @@ describe("remote sources — inert until consent (data.source.remote / data.secu
     expect(state.sources).toContain("feed");
   });
 
-  it("non-CSV formats register as file buffers (the imported-file seam)", async () => {
+  // Wave 6: a remote JSON / Parquet source becomes a table named after the
+  // source, like an imported file — it was a registered file only before.
+  it("non-CSV formats load as a table named after the source (the imported-file seam) [data.source.adapters]", async () => {
     const session = createSession(fakeHost(["https://api.test"]), 0);
     session.addRemoteSource("feed", "https://api.test/feed.parquet", "parquet");
     await session.requestConsentForRemote("feed");
     await session.loadRemoteSource("feed");
-    expect(registerBufferCalls).toEqual(["feed.parquet"]);
+    expect(registerBufferCalls).toEqual(["paged_src_feed.parquet"]);
+    expect(execCalls).toEqual([
+      `CREATE OR REPLACE TABLE "feed" AS SELECT * FROM read_parquet('paged_src_feed.parquet')`,
+    ]);
     expect(registerCsvCalls).toHaveLength(0);
   });
 });

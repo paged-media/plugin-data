@@ -9,6 +9,7 @@ members = [
     "data-core",
     "data-expr",
     "data-sources",
+    "data-xlsx",
     "data-query",
     "data-bind",
     "data-lower",

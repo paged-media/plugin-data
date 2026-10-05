@@ -127,6 +127,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 4 → 1, undo steps 4 → 1.
   // Column door (Wave 2): the result crosses as typed column buffers — begin + one push per column + finish (+4 wasm calls) instead of 1 500 `{t, v}` cells (cellsIn 0; bytes in 41.5 KB → 16.9 KB).
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
+  // Wave 6 (query guard): +1 DuckDB statement — the first refresh asks DuckDB's
+  // parser about the query once (`json_serialize_sql`, query/sql.ts guardQuery).
   const W1_LOWER: Measured = {
     hostCalls: 7,
     hostReads: 2,
@@ -141,7 +143,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
     keyAllocs: 0,
     fingerprints: 0,
-    duckQueries: 1,
+    duckQueries: 2,
   };
   it("W1 imports a 500-row CSV and lowers it as one table [data.perf.gates]", async () => {
     h = await openDataHost();
@@ -392,6 +394,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // reads 120 → 2, mutates 40 → 20, undo steps 40 → 20.
   // Column door (Wave 2): begin + per-column push + finish replace one `{t, v}` ingest of 150 cells.
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
+  // Wave 6 (query guard): +1 DuckDB statement — `json_serialize_sql` once for the
+  // one query on its first refresh (query/sql.ts guardQuery).
   const W5: Measured = {
     hostCalls: 102,
     hostReads: 2,
@@ -405,7 +409,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     stabilizeCalls: 0,
     keyAllocs: 0,
     fingerprints: 0,
-    duckQueries: 1,
+    duckQueries: 2,
   };
   it("W5 lowers 20 variable bindings at once [data.perf.gates]", async () => {
     h = await openDataHost();

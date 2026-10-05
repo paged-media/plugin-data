@@ -73,11 +73,44 @@ export interface DuckDBHandle {
   /** Run SQL and materialise the Arrow result as a RecordSet (`{t, v}` per
    *  cell — the original seam). */
   query(sql: string): Promise<RecordSetJson>;
+  /** Run SQL and read the result as display text: column names plus rows of
+   *  strings (`null` for SQL NULL). Values are `String(v)` of what Arrow
+   *  returns, so callers that show values cast to VARCHAR in SQL first and
+   *  let DuckDB render them. Independent of the RecordSet conversion. */
+  rows(sql: string): Promise<TextRows>;
+  /** Run a statement for its effect (CREATE TABLE …); the result is dropped
+   *  without converting it. */
+  exec(sql: string): Promise<void>;
+  /** Forget a registered virtual file, so the name can be registered again
+   *  (a re-import). A no-op when DuckDB does not know the name. */
+  dropFile(name: string): Promise<void>;
   /** Run SQL and read the Arrow result as typed column buffers — the form
    *  `ingestColumnBatch` sends to the engine with one copy per column. */
   queryColumns(sql: string): Promise<ColumnBatch>;
   /** Tear the session + worker down. */
   close(): Promise<void>;
+}
+
+/** A result as text (see [`DuckDBHandle.rows`]). */
+export interface TextRows {
+  columns: string[];
+  rows: (string | null)[][];
+}
+
+/** An Arrow result as text rows. */
+export function arrowToTextRows(table: ArrowLikeTable): TextRows {
+  const columns = table.schema.fields.map((f) => f.name);
+  const cols = columns.map((_, i) => table.getChildAt(i));
+  const rows: (string | null)[][] = [];
+  for (let r = 0; r < table.numRows; r++) {
+    rows.push(
+      cols.map((c) => {
+        const v = c?.get ? c.get(r) : c?.toArray()[r];
+        return v === null || v === undefined ? null : String(v);
+      }),
+    );
+  }
+  return { columns, rows };
 }
 
 /** The DuckDB database surface the handle drives. Both the browser
@@ -87,6 +120,7 @@ export interface DuckDBHandle {
 export interface DuckDBLike {
   registerFileText(name: string, text: string): unknown;
   registerFileBuffer(name: string, bytes: Uint8Array): unknown;
+  dropFile?(name: string): unknown;
 }
 export interface DuckDBConnectionLike {
   insertCSVFromPath(path: string, opts: { name: string; schema: string; detect: boolean }): unknown;
@@ -137,6 +171,19 @@ export function duckdbHandle(
     },
     async queryColumns(sql: string): Promise<ColumnBatch> {
       return arrowToColumns(await runQuery(conn, sql));
+    },
+    async rows(sql: string): Promise<TextRows> {
+      return arrowToTextRows((await conn.query(sql)) as ArrowLikeTable);
+    },
+    async exec(sql: string) {
+      await conn.query(sql);
+    },
+    async dropFile(name: string) {
+      try {
+        await db.dropFile?.(name);
+      } catch {
+        // not registered: nothing to drop
+      }
     },
     async close() {
       await conn.close();

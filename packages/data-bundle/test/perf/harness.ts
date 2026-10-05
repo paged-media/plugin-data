@@ -237,6 +237,19 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
       log.rowsOut += rs.row_count;
       return rs;
     },
+    // Wave 6: every statement counts as a query — the guard's parse
+    // (`rows`), import DDL (`exec`) and previews.
+    async rows(sql) {
+      log.queries += 1;
+      const out = await inner.rows(sql);
+      log.rowsOut += out.rows.length;
+      return out;
+    },
+    async exec(sql) {
+      log.queries += 1;
+      return inner.exec(sql);
+    },
+    dropFile: (name) => inner.dropFile(name),
     async queryColumns(sql) {
       log.queries += 1;
       const batch = await inner.queryColumns(sql);

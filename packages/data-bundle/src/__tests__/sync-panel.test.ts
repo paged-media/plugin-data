@@ -65,6 +65,9 @@ function stubSession(over: Partial<DataSourceSession>, state?: Partial<SessionSt
     remote: [],
     diagnostics: [],
     persistence: { status: "saved", hash: null },
+    files: [],
+    refresh: {},
+    polling: [],
     ...state,
   };
   return new Proxy(over as DataSourceSession, {

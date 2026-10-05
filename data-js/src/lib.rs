@@ -45,6 +45,7 @@
 
 pub mod columns;
 pub mod core;
+pub mod import;
 pub mod review;
 
 #[cfg(target_arch = "wasm32")]
@@ -653,6 +654,19 @@ mod wasm {
         /// D-08 64 KiB budget check for per-record capture.
         pub fn data_set_payload_bytes(&self) -> usize {
             self.session.data_set_payload_bytes()
+        }
+    }
+
+    // ── wave 6: file imports DuckDB-WASM cannot read (data-xlsx) ─────────
+    #[wasm_bindgen]
+    impl DataEngine {
+        /// Read one worksheet of an `.xlsx` (`sheet` absent = the first) as
+        /// `{sheet, sheets, columns: [{name, type}], rows, errorCells, json}`;
+        /// the bundle hands `json` + `columns` to DuckDB's `read_json`.
+        pub fn xlsx_import(&self, bytes: &[u8], sheet: Option<String>) -> Result<JsValue, JsValue> {
+            let out = crate::import::xlsx_import(bytes, sheet.as_deref())
+                .map_err(|e| JsValue::from_str(&e))?;
+            to_js(&out)
         }
     }
 

@@ -37,10 +37,25 @@ import { createSession, type DataSourceSession } from "./session";
 import { makeSourcesPanel } from "./panels/sources-panel";
 import { makeBindingsPanel } from "./panels/bindings-panel";
 import { makeDatasetPanel } from "./panels/dataset-panel";
+import { makeQueryPanel } from "./panels/query-panel";
 
 const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
 const BINDINGS_PANEL_ID = "media.paged.data.panel.bindings";
 const DATASET_PANEL_ID = "media.paged.data.panel.dataset";
+const QUERY_PANEL_ID = "media.paged.data.panel.query";
+const IMPORTER_ID = "media.paged.data.importer.table";
+
+/** The file types File ▸ Import and a drop route to this plugin.
+ *
+ *  CSV, TSV and XLSX are NOT claimed although the plugin imports them (Data
+ *  sources ▸ Import file…): paged.sheet claims the same extensions, and the
+ *  editor's importer registry gives a contested extension to whichever bundle
+ *  registered first (`registries/document-io.ts`: "multi-plugin contention
+ *  policy ships at P7") — paged.data loads before paged.sheet, so claiming
+ *  them here would silently take the spreadsheet import away from the sheet.
+ *  A per-file choice between importers is a host-UI gap; until it exists,
+ *  only the extensions no other bundle claims are routed here. */
+export const IMPORTER_EXTENSIONS = [".json", ".ndjson", ".jsonl", ".parquet"] as const;
 
 /** The injected eval clock for `TODAY()` (days since 1970-01-01). The host
  *  supplies a real clock in production; M0 uses the load-time UTC day. */
@@ -104,9 +119,37 @@ export function activate(host: BundleHost): BundleHandle {
     defaultDock: "right",
   });
 
+  contributePanel(host, {
+    id: QUERY_PANEL_ID,
+    title: "Data query",
+    icon: "panel-canvas",
+    component: makeQueryPanel(host, session),
+    defaultDock: "right",
+  });
+
+  // File ▸ Import / drop: a JSON or Parquet file becomes a data source (the
+  // contested spreadsheet types stay with paged.sheet — IMPORTER_EXTENSIONS).
+  if (host.supports("contribute.importer@1")) {
+    host.contribute.importer({
+      id: IMPORTER_ID,
+      title: "Data source (JSON, Parquet)",
+      extensions: IMPORTER_EXTENSIONS,
+      mimeTypes: ["application/json", "application/x-ndjson", "application/vnd.apache.parquet"],
+      async import(file) {
+        await session.whenRestored();
+        await session.importFile(file.name, file.bytes);
+        try {
+          host.shell.openPanel(SOURCES_PANEL_ID);
+        } catch {
+          // a headless host has no panels; the import itself is done
+        }
+      },
+    });
+  }
+
   host.contribute.command({
     id: "media.paged.data.command.importData",
-    title: "Import data (.csv)",
+    title: "Import data (CSV, TSV, JSON, Parquet, Excel)",
     category: "Data",
     handler: () => host.shell.openPanel(SOURCES_PANEL_ID),
   });
@@ -176,6 +219,14 @@ export function activate(host: BundleHost): BundleHandle {
     },
   });
 
+  // Wave 6: the Data query panel (SQL, builders, preview grid).
+  host.contribute.command({
+    id: "media.paged.data.command.editQuery",
+    title: "Edit a data query (SQL)",
+    category: "Data",
+    handler: () => host.shell.openPanel(QUERY_PANEL_ID),
+  });
+
   // ADR 024 — the dataBinding edit context.
   //
   // paged.data was the one content-bearing plugin with NO context at
@@ -223,4 +274,11 @@ export function activate(host: BundleHost): BundleHandle {
   };
 }
 
-export { manifest, SOURCES_PANEL_ID, BINDINGS_PANEL_ID, DATASET_PANEL_ID };
+export {
+  manifest,
+  SOURCES_PANEL_ID,
+  BINDINGS_PANEL_ID,
+  DATASET_PANEL_ID,
+  QUERY_PANEL_ID,
+  IMPORTER_ID,
+};

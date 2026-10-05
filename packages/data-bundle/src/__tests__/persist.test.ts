@@ -25,6 +25,7 @@ describe("the session part schema [data.plugin.persistence]", () => {
     targets: { image: {}, barcode: {}, visibility: {}, rule: {}, lowered: {} },
     data: [{ source: "s", format: "csv", text: "a\n1\n" }],
     remote: [],
+    refresh: {},
   };
 
   it("round-trips through encode/decode", () => {

@@ -20,9 +20,28 @@ of work, with file and line references, is
   table whose label no longer names its binding is reported. Opening another document drops
   the previous session first. On a host without container parts the Sources panel says the
   session is not saved.
-- **Sources.** The Data sources panel imports a `.csv` or `.tsv` file into an in-memory
-  DuckDB table. A remote URL (CSV, TSV, JSON or Parquet) can be added as a descriptor; Load
-  calls `fetch` only for an origin the host reports as consented and hands DuckDB the bytes.
+- **Sources** (local formats since wave 6). The Data sources panel imports CSV, TSV, JSON
+  (an array or newline-delimited), Parquet and Excel `.xlsx` (one worksheet per source; the
+  panel switches worksheet) as one in-memory DuckDB table per source. JSON and Parquet use
+  DuckDB's own readers; XLSX is read by the engine (`data-xlsx`, calamine) with one type per
+  column and handed to DuckDB's `read_json` with that column list. Imported files are saved
+  with the document like CSV (inline up to 64 KiB, else `data/<hash>.<ext>`). File ▸ Import
+  and a drop route `.json`, `.ndjson`, `.jsonl` and `.parquet` to the plugin
+  (`contribute.importer`). A remote URL (CSV, TSV, JSON or Parquet) can be added as a
+  descriptor; Load calls `fetch` only for an origin the host reports as consented and loads
+  the bytes as a table, like an imported file.
+- **Queries** (since wave 6). The Data query panel has a SQL field with DuckDB's
+  diagnostics (error class, line and column in the query as written), filter, sort and group
+  builders that write SQL into it, a preview grid of the first 50 rows as DuckDB prints them,
+  and saving under a query id. Every query, typed or restored from a document, passes a guard
+  built on DuckDB's own parser: exactly one SELECT over source tables, with no file or URL
+  table functions and no `'https://…'` table names. A failing query is a diagnostic for that
+  query; the refresh carries on with the others.
+- **Refresh policy** (since wave 6, `src/refresh.ts`). Each source has one: manual; on open
+  (the queries re-run when the document opens, and a remote source is fetched again only with
+  a remembered grant); every N seconds (at least 15) for a remote source, only while its
+  origin is consented, re-running the queries only when the content changed; never. A local
+  file refuses the interval policy: a browser page keeps no handle to watch the file.
 - **Bindings from the panel.** "Map fields…" lists the columns of the first source and
   creates one variable binding per chosen column. "Add binding" defines every binding kind:
   a variable field, an image or a barcode in the selected rectangle, a table with
@@ -81,8 +100,13 @@ of work, with file and line references, is
   table or barcode names the binding, the hash of its definition and the hash of the session
   part it was lowered under, and goes with the content on undo. The engine has no
   document-level label a plugin could write, so the session itself cannot follow undo.
-- **The panels' only query is** `SELECT * FROM <first source>`. There is no SQL field.
+- **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
+  the Data query panel is used by bindings defined through the session or by its id.
   "Wire demo binding" still passes empty expressions.
+- **CSV, TSV and XLSX are not routed from File ▸ Import.** paged.sheet claims the same
+  extensions and the editor's importer registry gives a contested extension to the first
+  bundle that registers it; paged.data loads first, so claiming them would take the import
+  away from the spreadsheet plugin. They are imported from Data sources ▸ Import file….
 - **Tables and barcodes are written again on every lower** and on every preview step.
   Nothing removes or updates the earlier frame or paths. A table goes into a new frame at a
   fixed inset on the active page, with column widths estimated from character counts. The
@@ -103,11 +127,13 @@ of work, with file and line references, is
 - **A table lower is four undo steps** (frame, table, cell fill, label), measured by
   `test/persist-real-core.spec.ts`.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
-- **Remote sources.** JSON and Parquet bytes are registered with DuckDB as a file, not
-  inserted as a table. A `credentialRef` can be stored on the descriptor, but nothing
-  resolves it and the fetch is made without it. In the editor at `28dc764` the page policy
-  is the fixed `connect-src 'self' blob: data:` (`editor: apps/canvas/public/_headers:49`);
-  it is not derived from consent grants (`editor: apps/canvas/src/plugin-consent.ts:36-41`).
+- **Remote sources.** A `credentialRef` can be stored on the descriptor, but nothing
+  resolves it and the fetch is made without it. The editor's page policy cannot follow
+  consent grants (a header CSP is fixed at load). Since editor ADR 218 (branch
+  `data/sources`), a deployment lists exact data origins at build time
+  (`PAGED_DATA_ORIGINS`); only those are reachable, and still only after consent. The public
+  build lists none. The consent dialog says when an origin stays blocked, and the failed fetch
+  says so on the source.
 - **DuckDB was not in the npm package.** Every version up to 0.1.0-canary.9 shipped without
   `bin/duckdb-engine.wasm`. The publish workflow now runs `scripts/vendor-duckdb.sh` and
   refuses a tarball without it (`scripts/pubcheck.sh`, `scripts/pubcheck.mjs`). The bundle now
@@ -147,14 +173,13 @@ of work, with file and line references, is
 
 - Arrow IPC across the wasm boundary: values cross as JSON-shaped objects
   ([ADR 014](adr/014-data-provider-arrow-seam.md)). The registry row is `planned`.
-- Database sources. `attach_plan` describes an attach in Rust; nothing performs one.
+- Database sources, SQLite included. `attach_plan` describes an attach in Rust; nothing
+  performs one (see the wave-6 gaps below).
 - Reading a governed table and its metadata sidecar from a location, and applying a
   graph-data variable. Their registry rows are `planned`.
 - A Node binding for the batch runner (registry row `planned`); the CLI is the native route.
 - Turning a paginated flow into document content, in the editor or anywhere else.
-- Scheduled refresh: `RefreshPolicy` is stored and nothing acts on it.
-- Local import of JSON, Parquet or Excel files, and raster barcodes.
-- An importer or exporter contribution: the manifest declares none.
+- Raster barcodes; an exporter contribution.
 - The differential test against native DuckDB: `data-conformance/tests/oracle.rs` is a stub.
 
 ## Host gaps found in wave 4
@@ -166,3 +191,15 @@ Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 
 | Container parts are not undoable (`PartsSurface.write`/`delete`, "Not undoable") | not modelled in core (shared with paged.web) | the session part does not follow undo |
 | No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead |
 | Window ▸ Bindings is greyed outside the `dataBinding` edit context | host UI | the Bindings panel opens from Object ▸ Insert data binding… or the command palette |
+
+## Gaps found in wave 6
+
+Measured on 2026-10-05 against DuckDB-WASM 1.29.0 (engine v1.1.1), the shipped EH variant.
+
+| Gap | Class | Effect here |
+| --- | --- | --- |
+| DuckDB's `excel` extension has no wasm build for v1.1.1 (extensions.duckdb.org answers 404); `spatial` (GDAL, `st_read`) exists but is 22.8 MB of wasm | engine limitation (third-party) | XLSX is read by `data-xlsx` (calamine, MIT): data-js grew 762,486 → 1,137,695 bytes (+375 KB) |
+| `sqlite_scanner` loads offline from a same-origin repository (1.6 MB, signed), and `ATTACH … (TYPE sqlite)` succeeds, but every read fails "unable to open database file": SQLite's own VFS cannot see DuckDB-WASM's registered files | engine limitation (third-party) | no SQLite import; `attach_plan` is not executed (it would attach nothing readable). Options: a newer DuckDB-WASM, sql.js (MIT, about 0.65 MB), or a read-only SQLite reader in Rust |
+| Contested importer extensions go to the first registrant, with no per-file choice | host UI | CSV/TSV/XLSX import stays in the Sources panel |
+| A page CSP cannot follow runtime consent grants; following them needs a fetch door outside the page's policy (`host.network.fetch` plus a broker origin or proxy) | no plugin door + host UI | remote sources reach only origins a deployment lists (editor ADR 218) |
+| A local file cannot be watched from a browser page | platform | file sources refresh on open or by importing again; interval is refused |
