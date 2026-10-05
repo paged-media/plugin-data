@@ -49,6 +49,7 @@ import {
 } from "../../data-host-model/src";
 
 import { bootEngine, ENGINE_NOT_BUILT, type DataEngineLike } from "./engine";
+import { reviewMethods, type ReviewSession } from "./review";
 import {
   DATA_PART_DIR,
   SESSION_PART,
@@ -342,7 +343,7 @@ export interface RecordFlowPreview {
 }
 
 /** The session API the panels + commands drive. */
-export interface DataSourceSession {
+export interface DataSourceSession extends ReviewSession {
   getState(): SessionState;
   /** Drop every diagnostic (the panel's "clear" action). */
   clearDiagnostics(): void;
@@ -581,11 +582,13 @@ export interface DataSourceSession {
    *  (`refreshData`). The byte-read of the governed table + sidecar from a
    *  file/URL/DB location is the broader `data.governed.extract` path (M2). */
   governedCatalog(queryId: string, metadata: DatasetMetadata): Promise<GovernedCatalog>;
-  /** §9.1: set the formatting locale (`"en"` | `"de"`) for the display kernels
+  /** §9.1: set the session formatting locale (a tag from the engine's locale
+   *  table — `locales()` lists them) for the display kernels
    *  (NUMBER/CURRENCY/PERCENT/DATEFMT). Applies immediately if the engine is up,
-   *  else on its next boot. Re-lower bindings to see the change in the document. */
-  setLocale(next: "en" | "de"): void;
-  getLocale(): "en" | "de";
+   *  else on its next boot; a tag the engine lacks is reported, and the locale
+   *  stays as it was. Re-lower bindings to see the change in the document. */
+  setLocale(next: string): void;
+  getLocale(): string;
   /** §10 batch plan: partition a query's resolved result into generation units
    *  (per-record / per-group / one-catalog). Returns the plan; executing it
    *  (resolve → lower → paginate → export each unit) reuses the normal pipeline.
@@ -683,7 +686,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   const providerHandles = new Map<string, DataProviderHandle>();
   // §9.1 localization — the session formatting locale (applied on engine boot,
   // and immediately if the engine is already up). Default en.
-  let locale: "en" | "de" = "en";
+  let locale = "en";
 
   // M1 remote sources (D-03): descriptor-only until consented + loaded.
   const remoteSources = new Map<string, RemoteSourceState>();
@@ -1087,7 +1090,16 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     if (engine) return engine;
     try {
       const e = await bootEngine(today);
-      e.set_locale(locale); // apply the chosen locale to the fresh engine
+      try {
+        e.set_locale(locale); // apply the chosen locale to the fresh engine
+      } catch (err) {
+        report({
+          level: "error",
+          source: "restore",
+          message: `the saved locale "${locale}" is not known to this engine (${errText(err)}); using en`,
+        });
+        locale = "en";
+      }
       engine = e;
       if (bootPayload !== null) {
         const saved = bootPayload;
@@ -1308,7 +1320,43 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     );
   }
 
-  return {
+  /** Re-resolve one variable binding and write its placed field(s) — the
+   *  single-binding half of `refreshFields`, for accept-source, a changed
+   *  locale and a changed display pattern. The caller decided the write is
+   *  wanted (it does not read the sync state). */
+  async function writeVariable(id: string): Promise<number | null> {
+    const e = await ensureEngine();
+    const fields = await readOwnFields("refresh", id);
+    if (fields === null) return null;
+    let value: string | null;
+    try {
+      const lowered = e.resolve_lowered(id) as { kind?: string; text?: string; hidden?: boolean } | null;
+      if (lowered?.kind !== "variable") return 0;
+      value = lowered.hidden ? null : (lowered.text ?? null);
+    } catch (err) {
+      report({ level: "warn", source: "refresh", binding: id, message: `did not resolve: ${errText(err)}` });
+      return null;
+    }
+    const writes = fields
+      .filter((f) => f.value !== value)
+      .map((f) => ({ storyId: f.storyId, offset: f.offset, key: id, value }));
+    return writeFields("refresh", writes);
+  }
+
+  const self: DataSourceSession = {
+    ...reviewMethods({
+      host,
+      ensureEngine,
+      listBindings: () => self.listBindings(),
+      ruleTargets,
+      setPinned: (id, pinned) => self.setPinned(id, pinned),
+      lowerBinding: (id) => self.lowerBinding(id),
+      writeVariable,
+      markDirty,
+      report,
+      emit,
+    }),
+
     getState() {
       return {
         ...state,
@@ -1935,6 +1983,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       for (const id of [...bindingIds]) {
         await this.lowerBinding(id);
       }
+      // The document is now written from these results: the row diff's "before".
+      await this.markApplied();
     },
 
     async recordCount(queryId) {
@@ -2155,6 +2205,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       }
 
       const written = await writeFields("refresh", writes);
+      await this.markApplied();
       const kept = [...resolved.values()].filter((r) => r === "kept").length;
       state.status = "ready";
       state.message =
@@ -2285,8 +2336,15 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     setLocale(next) {
+      if (engine) {
+        try {
+          engine.set_locale(next);
+        } catch (err) {
+          report({ level: "error", source: "binding", message: `unknown locale "${next}": ${errText(err)}` });
+          return;
+        }
+      }
       locale = next;
-      if (engine) engine.set_locale(next);
       markDirty();
     },
 
@@ -2490,4 +2548,5 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         duck = null;
       },
     };
-  }
+  return self;
+}

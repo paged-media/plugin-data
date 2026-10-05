@@ -122,6 +122,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     duckQueries: 0,
   };
   // Wave 4 (persistence): +1 parts.write (the session part), +1 supports, +1 log; +1 payload +1 sync_report to build it (one payload, shared with the lowered label's definition hash).
+// Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W1_LOWER: Measured = {
     hostCalls: 11,
     hostReads: 3,
@@ -129,7 +130,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 1506,
     undoSteps: 4,
     placeholdersRead: 0,
-    wasmCalls: 4,
+    wasmCalls: 5,
     cellsIn: 1500,
     resolves: 1,
     stabilizeCalls: 1,
@@ -185,6 +186,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // per changed field — 100 rebuilds and 100 undo steps for one refresh.
   // (Measured beside it: today's core applies a back-to-front BATCH of
   // setFieldValue ops atomically as one step — see the probe below.)
+// Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W2: Measured = {
     hostCalls: 102,
     hostReads: 1,
@@ -192,7 +194,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 100,
     undoSteps: 89,
     placeholdersRead: 100,
-    wasmCalls: 200,
+    wasmCalls: 201,
     cellsIn: 0,
     resolves: 100,
     stabilizeCalls: 0,
@@ -355,6 +357,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // 20 variables places its field in a FRESH frame: meta + pages + insertText-
   // Frame + elementGeometry + meta + hitTest + insertField — two undo steps
   // and five reads per variable (D-16: the minted story is not addressable).
+// Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   const W5: Measured = {
     hostCalls: 240,
     hostReads: 120,
@@ -362,7 +365,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     mutationOps: 40,
     undoSteps: 40,
     placeholdersRead: 0,
-    wasmCalls: 21,
+    wasmCalls: 22,
     cellsIn: 150,
     resolves: 20,
     stabilizeCalls: 0,

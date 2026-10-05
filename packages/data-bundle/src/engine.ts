@@ -104,6 +104,28 @@ export interface DataEngineLike {
    *  source over bundle-fetched bytes. Optional: a wasm artifact built before
    *  the M1 slice lacks it (the session degrades honestly). */
   remote_invalidation_key?(source: string, bytes: Uint8Array): string;
+  /** §9.1: override one binding's formatting locale (a tag; `null` clears).
+   *  Optional: absent on a wasm artifact built before the locale table. */
+  set_binding_locale?(binding: string, locale: string | null): void;
+  /** §9.1: the per-binding locale overrides, `{ binding: tag }`. */
+  binding_locales?(): unknown;
+  /** §9.1: every locale with formatted samples (`LocaleInfo[]`). */
+  locales?(): unknown;
+  /** §9.1: wrap an expression in a display pattern. */
+  format_expression?(inner: string, pattern: unknown): string;
+  /** §9.1: split an expression into `{ inner, pattern }`. */
+  split_expression?(src: string): unknown;
+  /** §8: snapshot each query's result as the one the document was written
+   *  from (the "before" of `row_diff`). */
+  mark_rows_applied?(): void;
+  /** §8: the row diff per query since `mark_rows_applied` (`QueryRowDiff[]`). */
+  row_diff?(opts: unknown): unknown;
+  /** Check an expression: `{ ok, error?, fields, unknownFields }`. */
+  check_expression?(src: string, query?: string | null): unknown;
+  /** §9.5: which records a condition fires on, `{ fires, total, error? }`. */
+  preview_condition?(query: string, when: string): unknown;
+  /** A per-record binding's display text for a record, without re-linking. */
+  preview_display?(binding: string, record: number): unknown;
   sync_state(binding: string): unknown;
   pin(binding: string): void;
   mark_overridden(binding: string): void;
