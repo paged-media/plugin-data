@@ -221,11 +221,15 @@ zeros and mixed number text as VARCHAR, so `number-text` agrees in full.
 | the payload survives save → JSON → load → save unchanged | `data.plugin.bundle` |
 | a second resolve and a second change report without a data change are no-ops | `data.bind.change-report` |
 | EAN-13 (every first digit) and UPC-A decode back with independent GS1 tables | `data.barcode.symbology` |
+| Code-128 (printable ASCII and digit runs that switch B↔C) decodes back | `data.barcode.symbology` |
 | QR (byte mode, level M, 1–213 bytes, so versions 1–10) decodes back with `rqrr` | `data.barcode.symbology` |
 
 QR is decoded with `rqrr`, an independent decoder (MIT OR Apache-2.0, a dev-dependency only).
 The harness was first validated on a reference matrix from python `qrcode`. Code-128 has no
-independent decoder here, because no small, permissive, pure-Rust one exists.
+small, permissive, pure-Rust decoder, so the test carries its own. It reads the bar and space
+widths, looks them up in the published ISO/IEC 15417 width table (a different form from the
+encoder's module strings), checks the mod-103 check symbol, and runs code sets A, B and C. The
+published "Wikipedia" vector anchors it, and it rejects a symbol with one module flipped.
 
 **Defects pinned** as `defect_*` tests:
 

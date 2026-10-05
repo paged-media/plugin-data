@@ -27,9 +27,9 @@
 //! - `diff(old, new)` applied to `old` gives `new` (keyed rows).
 //! - The document payload round-trips save → JSON → load → save.
 //! - Re-resolving and re-reporting without a data change is a no-op.
-//! - EAN-13 / UPC-A decode with independent symbol tables; QR decodes with
-//!   `rqrr` (a separate implementation; MIT OR Apache-2.0). Code-128 has no
-//!   independent decoder here (none that is pure Rust, permissive and small).
+//! - EAN-13 / UPC-A and Code-128 decode with independent symbol tables (the
+//!   published tables, written in another form than the encoder's); QR decodes
+//!   with `rqrr` (a separate implementation; MIT OR Apache-2.0).
 //!
 //! Defects found here are pinned by `defect_*` tests that assert today's
 //! wrong behaviour, so they fail the day the defect is fixed.
@@ -339,6 +339,19 @@ proptest! {
         let g = encode(Symbology::Qr, &payload).unwrap();
         prop_assert_eq!(decode_qr(&g), Ok(payload));
     }
+    #[test]
+    fn data_prop_code128_decodes_back__feat__data_barcode_symbology(
+        payload in prop_oneof![
+            "[ -~\\x7f]{1,40}",
+            "[0-9]{1,40}",
+            "([A-Z]{0,3}[0-9]{0,9}){1,4}",
+        ].prop_filter("non-empty", |p| !p.is_empty())
+    ) {
+        // Every printable ASCII string, and digit runs that exercise the B↔C
+        // switching (odd and even, leading, inner and trailing).
+        let g = encode(Symbology::Code128, &payload).unwrap();
+        prop_assert_eq!(decode_code128(&g), Ok(payload));
+    }
 }
 
 // ── independent decoders ────────────────────────────────────────────────────
@@ -406,6 +419,137 @@ fn decode_ean13(g: &BarcodeGeometry) -> Option<String> {
     }
     let first = PARITY.iter().position(|p| *p == parity)?;
     Some(format!("{first}{digits}"))
+}
+
+/// Code-128 from the published symbol table (ISO/IEC 15417 Table 1), written as
+/// bar/space WIDTHS (b s b s b s), not as the encoder's module strings: read
+/// each 11-module symbol's run widths, look the value up, check the weighted
+/// mod-103 check symbol, then interpret the values through code sets A, B and
+/// C (incl. the code-set switches and SHIFT).
+fn decode_code128(g: &BarcodeGeometry) -> Result<String, String> {
+    #[rustfmt::skip]
+    const WIDTHS: [&str; 106] = [
+        "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
+        "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
+        "221231", "213212", "223112", "312131", "311222", "321122", "321221", "312212", "322112", "322211",
+        "212123", "212321", "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313",
+        "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121", "313121", "211331",
+        "231131", "213113", "213311", "213131", "311123", "311321", "331121", "312113", "312311", "332111",
+        "314111", "221411", "431111", "111224", "111422", "121124", "121421", "141122", "141221", "112214",
+        "112412", "122114", "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111",
+        "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112", "421211", "212141",
+        "214121", "412121", "111143", "111341", "131141", "114113", "114311", "411113", "411311", "113141",
+        "114131", "311141", "411131", "211412", "211214", "211232",
+    ];
+    const STOP: &str = "2331112";
+    let widths = |m: &[bool]| -> String {
+        let mut out = String::new();
+        let mut run = 1;
+        for i in 1..=m.len() {
+            if i < m.len() && m[i] == m[i - 1] {
+                run += 1;
+            } else {
+                out.push((b'0' + run) as char);
+                run = 1;
+            }
+        }
+        out
+    };
+    let bits = modules_1d(g);
+    let start = bits.iter().position(|b| *b).ok_or("no bars")?;
+    let end = bits.iter().rposition(|b| *b).ok_or("no bars")? + 1;
+    let body = &bits[start..end];
+    if body.len() < 13 + 2 * 11 || (body.len() - 13) % 11 != 0 {
+        return Err(format!("{} modules is not n×11 + 13", body.len()));
+    }
+    let (symbols, stop) = body.split_at(body.len() - 13);
+    if widths(stop) != STOP {
+        return Err("no stop pattern".into());
+    }
+    let values = symbols
+        .chunks(11)
+        .map(|c| {
+            let w = widths(c);
+            WIDTHS
+                .iter()
+                .position(|p| *p == w)
+                .ok_or(format!("unknown symbol {w}"))
+        })
+        .collect::<Result<Vec<usize>, String>>()?;
+    let (check, values) = values.split_last().ok_or("no check symbol")?;
+    let sum: usize = values[0]
+        + values
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(i, v)| i * v)
+            .sum::<usize>();
+    if sum % 103 != *check {
+        return Err(format!("check {check} != {}", sum % 103));
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Set {
+        A,
+        B,
+        C,
+    }
+    let mut set = match values[0] {
+        103 => Set::A,
+        104 => Set::B,
+        105 => Set::C,
+        v => return Err(format!("{v} is not a start symbol")),
+    };
+    let mut out = String::new();
+    let mut shift = false;
+    for &v in &values[1..] {
+        let cur = if shift {
+            if set == Set::A {
+                Set::B
+            } else {
+                Set::A
+            }
+        } else {
+            set
+        };
+        shift = false;
+        match (cur, v) {
+            (Set::C, 0..=99) => out.push_str(&format!("{v:02}")),
+            (Set::C, 100) | (Set::A, 100) => set = Set::B,
+            (Set::C, 101) | (Set::B, 101) => set = Set::A,
+            (Set::A, 99) | (Set::B, 99) => set = Set::C,
+            (Set::A, 98) | (Set::B, 98) => shift = true,
+            (Set::A, 0..=63) => out.push((v as u8 + 32) as char),
+            (Set::A, 64..=95) => out.push((v as u8 - 64) as char),
+            (Set::B, 0..=95) => out.push((v as u8 + 32) as char),
+            (_, v) => return Err(format!("unsupported symbol {v} (FNC)")),
+        }
+    }
+    Ok(out)
+}
+
+/// The Code-128 decoder is not vacuous: it reads the published "Wikipedia"
+/// vector (start B, check 88) and rejects a symbol with one module flipped.
+#[test]
+fn data_code128_decoder_reads_the_published_vector__feat__data_barcode_symbology() {
+    let g = encode(Symbology::Code128, "Wikipedia").unwrap();
+    assert_eq!(decode_code128(&g).as_deref(), Ok("Wikipedia"));
+    // Start B + 9 symbols + check + stop = 11×11 + 13 modules.
+    let bits = modules_1d(&g);
+    let start = bits.iter().position(|b| *b).unwrap();
+    assert_eq!(
+        bits.iter().rposition(|b| *b).unwrap() + 1 - start,
+        11 * 11 + 13
+    );
+    // Turn one module of the third symbol dark: the widths no longer match.
+    let mut broken = g.clone();
+    let unit = 1.0 / g.modules_x as f64;
+    broken.rects.push(data_barcode::BarcodeRect {
+        x: (start + 2 * 11 + 4) as f64 * unit,
+        y: 0.0,
+        w: unit,
+        h: 1.0,
+    });
+    assert!(decode_code128(&broken).is_err());
 }
 
 /// QR through rqrr: rasterise the module grid (4 px per module) and decode.
