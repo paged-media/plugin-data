@@ -45,6 +45,8 @@ import type {
   StyleOption,
   SyncStatus,
 } from "../review";
+import { documentsDoors } from "../doors";
+import { NO_NEW_DOCUMENT_DOOR } from "../session";
 import { DiagnosticsList } from "./diagnostics";
 import { useSessionSnapshot } from "./use-session";
 
@@ -221,6 +223,7 @@ export function makeBindingsPanel(
     const [mergeRowSpacing, setMergeRowSpacing] = useState(12);
     const [mergeColSpacing, setMergeColSpacing] = useState(12);
     const [mergeKeep, setMergeKeep] = useState(true);
+    const [mergeNewDoc, setMergeNewDoc] = useState(false);
     const [mergeBlank, setMergeBlank] = useState(true);
     const [mergeMsg, setMergeMsg] = useState<string | null>(null);
 
@@ -247,6 +250,7 @@ export function makeBindingsPanel(
             : { mode: "multiple", arrange: mergeArrange, rowSpacingPt: mergeRowSpacing, columnSpacingPt: mergeColSpacing },
         removeBlankLines: mergeBlank,
         template: mergeKeep ? "keep" : "consume",
+        ...(mergeNewDoc ? { destination: "newDocument" as const } : {}),
       });
       setMergeMsg(
         r.ok
@@ -845,6 +849,22 @@ export function makeBindingsPanel(
           </label>
           <label title="Keep the template page and put the merged records on new pages after it">
             <input type="checkbox" checked={mergeKeep} onChange={(e) => setMergeKeep(e.target.checked)} /> keep template
+          </label>
+          <label
+            title={
+              documentsDoors(host)
+                ? "Copy this document, open the copy and merge into it, consuming the template (the current document is kept as it is)"
+                : NO_NEW_DOCUMENT_DOOR
+            }
+          >
+            <input
+              type="checkbox"
+              data-data-merge-new-doc
+              disabled={!documentsDoors(host)}
+              checked={mergeNewDoc}
+              onChange={(e) => setMergeNewDoc(e.target.checked)}
+            />{" "}
+            into a new document
           </label>
           <button
             type="button"
