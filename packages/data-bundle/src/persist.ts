@@ -61,10 +61,17 @@ export type CsvData = Extract<PersistedData, { format: "csv" }>;
 /** The imported formats stored as bytes (CSV and TSV are stored as text). */
 export type BinaryFormat = Exclude<ImportFormat, "csv" | "tsv">;
 
+/** The file a delimited source was imported from (shown in the Sources panel).
+ *  Optional: sessions saved before it was recorded restore without a label. */
+export interface CsvLabel {
+  fileName?: string;
+  delimiter?: "csv" | "tsv";
+}
+
 /** One imported source's data: inline, or a pointer to its own part. */
 export type PersistedData =
-  | { source: string; format: "csv"; text: string }
-  | { source: string; format: "csv"; ref: { hash: string; bytes: number } }
+  | ({ source: string; format: "csv"; text: string } & CsvLabel)
+  | ({ source: string; format: "csv"; ref: { hash: string; bytes: number } } & CsvLabel)
   | {
       source: string;
       format: BinaryFormat;

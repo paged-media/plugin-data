@@ -1077,14 +1077,14 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     for (const [id, el] of loweredInto) targets.lowered[id] = el;
     const data: PersistedData[] = [];
     for (const [source, text] of importedCsv) {
-      data.push(
-        await storeData(
-          source,
-          text,
-          (path, bytes) => host.parts.write(path, bytes),
-          knownDataParts,
-        ),
+      const stored = await storeData(
+        source,
+        text,
+        (path, bytes) => host.parts.write(path, bytes),
+        knownDataParts,
       );
+      const label = csvFileNames.get(source);
+      data.push(label ? { ...stored, fileName: label.fileName, delimiter: label.format } : stored);
     }
     for (const [source, f] of importedFiles) {
       data.push(
@@ -1932,6 +1932,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       if ("ref" in d) knownDataParts.add(`${DATA_PART_DIR}${d.ref.hash}.csv`);
       importedCsv.set(d.source, text);
       pendingCsv.set(d.source, text);
+      if (d.fileName) csvFileNames.set(d.source, { format: d.delimiter ?? "csv", fileName: d.fileName });
       if (!sourceNames.includes(d.source)) sourceNames.push(d.source);
     }
 

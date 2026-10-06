@@ -129,6 +129,31 @@ describe.skipIf(!ready && !required)(
       expect(await s2.recordCount("q")).toBe(2);
     });
 
+    it("a CSV or TSV source keeps its file name and format on reopen [data.plugin.persistence]", async () => {
+      expect(ready, "real core, DuckDB and the data-js wasm must all be available").toBe(true);
+      const mod = await loadBundleModule();
+      const h1 = await open();
+      h1.loadBundle(mod.dataBundle);
+      const s1 = mod.sessionFor(h1.host)!;
+      await s1.whenRestored();
+      const enc = new TextEncoder();
+      expect((await s1.importFile("stock.csv", enc.encode("sku,qty\nA-1,3\n"))).error).toBeUndefined();
+      expect((await s1.importFile("prices.tsv", enc.encode("sku\tprice\nA-1\t9.99\n"))).error).toBeUndefined();
+      await h1.willSave.fire();
+      const saved = await exportPaged(h1.host);
+
+      const h2 = await open(saved);
+      h2.loadBundle(mod.dataBundle);
+      const s2 = mod.sessionFor(h2.host)!;
+      await s2.whenRestored();
+      const st = s2.getState();
+      expect(st.diagnostics.filter((d) => d.level === "error")).toEqual([]);
+      expect(st.files.map((f) => [f.source, f.format, f.fileName])).toEqual([
+        ["stock", "csv", "stock.csv"],
+        ["prices", "tsv", "prices.tsv"],
+      ]);
+    });
+
     it("File ▸ Import routes a JSON file to the session; CSV/TSV/XLSX stay with the spreadsheet plugin [data.plugin.bundle]", async () => {
       expect(ready).toBe(true);
       const mod = await loadBundleModule();
