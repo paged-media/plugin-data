@@ -182,9 +182,14 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // contribute.command (editQuery), contribute.menu (Data ▸ Query…).
   // Wave 5 (Data Merge): +2 — contribute.command (mergeRecords),
   // contribute.menu (Data ▸ Merge records into the document).
+  // Object model (ADR 323/558/559): +4 — supports("contribute.objectModel@1"),
+  // contribute.objectModel, contribute.command (bindProperty), and ONE
+  // document.tree read: a document without a session part may carry its
+  // bindings in labels (an InDesign save drops parts). The document label the
+  // open already read is reused, not read again.
   const W7: Measured = onLabelled({
-    hostCalls: 33,
-    hostReads: 1,
+    hostCalls: 37,
+    hostReads: 2,
     mutates: 0,
     mutationOps: 0,
     undoSteps: null,
@@ -196,7 +201,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { hostCalls: 37, hostReads: 3 });
+  }, { hostCalls: 41, hostReads: 4 });
   it("W7 activates without booting either engine [data.perf.gates]", async () => {
     h = await openRealHost();
     let work: WorkLog | null = null;

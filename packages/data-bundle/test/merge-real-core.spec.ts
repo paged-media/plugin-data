@@ -34,7 +34,7 @@ import { createHeadlessHost, defineBundle, type HeadlessHost } from "@paged-medi
 import manifestJson from "../manifest.json";
 import { mergeRecords, pageElements, readMergeTemplate, type RecordsPerPage } from "../src/merge";
 import { documentLabelDoors, engineHasDocumentLabels } from "../src/doors";
-import { ENGINE_ANCHOR, ENGINE_PROTOCOL, REQUIRE_REAL_CORE } from "./real-core";
+import { ENGINE_ANCHOR, ENGINE_PROTOCOL, fixedFrom, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealEngine, DATA_JS_WASM } from "./real-duckdb";
 
 const LANE = fileURLToPath(new URL("../../../conformance/indesign-merge/", import.meta.url));
@@ -157,7 +157,8 @@ describe.skipIf(!ready && !REQUIRE_REAL_CORE)(
     });
 
     for (const id of BR_BETWEEN_PLACEHOLDERS) {
-      it.fails(`DEFECT core: ${id}'s template reads back with its line break inside the next placeholder [data.lower.merge-writer]`, async () => {
+      // Fixed in core 0.70 (protocol 70): the break stays between them.
+      fixedFrom(70, it)(`DEFECT core <70: ${id}'s template reads back with its line break inside the next placeholder [data.lower.merge-writer]`, async () => {
         const fx = (spec.fixtures as any[]).find((f) => f.id === id);
         const { h, host } = await openTemplate(id);
         hosts.push(h);

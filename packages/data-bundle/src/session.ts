@@ -72,7 +72,7 @@ import { commitRecordFlow } from "./flow-writer";
 import { fitRecipe, labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
 import { propertyMethods, type PropertyMethods } from "./property-session";
 import { objectsOf } from "./property-lane";
-import type { PayloadJson } from "./labels";
+import { contentPatch, type PayloadJson } from "./labels";
 import { documentLabelDoors, documentsDoors, engineHasDocumentLabels } from "./doors";
 import {
   mergeRecords as writeMerge,
@@ -1368,7 +1368,13 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     await flushPersistInternal();
     // The flush just serialised the recipe; hash the definition from that
     // copy instead of asking the engine for a second one.
-    return { binding, def: await definitionHash(binding, lastPayload), session: persistence.hash };
+    const stamp: LowerStamp = { binding, def: await definitionHash(binding, lastPayload), session: persistence.hash };
+    // ADR 559: a table's frame carries its own recipe from the start, so
+    // the save after the lowering has no label left to write.
+    if (bindingKinds.get(binding) === "table" && lastPayload) {
+      Object.assign(stamp, contentPatch(lastPayload as PayloadJson, binding) ?? {});
+    }
+    return stamp;
   }
 
   /** The content hash of one binding's definition and the query it reads, or
@@ -1850,10 +1856,15 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
    *  document's label (protocol 69) names a version other than the one the
    *  part extends — an undo or redo moved it after the part was written —
    *  then that version. */
+  /** The document label read by the last restore (ADR 559: its recipe
+   *  rebuilds a session whose part is gone) — read once per open. */
+  let openedDocLabel: unknown = undefined;
   async function labelledSession(latest: Uint8Array | null): Promise<Uint8Array | null> {
     const doors = documentLabelDoors(rawHost);
     if (!doors) return latest;
-    const named = labelledVersion(await doors.getDocumentMetadata().catch(() => null));
+    const envelope = await doors.getDocumentMetadata().catch(() => null);
+    openedDocLabel = envelope;
+    const named = labelledVersion(envelope);
     labelHash = named;
     if (!named) return latest;
     if (latest && splitBase(latest).base === named) return latest;
@@ -1894,7 +1905,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     if (!bytes) {
       // ADR 559: no session part (an InDesign save drops it) — the recipe
       // comes back from the document's labels; only the data is gone.
-      if (!reload && (await props.restoreLabels())) {
+      if (!reload && (await props.restoreLabels(openedDocLabel))) {
         state.status = "ready";
         state.message = `Restored ${bindingIds.length} binding(s) from the document's labels — re-link ${relinkSources.length} data source(s).`;
         emit();

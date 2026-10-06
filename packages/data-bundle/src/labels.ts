@@ -177,6 +177,40 @@ function extraOf(b: BindingJson, facts: HostFacts): unknown {
 
 const sameId = (a: ElementId, b: ElementId) => a.id === b.id;
 
+type Patch = { oid: string; bind: BindingJson[]; queries: unknown[]; sources: unknown[]; extra: Record<string, unknown> };
+
+/** Add one binding to an element's patch: the binding (target made
+ *  relative), the query it reads, the sources that query names. */
+function addToPatch(
+  p: Patch,
+  b: BindingJson,
+  queries: ReadonlyMap<string, { id: string; [k: string]: unknown }>,
+  sources: readonly { id: string; [k: string]: unknown }[],
+): void {
+  p.bind.push(relative(b, p.oid));
+  const q = b.query ? queries.get(b.query) : undefined;
+  if (q && !p.queries.includes(q)) p.queries.push(q);
+  // The sources a query reads: every source whose name its SQL mentions.
+  const sql = typeof q?.sql === "string" ? q.sql : "";
+  for (const s of sources) {
+    if (!p.sources.includes(s) && new RegExp(`\\b${s.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(sql)) {
+      p.sources.push(s);
+    }
+  }
+}
+
+/** The persistence keys a lowering writes into the label of the frame it
+ *  creates (a table): the same patch a label sync would compute, so the
+ *  save after it has nothing to add (no extra undo step). */
+export function contentPatch(payload: PayloadJson, binding: string): Record<string, unknown> | null {
+  const b = (payload.bindings ?? []).find((x) => x.id === binding);
+  if (!b) return null;
+  const p: Patch = { oid: mintOid(), bind: [], queries: [], sources: [], extra: {} };
+  addToPatch(p, b, new Map((payload.queries ?? []).map((q) => [q.id, q])), payload.sources ?? []);
+  const { extra: _extra, ...rest } = p;
+  return rest;
+}
+
 /** What a label sync writes: the ops, and what did not fit. */
 export interface LabelPlan {
   ops: Mutation[];
@@ -226,19 +260,9 @@ export function planLabels(
       entry = { element: current.element, patch: { oid, bind: [], queries: [], sources: [], extra: {} } };
       patches.set(el.id, entry);
     }
-    const p = entry.patch as { oid: string; bind: BindingJson[]; queries: unknown[]; sources: unknown[]; extra: Record<string, unknown> };
-    p.bind.push(relative(b, p.oid));
-    const q = b.query ? queries.get(b.query) : undefined;
-    if (q && !p.queries.includes(q)) p.queries.push(q);
-    // The sources a query reads: every source whose name its SQL mentions.
-    const sql = typeof q?.sql === "string" ? q.sql : "";
-    for (const s of sources) {
-      if (!p.sources.includes(s) && new RegExp(`\\b${s.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(sql)) {
-        p.sources.push(s);
-      }
-    }
+    addToPatch(entry.patch as Patch, b, queries, sources);
     const extra = extraOf(b, facts);
-    if (extra !== undefined) p.extra[b.id] = extra;
+    if (extra !== undefined) (entry.patch as Patch).extra[b.id] = extra;
   }
   for (const e of elements) {
     if (typeof e.element.id !== "string") continue;
@@ -275,6 +299,7 @@ export interface RestoredRecipe {
   /** The host facts, with every target pointing at today's ids. */
   facts: {
     hostOids: Map<string, string>;
+    hostElements: Map<string, ElementId>;
     visibility: Map<string, { elementId: string; kind?: string }>;
     image: Map<string, { elementId: string; fit?: string }>;
     barcode: Map<string, { elementId: string }>;
@@ -305,6 +330,7 @@ export function restoreFromLabels(
   };
   const facts: RestoredRecipe["facts"] = {
     hostOids: new Map(),
+    hostElements: new Map(),
     visibility: new Map(),
     image: new Map(),
     barcode: new Map(),
@@ -331,9 +357,12 @@ export function restoreFromLabels(
     }
     for (const b0 of d.bind as BindingJson[]) {
       let b: BindingJson = b0;
-      if (b.kind === "property" && b.target === "host" && oid) {
-        b = { ...b, target: { selector: oidSelector(oid) } };
-        facts.hostOids.set(b.id, oid);
+      if (b.kind === "property") {
+        if (b.target === "host" && oid) {
+          b = { ...b, target: { selector: oidSelector(oid) } };
+          facts.hostOids.set(b.id, oid);
+        }
+        facts.hostElements.set(b.id, e.element);
       } else if (b.kind === "visibility" || b.kind === "barcode") {
         b = { ...b, target: raw };
         if (b.kind === "visibility") {

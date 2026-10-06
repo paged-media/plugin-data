@@ -7,7 +7,7 @@
 
 import type { BundleHost, ElementId, PropertySchema } from "@paged-media/plugin-api";
 
-import { DATA_LABEL_KEY, labelData, oidSelector, type PropertyApply } from "../../data-host-model/src";
+import { DATA_LABEL_KEY, labelData, oidOfSelector, oidSelector, type PropertyApply } from "../../data-host-model/src";
 import type { DataEngineLike } from "./engine";
 import {
   labelledElements,
@@ -207,11 +207,15 @@ export function propertyMethods(ctx: PropertyContext) {
 
   /** Rebuild the session from the labels (the part is gone). `true` when
    *  the document carried bindings. */
-  async function restoreLabels(): Promise<boolean> {
+  async function restoreLabels(documentLabel?: unknown): Promise<boolean> {
     const elements = labelledElements(await tree());
     let recipe: PayloadJson | null = null;
     try {
-      const doc = (await host.document.getDocumentMetadata?.()) as { data?: { recipe?: PayloadJson } } | null;
+      // The open already read the document label (labelledSession); read it
+      // here only when it did not.
+      const doc = (documentLabel !== undefined ? documentLabel : await host.document.getDocumentMetadata?.()) as {
+        data?: { recipe?: PayloadJson };
+      } | null;
       recipe = doc?.data?.recipe ?? null;
     } catch {
       recipe = null;
@@ -248,6 +252,7 @@ export function propertyMethods(ctx: PropertyContext) {
     }
     for (const q of restored.payload.queries ?? []) ctx.queries.set(q.id, { id: q.id, sql: String(q.sql ?? "") });
     for (const [id, oid] of restored.facts.hostOids) ctx.hostOids.set(id, oid);
+    for (const [id, el] of restored.facts.hostElements) ctx.hostElements.set(id, el);
     for (const [id, t] of restored.facts.visibility) ctx.visibilityTargets.set(id, t);
     for (const [id, t] of restored.facts.image) ctx.imageTargets.set(id, t);
     for (const [id, t] of restored.facts.barcode) ctx.barcodeTargets.set(id, t);
@@ -315,14 +320,24 @@ export function propertyMethods(ctx: PropertyContext) {
       // another surface already gave it one).
       let selector = spec.target;
       const element = addresses.length === 1 ? elementOfAddress(addresses[0]!) : null;
-      if (element && !durable(spec.target)) {
+      const givenOid = oidOfSelector(spec.target);
+      if (element && (givenOid || !durable(spec.target))) {
+        // A single page item by a raw id (or by its oid already) is carried
+        // by its own label and targeted by its oid (shared with
+        // `x-paged:oid` when another surface gave it one).
         const node = findNode(await tree(), element.id as string);
         const ours = labelData(node?.pluginMetadata?.find((m) => m.key === DATA_LABEL_KEY)?.value);
-        const oid = (typeof ours?.oid === "string" ? ours.oid : null) ?? sharedOid(node?.pluginMetadata) ?? mintOid();
+        const oid = givenOid ?? (typeof ours?.oid === "string" ? ours.oid : null) ?? sharedOid(node?.pluginMetadata) ?? mintOid();
         selector = oidSelector(oid);
         ctx.hostOids.set(id, oid);
         ctx.hostElements.set(id, element);
+      } else if (element) {
+        // A durable selector (a name, a label) naming one page item: its
+        // label carries the binding, the selector stays as written.
+        ctx.hostOids.delete(id);
+        ctx.hostElements.set(id, element);
       } else {
+        // Several objects, or not a page item: the document label carries it.
         ctx.hostOids.delete(id);
         ctx.hostElements.delete(id);
       }
