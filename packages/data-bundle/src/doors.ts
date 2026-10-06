@@ -1,10 +1,7 @@
 // The engine-protocol-69 doors this bundle uses when the host has them, and
-// the checks that say whether it does.
-//
-// The pinned contract (plugin-api 0.2.40-canary.0) does not type them yet, so
-// the shapes below are a LOCAL copy of what plugin-sdk branch
-// `data/protocol-69` (0.2.41-canary.0) adds. Remove this typing once 0.2.41 is
-// pinned and read the doors off `BundleHost` instead.
+// the checks that say whether it does. The types come from the contract
+// (plugin-api 0.2.41); the checks stay, because a host or engine older than
+// protocol 69 still loads this bundle.
 //
 // Every consumer works on both sides: with the door, the protocol-69 path;
 // without it, what the bundle did before. A check never costs a host call when
@@ -20,35 +17,19 @@
 // | `text.measureStrings`                  | `typeof` + `text.measureStrings@1`            | one `measureString` per word       |
 // | in-batch page handles (`$h:` page ids) | a v69 engine (as the document label)          | pages, then content: 2 undo steps  |
 
-import type { BundleHost, MutationOutcome, PluginMetadataEnvelope } from "@paged-media/plugin-api";
+import type { BundleHost, DocumentsSurface, TextMetrics } from "@paged-media/plugin-api";
 
 /** `host.document` with the protocol-69 label doors. */
-export interface DocumentLabelDoors {
-  getDocumentMetadata(): Promise<PluginMetadataEnvelope | null>;
-  setDocumentMetadata(envelope: PluginMetadataEnvelope | null): Promise<MutationOutcome>;
-}
+export type DocumentLabelDoors = Pick<BundleHost["document"], "getDocumentMetadata" | "setDocumentMetadata">;
 
 /** `host.documents` (D-26). */
-export interface DocumentsDoors {
-  exportPaged(): Promise<Uint8Array>;
-  open(
-    bytes: Uint8Array,
-    options?: { name?: string },
-  ): Promise<{ opened: true; pageIds: string[] } | { opened: false; reason: "declined" }>;
-}
+export type DocumentsDoors = Pick<DocumentsSurface, "exportPaged" | "open">;
 
 /** One measured string (the `TextMetrics` the host answers). */
-export interface MeasuredText {
-  advance: number;
-}
+export type MeasuredText = TextMetrics;
 
 /** `host.text.measureStrings` (D-27). */
-export type MeasureStrings = (
-  family: string,
-  style: string | null,
-  texts: readonly string[],
-  sizePt: number,
-) => Promise<MeasuredText[]>;
+export type MeasureStrings = BundleHost["text"]["measureStrings"];
 
 function supports(host: BundleHost, feature: string): boolean {
   try {

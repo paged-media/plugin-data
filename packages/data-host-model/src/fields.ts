@@ -67,7 +67,7 @@ export function insertFieldMutation(
       storyId,
       offset,
       field: { placeholder: { plugin: FIELD_PLUGIN, key, value: value ?? undefined } },
-      // Typed by plugin-api 0.2.41 (protocol 69); 0.2.40 lacks the field.
+      // Typed since plugin-api 0.2.41 (protocol 69); an older engine ignores it.
       ...(contentOffset !== undefined ? { contentOffset } : {}),
     },
   } as Mutation;

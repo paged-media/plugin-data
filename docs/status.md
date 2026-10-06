@@ -1,9 +1,8 @@
 # Status
 
-What `paged.data` ships and what it does not, read from the code on branch
-`hardening/wave-0-gates` at `9077269` (2026-10-06; package version 0.1.0-canary.10, not yet
-published; the newest published version is 0.1.0-canary.9). The 2026-10-05 round of work up
-to the engine batch is on that branch; its outcome is summarised at the end of
+What `paged.data` ships and what it does not, read from the code on `main` (2026-10-06;
+package version 0.1.0-canary.10, built against core v0.69.0 and plugin-api/plugin-sdk
+0.2.41-canary.0). The 2026-10-05 round of work is on `main`; its outcome is summarised at the end of
 [`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). How
 the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
 of work, with file and line references, is
@@ -112,8 +111,8 @@ of work, with file and line references, is
 
 ## Limits of what is shipped
 
-- **Saving the session follows undo only on engine protocol 69** (not yet released;
-  built and feature-detected, `src/doors.ts`, `src/doc-label.ts`). With the document-label
+- **Saving the session follows undo only on engine protocol 69** (core v0.69.0;
+  feature-detected, `src/doors.ts`, `src/doc-label.ts`). With the document-label
   doors each session version is written once as `sessions/<hash>.json` and the document's
   own label (`setDocumentMetadata`, undoable) names the live one. The label rides the batch
   of the document write that made the change (a lower, a field refresh, a merge), so both
@@ -123,10 +122,10 @@ of work, with file and line references, is
   takes the label back reloads the version it names without rebooting either engine (DuckDB
   keeps its tables; a source whose saved data differs is loaded again). Data parts are then
   never collected (an undo can bring back a session that names them), and old versions are
-  kept. Verified on a local protocol-69 build (`test/protocol69-real-core.spec.ts`); the
-  count budgets carry a protocol-69 variant (`onLabelled`, `test/perf/harness.ts`): a write
-  from data carries one more op and first writes the session change it is labelled with. On the published engine (68) and contract
-  (0.2.40) container parts take no part in undo and defining a binding is not a document
+  kept. Verified on the v0.69.0 engine (`test/protocol69-real-core.spec.ts`); the count
+  budgets carry a protocol-69 variant (`onLabelled`, `test/perf/harness.ts`): a write from
+  data carries one more op, the label. On an engine or host older than protocol 69 container
+  parts take no part in undo and defining a binding is not a document
   change: what a binding writes undoes as usual, the session part does not.
 - **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
   the Data query panel is used by bindings defined through the session or by its id.
@@ -184,12 +183,11 @@ of work, with file and line references, is
   `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" plans every
   variable first and places them in one batch, so 20 variables are one mutate and one undo
   step (budget W5, was 20); a batch core refuses falls back to one mutate per variable.
-- **Engine fixes that protocol 69 brings** (verified on a local build of core
-  `data/protocol-69`): typing at a field's edge lands beside the field, and undoing a
+- **Engine fixes that protocol 69 brings** (core v0.69.0): typing at a field's edge lands beside the field, and undoing a
   `deleteRange` puts its runs and fields back. Both stay pinned as defects against 68
   (`fixedFrom(69, it)` in `test/real-core.ts`). The IDML import's paragraph mark between
-  adjacent placeholders (D-25) is fixed in plugin-publish branch `data/br-between-sources`
-  but not yet in core's import pin, so its pin stays.
+  adjacent placeholders (D-25) is fixed in plugin-publish `main` (29710d1) but not yet in
+  core's import pin, so its pin stays.
 - **Fields at the caret.** A field placed at the user's caret sends the caret both as
   `offset` and as `insertField.contentOffset`: an engine on protocol 69 converts the caret
   unit and places it right in any paragraph; an older engine ignores `contentOffset` and the

@@ -106,12 +106,21 @@ jobs:
       # The TS suite against the wasm built above (wasm-fresh.spec.ts proves
       # it is the one these sources build) and the DuckDB vendored above;
       # the REQUIRE_* envs turn every "artifact missing" skip into a failure.
+      # The DuckDB browser lane (test/duckdb-browser.spec.ts) is required
+      # under REQUIRE_REAL_DUCKDB: the runner's preinstalled Chrome, as in
+      # vitest.yml.
+      - name: browser for the DuckDB browser lane (fail, never skip)
+        run: |
+          CHROME=$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)
+          test -n "$CHROME"
+          echo "PAGED_CHROMIUM=$CHROME" >> "$GITHUB_ENV"
       - name: test
         run: node scripts/check-contract-imports.mjs && pnpm -r typecheck && pnpm -r test
         env:
           REQUIRE_REAL_ENGINE: "1"
           REQUIRE_REAL_DUCKDB: "1"
           REQUIRE_REAL_CORE: "1"
+          REQUIRE_REAL_BROWSER: "1"
       - run: pnpm -r build
       - name: stamp bin/PACKAGE_HASH (read by the next run's bump check)
         run: node scripts/package-hash.mjs --stamp
