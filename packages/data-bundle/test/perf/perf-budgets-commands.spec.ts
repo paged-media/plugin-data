@@ -143,8 +143,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // lock is boot cost (LOCKDOWN_SQL in bootDuckDB). duckQueries 2 → 1.
   // Wave 5 (update in place): +1 read — document.tree, to find a table this
   // binding lowered before and swap it inside its own frame.
+  // Settled before counting (the setup's debounced save no longer lands in
+  // the command): -1 parts.write.
   const W1_LOWER: Measured = onLabelled({
-    hostCalls: 8,
+    hostCalls: 7,
     hostReads: 3,
     mutates: 1,
     mutationOps: 1506,
@@ -165,6 +167,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     const engine = await bootCountedEngine();
     const d = await sharedDuck();
     const s = await sessionOver(host, engine, d);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
 
     let t0 = performance.now();
@@ -182,6 +187,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
       { header: "Price", expr: "CURRENCY(price)" },
     ]);
     const mark = await undoMark(h);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
     t0 = performance.now();
     await s.lowerAll();
@@ -260,6 +268,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     expect((await ourFields(h)).map((f) => f.key)).toEqual(Array.from({ length: N }, (_, i) => `v${i}`));
 
     const mark = await undoMark(h);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
     const t0 = performance.now();
     const written = await s.refreshFields();
@@ -325,6 +336,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     await s.previewRecord("v_name", 0); // places the field once
 
     const mark = await undoMark(h);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
     const t0 = performance.now();
     for (let r = 1; r <= 20; r++) await s.previewRecord("v_name", r % 20);
@@ -350,8 +364,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // Wave 4 (persistence): +1 parts.write, +1 log; +1 payload +1 sync_report to build the session part.
   // Wave 5 (update in place): +1 read — document.tree, to find the previous
   // symbol's modules by their label and remove them in the same batch.
+  // Settled before counting (the setup's debounced save no longer lands in
+  // the command): -1 parts.write.
   const W4: Measured = onLabelled({
-    hostCalls: 9,
+    hostCalls: 8,
     hostReads: 5,
     mutates: 1,
     mutationOps: 673,
@@ -380,6 +396,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     await s.refreshData();
 
     const mark = await undoMark(h);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
     const t0 = performance.now();
     await s.lowerBinding("bc");
@@ -445,6 +464,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     for (let i = 0; i < 20; i++) s.addVariableBinding(`v${i}`, "anchor", "q1", `CONCAT(sku, " #${i}")`);
 
     const mark = await undoMark(h);
+    // A save the setup scheduled (debounced) must land before counting, or
+    // a slow runner counts it against the command.
+    await s.flushPersist();
     resetAll(work, engine, d);
     const t0 = performance.now();
     await s.lowerAll();

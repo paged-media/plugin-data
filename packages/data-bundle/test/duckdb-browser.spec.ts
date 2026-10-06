@@ -24,9 +24,10 @@ beforeAll(async () => {
   lane = r.lane;
   why = r.error ?? "";
 }, 60_000);
+// Closing Chromium can outlast vitest's 10 s default on a loaded machine.
 afterAll(async () => {
   await lane?.close();
-});
+}, 30_000);
 
 const REQUIRED = REQUIRE_REAL_BROWSER || REQUIRE_REAL_DUCKDB;
 
