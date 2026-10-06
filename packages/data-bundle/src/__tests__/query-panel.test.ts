@@ -97,7 +97,7 @@ beforeEach(() => {
 });
 
 describe("data query panel [data.query.seam]", () => {
-  it("builders write SQL from the source's columns; preview shows the grid [data.query.seam]", async () => {
+  it("builders write SQL from the source's columns; preview shows the grid [data.query.seam] [data.query.panel]", async () => {
     const previews: [string, number | undefined][] = [];
     const preview: QueryPreview = {
       columns: [
@@ -158,7 +158,7 @@ describe("data query panel [data.query.seam]", () => {
     expect(heads).toEqual([["sku", "VARCHAR"], ["price", "DOUBLE"]]);
   });
 
-  it("a refused or failing query shows DuckDB's class and position; a good one saves under its id [data.query.seam]", async () => {
+  it("a refused or failing query shows DuckDB's class and position; a good one saves under its id [data.query.seam] [data.query.panel]", async () => {
     const saves: [string, string][] = [];
     let verdict: unknown = { kind: "Binder", message: 'column "nope" not found', line: 2, column: 3 };
     const session = stubSession(

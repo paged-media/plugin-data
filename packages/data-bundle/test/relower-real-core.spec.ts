@@ -98,7 +98,7 @@ describe.skipIf(!RUN_BUDGETS)("re-lower updates in place, real core [data.lower.
     expect((await polygons(h!)).length - before).toBe(once);
   });
 
-  it("a record flow becomes frames on added pages, and a re-lower replaces them [data.lower.relower-in-place]", async () => {
+  it("a record flow becomes frames on added pages, and a re-lower replaces them [data.lower.relower-in-place] [data.lower.recordflow-writer]", async () => {
     const s = await session(productCsv(150));
     s.defineRecordFlow("rf", "q", [{ expr: "sku" }, { label: "Price: ", expr: "price" }]);
     await s.lowerBinding("rf");
