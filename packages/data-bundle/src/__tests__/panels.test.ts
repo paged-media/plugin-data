@@ -112,6 +112,37 @@ describe("bindings panel [data.bind.authoring]", () => {
     expect(expr).toBe("unit_price");
   });
 
+  it("\"Bind to data…\" completes the editor's draft into a property binding [data.bind.property]", async () => {
+    const calls: unknown[][] = [];
+    let draft: unknown = { selector: "rectangle:u9", path: "frameFillColor", schema: '{"path":"frameFillColor","type":{"kind":"color"}}' };
+    const session = stubSession(
+      {
+        getPropertyDraft: () => draft as never,
+        setPropertyDraft: (d: unknown) => void (draft = d),
+        addPropertyBinding: async (...a: unknown[]) => (calls.push(a), { ok: true }),
+        applyProperties: async () => ({ applied: 1, undoSteps: 1, skipped: {}, written: {}, calls: 2 }),
+      } as never,
+      { queries: ["q"] },
+    );
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel(host, session);
+    let tree = render(Panel);
+    expect(text(tree.find((e) => "data-data-bind-property" in e.props))).toContain("frameFillColor");
+    (tree.find((e) => "data-data-bind-property-expr" in e.props)!.props.onChange as (e: unknown) => void)({ target: { value: "tint" } });
+    tree = render(Panel);
+    await (tree.find((e) => "data-data-bind-property-define" in e.props)!.props.onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).toEqual({
+      target: "rectangle:u9",
+      path: "frameFillColor",
+      query: "q",
+      expr: "tint",
+      schema: '{"path":"frameFillColor","type":{"kind":"color"}}',
+    });
+    expect(draft).toBeNull();
+  });
+
   it("shows the session's refresh/binding diagnostics [data.plugin.bundle]", async () => {
     const session = stubSession(
       {},

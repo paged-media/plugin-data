@@ -191,6 +191,71 @@ const mono: CSSProperties = {
 
 const row: CSSProperties = { display: "flex", gap: "var(--space-2, 8px)", flexWrap: "wrap" };
 
+/** "Bind to data…" (ADR 558): the editor names the object and the property;
+ *  this asks for the query and the expression, then defines the binding. */
+function PropertyDraftRow(props: {
+  session: DataSourceSession;
+  queries: readonly string[];
+  onDone: () => void;
+}): ReactElement | null {
+  const { session, queries, onDone } = props;
+  const draft = session.getPropertyDraft?.() ?? null;
+  const [query, setQuery] = useState("");
+  const [expr, setExpr] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  if (!draft) return null;
+  const bind = async () => {
+    const q = query || queries[0];
+    if (!q || !expr.trim()) {
+      setMsg("pick a query and write an expression");
+      return;
+    }
+    const id = `${draft.path}-${Date.now().toString(36)}`;
+    const r = await session.addPropertyBinding(id, {
+      target: draft.selector,
+      path: draft.path,
+      query: q,
+      expr: expr.trim(),
+      ...(draft.schema ? { schema: draft.schema } : {}),
+    });
+    setMsg(r.ok ? null : (r.reason ?? "refused"));
+    if (r.ok) {
+      session.setPropertyDraft(null);
+      await session.applyProperties({ ids: [id] });
+    }
+    onDone();
+  };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }} data-data-bind-property>
+      <span>
+        Bind <code>{draft.path}</code> of <code>{draft.selector}</code> to
+      </span>
+      <select data-data-bind-property-query value={query} onChange={(e) => setQuery(e.target.value)}>
+        {queries.map((q) => (
+          <option key={q} value={q}>
+            {q}
+          </option>
+        ))}
+      </select>
+      <input
+        data-data-bind-property-expr
+        type="text"
+        value={expr}
+        placeholder="expression, e.g. MM(width) or tint"
+        onChange={(e) => setExpr(e.target.value)}
+        style={{ width: 200 }}
+      />
+      <button type="button" data-data-bind-property-define onClick={() => void bind()}>
+        Bind
+      </button>
+      <button type="button" onClick={() => (session.setPropertyDraft(null), onDone())}>
+        Cancel
+      </button>
+      {msg && <span data-data-bind-property-msg>{msg}</span>}
+    </div>
+  );
+}
+
 export function makeBindingsPanel(
   host: BundleHost,
   session: DataSourceSession,
@@ -633,6 +698,13 @@ export function makeBindingsPanel(
 
     return (
       <div style={wrap}>
+        <PropertyDraftRow session={session} queries={snapshot.queries} onDone={refresh} />
+        {(snapshot.relink ?? []).length > 0 && (
+          <div style={note} data-data-relink>
+            Re-link data: {(snapshot.relink ?? []).join(", ")} — the bindings came back from the
+            document&apos;s labels, the data did not (import the file again in Data sources).
+          </div>
+        )}
         <div style={row} data-data-bind-author>
           <select
             data-data-bind-kind
