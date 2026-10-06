@@ -59,7 +59,7 @@ vi.mock("../query/duckdb", () => ({
       return { schema: { fields: [] }, columns: [], row_count: 0 };
     },
     async rows() {
-      // json_serialize_sql of a plain SELECT over the `feed` table.
+      // Not the guard any more (it asks DuckDB nothing); kept for older callers.
       const ast = {
         error: false,
         statements: [{ node: { from_table: { type: "BASE_TABLE", table_name: "feed", schema_name: "", catalog_name: "" } } }],

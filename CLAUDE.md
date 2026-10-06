@@ -57,8 +57,10 @@ The ENGINE is far ahead of what a user can reach from the panels:
   (`src/relower.ts`). SOURCES + QUERY (wave 6): local import of CSV/TSV/JSON/Parquet/XLSX
   (XLSX via `data-xlsx`/calamine — DuckDB-WASM 1.29.0 has no offline reader),
   saved with the document; a Data query panel (SQL + builders + preview);
-  every query passes a DuckDB-parser guard (`src/query/sql.ts`: one SELECT over
-  source tables, no file/URL reads); refresh policies act (`src/refresh.ts`).
+  every query passes a lexer allow-list guard (`src/query/sql.ts`: one SELECT over
+  source tables, no file/URL reads; asks DuckDB nothing — `json_serialize_sql`
+  trapped in the browser worker) plus `lock_configuration` at DuckDB boot;
+  `test/duckdb-browser.spec.ts` is the real-browser lane (`REQUIRE_REAL_BROWSER=1`); refresh policies act (`src/refresh.ts`).
   Remote sources fetch only consented origins AND only origins the editor
   build lists (editor ADR 218, `PAGED_DATA_ORIGINS`; RFI D-03 residual).
   Still not built: SQLite/DB-attach execution (sqlite_scanner cannot open

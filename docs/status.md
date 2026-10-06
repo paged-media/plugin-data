@@ -34,9 +34,21 @@ of work, with file and line references, is
   diagnostics (error class, line and column in the query as written), filter, sort and group
   builders that write SQL into it, a preview grid of the first 50 rows as DuckDB prints them,
   and saving under a query id. Every query, typed or restored from a document, passes a guard
-  built on DuckDB's own parser: exactly one SELECT over source tables, with no file or URL
-  table functions and no `'https://…'` table names. A failing query is a diagnostic for that
-  query; the refresh carries on with the others.
+  (`src/query/sql.ts`): a conservative lexer that reads strings, quoted names and comments
+  the way DuckDB does, then an allow-list — exactly one statement with balanced brackets,
+  starting with SELECT, WITH, FROM, VALUES or `(`, no statement keyword anywhere, and every
+  table position a source table, a subquery or `range` / `generate_series` / `unnest`. No
+  file or URL table function and no `'https://…'` or `"file.csv"` table name gets through.
+  The guard asks DuckDB nothing. The engine adds `SET lock_configuration = true` at boot, so
+  no statement can change a DuckDB setting. A failing query is a diagnostic for that query;
+  the refresh carries on with the others. The first guard (wave 6) parsed with DuckDB's
+  `json_serialize_sql`, which lives in the json extension: DuckDB autoloaded it from
+  extensions.duckdb.org, the editor's CSP refused that, and the worker trapped on every
+  refresh. `test/duckdb-browser.spec.ts` runs the shipped worker in headless Chromium under
+  the editor's headers (CI: `REQUIRE_REAL_BROWSER=1`), and both lanes prove the same
+  security matrix (`test/guard-matrix.ts`). `enable_external_access = false` was measured
+  and not used: it is global and one-way, and it also refuses DuckDB's readers over the
+  registered import buffers, so every import after the first query would fail.
 - **Refresh policy** (since wave 6, `src/refresh.ts`). Each source has one: manual; on open
   (the queries re-run when the document opens, and a remote source is fetched again only with
   a remembered grant); every N seconds (at least 15) for a remote source, only while its
@@ -224,3 +236,4 @@ Measured on 2026-10-05 against DuckDB-WASM 1.29.0 (engine v1.1.1), the shipped E
 | Contested importer extensions go to the first registrant, with no per-file choice | host UI | CSV/TSV/XLSX import stays in the Sources panel |
 | A page CSP cannot follow runtime consent grants; following them needs a fetch door outside the page's policy (`host.network.fetch` plus a broker origin or proxy) | no plugin door + host UI | remote sources reach only origins a deployment lists (editor ADR 218) |
 | A local file cannot be watched from a browser page | platform | file sources refresh on open or by importing again; interval is refused |
+| The shipped eh build has no parquet or json extension: DuckDB autoloads them from extensions.duckdb.org. The editor's CSP (connect-src 'self') refuses that, and the worker traps ("unreachable") on a Parquet import; JSON and XLSX imports (`read_json`) take the same path. Node lanes pass because they fetch the extension from the internet | engine limitation (packaging) + host CSP | DEFECT pinned (`it.fails`) in `test/duckdb-browser.spec.ts`. Fix options: serve the two extension files from the bundle's `bin/` and point `custom_extension_repository` at it, or read these formats outside DuckDB as XLSX already is |
