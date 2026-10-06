@@ -13,14 +13,14 @@ time the data changes.
 
 The crate documentation states the choice: "Our own minimal, publishing-focused expression
 language — NOT an Excel-grammar formula dialect". It shares the value and format vocabulary
-with the spreadsheet plugin, "never its code" (`data-expr/src/lib.rs:35-37`).
+with the spreadsheet plugin, "never its code" (`data-expr/src/lib.rs:21-23`).
 The repository does not record why.
 
 For the stored form a reason is recorded. A function call in the parsed tree holds a
 `FnId`, an index into a table generated at build time from the function registry. The
 module comment says the tree is never serialized and the document carries source text, so
 that a registry change which re-indexes `FnId` does not break a saved document
-(`data-core/src/expr.rs:37-42`).
+(`data-core/src/expr.rs:23-28`).
 
 ## Decision
 
@@ -45,22 +45,22 @@ string that is parsed again when it is evaluated.
 
 ## Evidence
 
-- `data-expr/src/lib.rs:33-50` — the crate statement; the crate depends only on `data-core`
-- `data-expr/src/lexer.rs:33-37` — the token set; `AND`/`OR`/`NOT` are functions
-- `data-expr/src/parser.rs:143-159`, `:181-196` — identifier handling (call, literal, field)
+- `data-expr/src/lib.rs:19-36` — the crate statement; the crate depends only on `data-core`
+- `data-expr/src/lexer.rs:19-23` — the token set; `AND`/`OR`/`NOT` are functions
+- `data-expr/src/parser.rs:129-145`, `:181-196` — identifier handling (call, literal, field)
   and the operator precedences
-- `data-core/src/expr.rs:37-50` — the tree is never serialized; `FnId` is never persisted
-- `data-core/src/binding.rs:65-73`, `:102-106`, `:236-241`, `:393-399` — expressions as
+- `data-core/src/expr.rs:23-36` — the tree is never serialized; `FnId` is never persisted
+- `data-core/src/binding.rs:51-59`, `:102-106`, `:236-241`, `:393-399` — expressions as
   `String` in `Binding::Variable`, `Binding::Rule`, `ColumnBind` and `TemplateField`
-- `data-expr/src/lib.rs:92-101` — `eval_str`: parse failures become error values
-- `data-expr/src/ctx.rs:33-37`, `data-core/src/model.rs:289-294` — injected `today`; the
+- `data-expr/src/lib.rs:78-87` — `eval_str`: parse failures become error values
+- `data-expr/src/ctx.rs:19-23`, `data-core/src/model.rs:275-280` — injected `today`; the
   locale affects display only
-- `data-bind/src/lib.rs:673` — the resolver evaluates a variable binding through `eval_str`
+- `data-bind/src/lib.rs:659` — the resolver evaluates a variable binding through `eval_str`
 
 ## Alternatives considered
 
 An Excel-grammar formula dialect is named and declined in the crate documentation
-(`data-expr/src/lib.rs:35-36`). No reason is given there.
+(`data-expr/src/lib.rs:21-22`). No reason is given there.
 
 ## Consequences
 
@@ -70,17 +70,17 @@ expressions that use it into `#NAME`. A new function is a new registry row (ADR 
 
 The language has no bracketed or quoted field syntax. A column whose name is not a plain
 identifier cannot be referenced; the field-mapping suggestions mark such a column
-`mappable: false` with an empty expression (`data-bind/src/mapping.rs:44-47`, `:88-97`).
+`mappable: false` with an empty expression (`data-bind/src/mapping.rs:30-33`, `:88-97`).
 `is_field_ident` rejects only the upper-case spellings `TRUE`, `FALSE` and `NULL`
-(`data-expr/src/lib.rs:89`), while the parser treats those words as literals in any letter
-case (`data-expr/src/parser.rs:153`). The test covers the upper-case spellings only
-(`data-conformance/tests/mapping.rs:112-114`).
+(`data-expr/src/lib.rs:75`), while the parser treats those words as literals in any letter
+case (`data-expr/src/parser.rs:139`). The test covers the upper-case spellings only
+(`data-conformance/tests/mapping.rs:98-100`).
 
-Two comments say `data-bind` caches the parsed form (`data-core/src/expr.rs:35`,
-`data-core/src/binding.rs:36`). It does not: every call site in `data-bind/src/lib.rs` goes
+Two comments say `data-bind` caches the parsed form (`data-core/src/expr.rs:21`,
+`data-core/src/binding.rs:22`). It does not: every call site in `data-bind/src/lib.rs` goes
 through `eval_str`, which parses the source on each evaluation. The tree also defines
 `BinOp::And`, `BinOp::Or` and `UnaryOp::Not`, which the evaluator implements
-(`data-expr/src/eval.rs:72`, `:103-110`) and the parser never builds.
+(`data-expr/src/eval.rs:58`, `:103-110`) and the parser never builds.
 
 ## Related
 

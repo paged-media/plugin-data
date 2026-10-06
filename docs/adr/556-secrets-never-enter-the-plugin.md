@@ -14,7 +14,7 @@ until consented)"; credentials are never serialized into the document payload
 
 For databases the code adds: "The plugin NEVER holds the secret." The plugin knows the
 engine, a non-secret target and a reference; the host is to resolve the reference and
-build the connection on its side (`data-sources/src/lib.rs:343-351`).
+build the connection on its side (`data-sources/src/lib.rs:329-337`).
 
 ## Decision
 
@@ -39,14 +39,14 @@ happens after the host has recorded consent for that origin.
 
 ## Evidence
 
-- `data-core/src/model.rs:71-126` — the `Remote` and `DbAttach` shapes; `dsn` deprecated
-- `data-sources/src/remote.rs:33-47`, `:68-89` — it "NEVER fetches"; userinfo is rejected
-- `data-sources/src/lib.rs:114-140`, `:164-181` — `authorize` and `build_manifest`
-- `data-sources/src/lib.rs:368-414`, `:425-459` — `AttachPlan`, `redact_credentials`
-- `data-js/src/core.rs:777-794` — `payload()` redacts every source
+- `data-core/src/model.rs:57-112` — the `Remote` and `DbAttach` shapes; `dsn` deprecated
+- `data-sources/src/remote.rs:19-33`, `:68-89` — it "NEVER fetches"; userinfo is rejected
+- `data-sources/src/lib.rs:100-126`, `:164-181` — `authorize` and `build_manifest`
+- `data-sources/src/lib.rs:354-400`, `:425-459` — `AttachPlan`, `redact_credentials`
+- `data-js/src/core.rs:763-780` — `payload()` redacts every source
 - `packages/data-bundle/src/session.ts:766-828`, `:1467-1490` — gate, `fetch`, consent request
 - `packages/data-bundle/manifest.json:15-18` — the network capability and its purpose text
-- `data-conformance/tests/security.rs:63-200` — six tests of the gate and of the saved payload
+- `data-conformance/tests/security.rs:49-186` — six tests of the gate and of the saved payload
 
 ## Alternatives considered
 
@@ -61,8 +61,8 @@ it fetched with the query engine.
 
 A consumer of the data provider cannot cause a fetch: its snapshot is rebuilt from results
 already ingested (`packages/data-bundle/src/session.ts:1493-1498`). Redaction is applied in
-two places: `payload()` (`data-js/src/core.rs:778-794`) and the database target shown in the
-source manifest (`data-sources/src/lib.rs:287-298`). `redact_credentials` changes `DbAttach` sources only.
+two places: `payload()` (`data-js/src/core.rs:764-780`) and the database target shown in the
+source manifest (`data-sources/src/lib.rs:273-284`). `redact_credentials` changes `DbAttach` sources only.
 
 Authenticated sources are designed and not usable:
 
@@ -74,12 +74,12 @@ Authenticated sources are designed and not usable:
 - The bundle's `fetch` sends no credential. A remote source's `credentialRef` is stored and
   passed into the descriptor only.
 - Postgres and MySQL are not reachable from a browser at all
-  (`data-core/src/model.rs:104-109`).
+  (`data-core/src/model.rs:90-95`).
 
 `authorize_report` evaluates each source against `GrantedCapabilities::m0_default()`: file
-import granted, network not granted (`data-js/src/core.rs:756-759`). In the bundle, `loadRemoteSource`
+import granted, network not granted (`data-js/src/core.rs:742-745`). In the bundle, `loadRemoteSource`
 tests `host.network.consentedOrigins()` before its `fetch` (`packages/data-bundle/src/session.ts:769-777`).
-`CLAUDE.md:47-51`, `data-sources/src/lib.rs:82-84` and `data-core/src/model.rs:63-64` still
+`CLAUDE.md:47-51`, `data-sources/src/lib.rs:68-70` and `data-core/src/model.rs:49-50` still
 describe the network as declared off.
 
 ## Related

@@ -12,7 +12,7 @@ of work, with file and line references, is
 
 ## Shipped
 
-- **The session is saved with the document** (since 2026-10-05, wave 4). Sources, queries,
+- **The session is saved with the document** (since 2026-10-05). Sources, queries,
   binding definitions, data sets, the locale, pinned bindings and the imported CSV text are
   written to this plugin's `session` container part (`paged/media.paged.data/session.json`,
   declared in `contributes.partTypes`) after each change and before every save. An imported
@@ -23,7 +23,7 @@ of work, with file and line references, is
   table whose label no longer names its binding is reported. Opening another document drops
   the previous session first. On a host without container parts the Sources panel says the
   session is not saved.
-- **Sources** (local formats since wave 6). The Data sources panel imports CSV, TSV, JSON
+- **Sources** (local formats since 2026-10-06). The Data sources panel imports CSV, TSV, JSON
   (an array or newline-delimited), Parquet and Excel `.xlsx` (one worksheet per source; the
   panel switches worksheet) as one in-memory DuckDB table per source. JSON and Parquet use
   DuckDB's own readers; XLSX is read by the engine (`data-xlsx`, calamine) with one type per
@@ -33,7 +33,7 @@ of work, with file and line references, is
   (`contribute.importer`). A remote URL (CSV, TSV, JSON or Parquet) can be added as a
   descriptor; Load calls `fetch` only for an origin the host reports as consented and loads
   the bytes as a table, like an imported file.
-- **Queries** (since wave 6). The Data query panel has a SQL field with DuckDB's
+- **Queries** (since 2026-10-06). The Data query panel has a SQL field with DuckDB's
   diagnostics (error class, line and column in the query as written), filter, sort and group
   builders that write SQL into it, a preview grid of the first 50 rows as DuckDB prints them,
   and saving under a query id. Every query, typed or restored from a document, passes a guard
@@ -44,7 +44,7 @@ of work, with file and line references, is
   file or URL table function and no `'https://…'` or `"file.csv"` table name gets through.
   The guard asks DuckDB nothing. The engine adds `SET lock_configuration = true` at boot, so
   no statement can change a DuckDB setting. A failing query is a diagnostic for that query;
-  the refresh carries on with the others. The first guard (wave 6) parsed with DuckDB's
+  the refresh carries on with the others. The first guard parsed with DuckDB's
   `json_serialize_sql`, which lives in the json extension: DuckDB autoloaded it from
   extensions.duckdb.org (the json and parquet extensions now ship in `bin/duckdb-ext/`
   and load same-origin), the editor's CSP refused that, and the worker trapped on every
@@ -53,7 +53,7 @@ of work, with file and line references, is
   security matrix (`test/guard-matrix.ts`). `enable_external_access = false` was measured
   and not used: it is global and one-way, and it also refuses DuckDB's readers over the
   registered import buffers, so every import after the first query would fail.
-- **Refresh policy** (since wave 6, `src/refresh.ts`). Each source has one: manual; on open
+- **Refresh policy** (since 2026-10-06, `src/refresh.ts`). Each source has one: manual; on open
   (the queries re-run when the document opens, and a remote source is fetched again only with
   a remembered grant); every N seconds (at least 15) for a remote source, only while its
   origin is consented, re-running the queries only when the content changed; never. A local
@@ -70,7 +70,7 @@ of work, with file and line references, is
   not decoded again); "Refresh fields" rewrites the placeholder fields whose value changed in
   one back-to-front batch, which is one undo step, and skips pinned and overridden fields; "What changed?" lists the bindings whose resolved
   content differs from the previous report; a stepper previews the bindings against record N.
-- **Sync review** (since 2026-10-05, wave 7). Each binding in the Bindings panel shows its
+- **Sync review** (since 2026-10-05). Each binding in the Bindings panel shows its
   sync state (synced, stale, pinned, overridden, error) with Pin, Unpin and Accept source.
   Accept source re-links the binding and writes the source value at once. A binding that
   cannot resolve is `Error` unless it is pinned or overridden. Pinned and overridden
@@ -135,7 +135,7 @@ of work, with file and line references, is
   extensions and the editor's importer registry gives a contested extension to the first
   bundle that registers it; paged.data loads first, so claiming them would take the import
   away from the spreadsheet plugin. They are imported from Data sources ▸ Import file….
-- **Tables and barcodes are updated in place** (Wave 5, `src/relower.ts`). A re-lower swaps a
+- **Tables and barcodes are updated in place** (`src/relower.ts`). A re-lower swaps a
   table inside its own frame and story (deleteTable, insertTable, cells, label: one batch); a
   barcode re-lower or preview step removes the previous symbol's modules in the batch that
   draws the new one. The table's address and the modules come from what the session saw
@@ -151,13 +151,13 @@ of work, with file and line references, is
   reopened document starts with every row new. Which bindings a change reaches is read
   from the fields their expressions name; a per-record binding is reported whenever rows
   are added or removed, because the record it shows can move.
-- **Record flow writes frames** (Wave 5, `src/flow-writer.ts`). Lowering a record flow
+- **Record flow writes frames** (`src/flow-writer.ts`). Lowering a record flow
   places one text frame per paginated frame in the active page's margin box, adding pages
   after it as the flow needs them. The frames are not threaded, so the paginator's breaks
   hold. A re-lower replaces the frames and the pages it added. A record's height is still its
   field count times a line height, not a measured layout
   ([ADR 554](adr/554-record-flow-pagination.md)).
-- **Data Merge** (Wave 5, `src/merge.ts`; `docs/design/oracles.md` §2). The merge reads the
+- **Data Merge** (`src/merge.ts`; `docs/design/oracles.md` §2). The merge reads the
   `<<field>>` text frames (and the chosen image rectangles) of a page and merges every record,
   Single or Multiple Records, matching InDesign on all 8 recorded fixtures. The limits:
   - It merges into the current document, keeping the template page or consuming it.
@@ -258,7 +258,7 @@ of work, with file and line references, is
 - A Node binding for the batch runner (registry row `planned`); the CLI is the native route.
 - Raster barcodes; an exporter contribution.
 
-## Host gaps found in wave 4
+## Host gaps found while saving the session
 
 Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 2026-10-05.
 
@@ -268,7 +268,7 @@ Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 
 | No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead. Built in the engine as `setDocumentMetadata` (protocol 68, not yet released); the plugin adopts it after the release |
 | Window ▸ Bindings is greyed outside the `dataBinding` edit context | host UI | the Bindings panel opens from Object ▸ Insert data binding… or the command palette |
 
-## Gaps found in wave 6
+## Gaps found in step 6
 
 Measured on 2026-10-05 against DuckDB-WASM 1.29.0 (engine v1.1.1), the shipped EH variant.
 

@@ -76,14 +76,14 @@ word, "Arrow-aligned", is the accurate one: a record set has Arrow's shape (one 
 field, a schema with a small type vocabulary) and crosses every boundary as plain values, never
 as an IPC byte buffer.
 
-- `data-core/src/model.rs:364-373` — `RecordSet { schema, columns: Vec<Vec<Value>>, row_count }`,
-  "Stored **columnar** (Arrow's shape)". `data-core/src/model.rs:275-287` — `FieldType`, the eight
+- `data-core/src/model.rs:350-359` — `RecordSet { schema, columns: Vec<Vec<Value>>, row_count }`,
+  "Stored **columnar** (Arrow's shape)". `data-core/src/model.rs:261-273` — `FieldType`, the eight
   logical field types.
 - `packages/data-bundle/src/query/recordset.ts:113-124` — `arrowToRecordSet` converts the Arrow
   table that DuckDB-WASM returns into that shape, in TypeScript. Each cell becomes a tagged
   `{t, v}` value (`:27-33`, `:94-109`); the field type is classified from the string form of the
   Arrow type (`:76-85`).
-- `data-js/src/lib.rs:129-133` — the wasm export `ingest_result` takes a `JsValue` and decodes it
+- `data-js/src/lib.rs:115-119` — the wasm export `ingest_result` takes a `JsValue` and decodes it
   with `serde_wasm_bindgen` (`:448-454`). `publish_provider` (`:308-319`) returns the publication
   the same way.
 - `packages/data-bundle/src/session.ts:1514-1525` — the provider's `getSnapshot` returns
@@ -102,13 +102,13 @@ as an IPC byte buffer.
 
 This supersedes "= Arrow IPC" in the title and qualifies "the rows are the Arrow substrate" in
 the decision. Three places in the repository still describe a Rust-side IPC decode as the next step:
-`data-query/src/lib.rs:47-50`, `README.md:27-29` and `deny.toml:10-11`; the last one expects
+`data-query/src/lib.rs:33-36`, `README.md:27-29` and `deny.toml:10-11`; the last one expects
 `arrow-rs` to arrive with it, which this ADR declines.
 
 **2. The seam that is reused is paged.data's own record set.** "The renderer's existing Arrow
 seam" (decision, and the fourth reason) is the `RecordSet` that the data engine already ingests
 from its query layer: the publication carries "Arrow-shaped, the same interchange used
-internally" (`data-js/src/core.rs:191-193`). The core render engine has no Arrow type and no
+internally" (`data-js/src/core.rs:177-179`). The core render engine has no Arrow type and no
 Arrow dependency (`core: Cargo.lock` contains no `arrow` package; core at `9f933f1`).
 
 **3. Registration is implemented.**
@@ -124,5 +124,5 @@ Arrow dependency (`core: Cargo.lock` contains no `arrow` package; core at `9f933
 
 This supersedes, in Consequences, "D-09 is `planned`/`data.provider.register` on the roadmap".
 Three comments still describe the registry door as not yet available and are stale:
-`data-js/src/core.rs:171-174`, `data-js/src/lib.rs:304-307` and
+`data-js/src/core.rs:157-160`, `data-js/src/lib.rs:290-293` and
 `packages/data-bundle/src/session.ts:498-501`.

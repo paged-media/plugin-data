@@ -14,7 +14,7 @@ source.
 The crate documentation states the rule: a result change marks dependent `Linked` bindings
 `Stale` but never disturbs `Pinned` or `Overridden` content, and "divergences are reported,
 never silently clobbered". It also gives the purpose of diffing by record identity: minimal
-row deltas, "keeping pagination stable and undo granular" (`data-bind/src/lib.rs:42-46`).
+row deltas, "keeping pagination stable and undo granular" (`data-bind/src/lib.rs:28-32`).
 The policy is stated, not argued. The repository does not record why.
 
 ## Decision
@@ -39,13 +39,13 @@ accepts refresh; `Pinned` and `Overridden` do not.
 
 ## Evidence
 
-- `data-core/src/binding.rs:416-457`, `:499-503` — `Status`, `ResolveStamp`, `accepts_refresh`
-- `data-bind/src/lib.rs:306-330` — `set_result`: only refresh-accepting bindings go `Stale`
-- `data-bind/src/lib.rs:351-383` — `pin`, `mark_overridden` (with its reason), `relink`
-- `data-bind/src/lib.rs:420-439` — `resolve_at` sets `Linked` and stamps
-- `data-query/src/lib.rs:130-134`, `:185-188`, `:234-249`, `:274-282` — order, hash, stamp
-- `data-bind/src/diff.rs:33-46`, `:69-102` — the keyed row diff and the change report
-- `data-conformance/tests/bind.rs:120-159` — a pinned binding survives a changed result
+- `data-core/src/binding.rs:402-443`, `:499-503` — `Status`, `ResolveStamp`, `accepts_refresh`
+- `data-bind/src/lib.rs:292-316` — `set_result`: only refresh-accepting bindings go `Stale`
+- `data-bind/src/lib.rs:337-369` — `pin`, `mark_overridden` (with its reason), `relink`
+- `data-bind/src/lib.rs:406-425` — `resolve_at` sets `Linked` and stamps
+- `data-query/src/lib.rs:116-120`, `:185-188`, `:234-249`, `:274-282` — order, hash, stamp
+- `data-bind/src/diff.rs:19-32`, `:69-102` — the keyed row diff and the change report
+- `data-conformance/tests/bind.rs:106-145` — a pinned binding survives a changed result
 
 ## Alternatives considered
 
@@ -56,16 +56,16 @@ None recorded in the repository.
 The hash functions (`content_hash`, `query_hash`, `param_hash`) are written out in
 `data-query`; the stamps and the data-provider revision are their outputs. The stamps cross
 to JavaScript as decimal strings, because a `u64` above `Number.MAX_SAFE_INTEGER` made the
-serializer fail and the sync state arrive as `null` (`data-core/src/binding.rs:438-448`).
+serializer fail and the sync state arrive as `null` (`data-core/src/binding.rs:424-434`).
 
 The protection covers one transition only. `resolve_at` does not look at the status: it
 returns live content for a `Pinned` or `Overridden` binding and sets it `Linked`. The
 comment there calls an explicit resolve the user action that re-links
-(`data-bind/src/lib.rs:422-424`). `Status::Error` is defined and nothing assigns it.
+(`data-bind/src/lib.rs:408-410`). `Status::Error` is defined and nothing assigns it.
 
 `set_result` hashes the result as delivered, not after `stabilize`, and `content_hash` reads
-the values in row order (`data-query/src/lib.rs:236-249`). The data-provider revision does
-stabilize first (`data-js/src/core.rs:561-562`).
+the values in row order (`data-query/src/lib.rs:222-235`). The data-provider revision does
+stabilize first (`data-js/src/core.rs:547-548`).
 
 In the editor bundle the model is only partly reachable:
 
@@ -76,12 +76,12 @@ In the editor bundle the model is only partly reachable:
   ([ADR 557](557-variables-and-data-sets.md)).
 - The refresh loop and `lowerAll` resolve every binding without reading its status
   (`packages/data-bundle/src/session.ts:1239-1244`, `:1395-1421`). The engine's comment says
-  an applied data set is protected from the next refresh (`data-js/src/core.rs:964-968`);
+  an applied data set is protected from the next refresh (`data-js/src/core.rs:950-954`);
   that protection is the `set_result` transition only.
 - `diff` is called only from tests. A table that is lowered again is inserted again as a whole ([ADR 551](551-compiled-to-native-content.md)).
 
 Sync state is not in the saved payload; a session rebuilt from one starts every binding as
-`Linked` (`data-bind/src/lib.rs:283-288`).
+`Linked` (`data-bind/src/lib.rs:269-274`).
 
 ## Related
 
@@ -89,7 +89,7 @@ Sync state is not in the saved payload; a session rebuilt from one starts every 
 - [ADR 557](557-variables-and-data-sets.md) — applying a data set marks bindings `Overridden`
 - [ADR 014](014-data-provider-arrow-seam.md) — the provider revision is a content hash of the stabilized rows
 
-## Amendment 2026-10-05 (wave 7)
+## Amendment 2026-10-05 (step 7)
 
 - `resolve_at` now assigns `Error`: a known binding that cannot resolve goes to `Error`
   unless it is `Pinned` or `Overridden`, which keep their status. A later successful

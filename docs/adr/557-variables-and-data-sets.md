@@ -42,8 +42,8 @@ the binding kind; a data set is a captured snapshot of resolved values.
 - `data-dataset/src/lib.rs:19-47`, `:73-83`, `:290-311` — the model; `GraphData` carried and
   never resolved; the kind-to-trait map
 - `data-dataset/src/xml.rs:44-68` — the two deviations and the local-name reader
-- `data-core/src/binding.rs:126-141`, `:158-172` — `Binding::Visibility` and `Leave`
-- `data-js/src/core.rs:873-894`, `:969-1010` — capture and apply; apply marks `Overridden`
+- `data-core/src/binding.rs:112-127`, `:158-172` — `Binding::Visibility` and `Leave`
+- `data-js/src/core.rs:859-880`, `:969-1010` — capture and apply; apply marks `Overridden`
 - `packages/data-host-model/src/variables.ts:117-183` — the plan and the single batch
 - `packages/data-bundle/src/activate.ts:129-150` — capture and apply as payload commands
 - `data-conformance/tests/variables.rs:610-793` — the XML tests
@@ -73,7 +73,7 @@ Applying a data set sets `Overridden`, but the bundle's field refresh does not r
 status ([ADR 553](553-non-destructive-refresh.md)). A text value is written to the first
 placeholder field with that key (`packages/data-bundle/src/session.ts:633-637`). An image
 value is captured only when the reference is a URI or a path, and a `Leave` visibility is
-not captured (`data-js/src/core.rs:1090-1120`).
+not captured (`data-js/src/core.rs:1076-1106`).
 
 Data sets are the part of the payload that grows with the record count. In the editor the
 payload is not written into the document ([ADR 552](552-binding-is-a-recipe.md)), so

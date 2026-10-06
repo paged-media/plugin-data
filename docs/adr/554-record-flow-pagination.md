@@ -7,12 +7,12 @@
 ## Context
 
 A record-flow binding lets records "flow through a frame chain, one template instance per
-record" (`data-core/src/binding.rs:92-93`): the catalogue case, where a query result fills a
+record" (`data-core/src/binding.rs:78-79`): the catalogue case, where a query result fills a
 series of threaded frames across pages.
 
 The paginator was written before a plugin could read the host's frame chain. Its comment
 says the chain read and the reflow notification were missing from the host contract, so the
-function packs over a chain supplied by the caller (`data-lower/src/lib.rs:392-400`). The
+function packs over a chain supplied by the caller (`data-lower/src/lib.rs:378-386`). The
 bundle later gained a reader for the live chain (commit `d47cdb7`).
 
 The plugin decides which record lands in which frame; it does not pour text into the chain
@@ -40,15 +40,15 @@ capacities that the caller provides.
 
 ## Evidence
 
-- `data-lower/src/lib.rs:392-400` — the rationale comment: caller-supplied chain, atomic
+- `data-lower/src/lib.rs:378-386` — the rationale comment: caller-supplied chain, atomic
   records, one bounded pass
-- `data-lower/src/lib.rs:497-504`, `:553-602` — `paginate_flow` and the record loop
-- `data-lower/src/lib.rs:402-410`, `:458-495` — `FrameCapacity`, `FlowBlock`, `PaginatedFlow`
-- `data-bind/src/lib.rs:849-869`, `:887-921`, `:958-978` — sections, nested levels, footers
-- `data-core/src/binding.rs:378-389` — `Template` and its height model
+- `data-lower/src/lib.rs:483-490`, `:553-602` — `paginate_flow` and the record loop
+- `data-lower/src/lib.rs:388-396`, `:458-495` — `FrameCapacity`, `FlowBlock`, `PaginatedFlow`
+- `data-bind/src/lib.rs:835-855`, `:887-921`, `:958-978` — sections, nested levels, footers
+- `data-core/src/binding.rs:364-375` — `Template` and its height model
 - `packages/data-bundle/src/session.ts:80-110`, `:1439-1465` — `readLiveChain`,
   `paginateChain`, `subscribeChainReflow`
-- `data-conformance/tests/recordflow.rs:137-196`, `data-conformance/tests/properties.rs:99-134`
+- `data-conformance/tests/recordflow.rs:123-182`, `data-conformance/tests/properties.rs:85-120`
   — packing, the tall record, and the order-preserving property test
 
 ## Alternatives considered
@@ -79,9 +79,9 @@ The registry lists live pagination as `status: implemented`
 
 `FlowOpts.repeat_header` and `FlowOpts.continued_marker` on the binding are not read. The
 paginator takes these from `FlowLayoutOpts`, and the bundle passes none, so the defaults
-apply (`data-lower/src/lib.rs:448-456`).
+apply (`data-lower/src/lib.rs:434-442`).
 
-Comments in `data-js/src/core.rs:462-464` and `:505-506` still call the host chain read blocked.
+Comments in `data-js/src/core.rs:448-450` and `:505-506` still call the host chain read blocked.
 
 ## Related
 

@@ -74,22 +74,22 @@ longer matches the code in five places.
 covers one field and is applied in two places: the saved document payload and the visible
 source manifest.
 
-- `data-sources/src/lib.rs:433-448` — `redact_credentials` strips the `user:pass@` part of the
+- `data-sources/src/lib.rs:419-434` — `redact_credentials` strips the `user:pass@` part of the
   deprecated `dsn` field of a database source and returns every other source kind unchanged;
   `:451-459` is `redact_dsn`.
-- `data-js/src/core.rs:778-794` — `payload()`, which builds the document payload, is the only
+- `data-js/src/core.rs:764-780` — `payload()`, which builds the document payload, is the only
   caller of `redact_credentials`.
-- `data-sources/src/lib.rs:287-298` — the source manifest shows a database target through
+- `data-sources/src/lib.rs:273-284` — the source manifest shows a database target through
   `redact_dsn` when only the legacy `dsn` is present.
-- Tests: `data-conformance/tests/security.rs:103-131`, `:133-157` and `:176-200` assert on the
-  serialised payload; `data-sources/src/lib.rs:551-569` asserts on the manifest. The registry row
+- Tests: `data-conformance/tests/security.rs:89-117`, `:133-157` and `:176-200` assert on the
+  serialised payload; `data-sources/src/lib.rs:537-555` asserts on the manifest. The registry row
   is `data.security.credentials-absent`, "Credentials never serialized into the document payload"
   (`registry/features/security.yaml:22-32`).
 
 These two functions, `redact_credentials` and `redact_dsn`, are the redaction code in the
 repository. Secrets are kept out by the shape of a source. A source names a `credential_ref`
-string that the host resolves (`data-core/src/model.rs:87-90`, `:116-120`), and a remote URL
-with embedded credentials is rejected at validation (`data-sources/src/remote.rs:82-84`,
+string that the host resolves (`data-core/src/model.rs:73-76`, `:116-120`), and a remote URL
+with embedded credentials is rejected at validation (`data-sources/src/remote.rs:68-70`,
 `packages/data-bundle/src/remote.ts:70-72`). That decision is recorded in
 [ADR 556](556-secrets-never-enter-the-plugin.md).
 
@@ -110,7 +110,7 @@ bytes.**
 - `packages/data-bundle/src/session.ts:782` — the one `fetch()` call in the bundle's source.
 - `packages/data-bundle/src/session.ts:786-794` — the response bytes are registered with DuckDB
   in the same way as an imported file (`registerCsv`, `registerFileBuffer`).
-- `data-sources/src/remote.rs:35-41` — the Rust side validates the descriptor and "NEVER
+- `data-sources/src/remote.rs:21-27` — the Rust side validates the descriptor and "NEVER
   fetches".
 - `packages/data-bundle/src/session.ts:1467-1490` — consent is requested through
   `host.network.requestConsent`; `packages/data-bundle/manifest.json:15-18` — the manifest

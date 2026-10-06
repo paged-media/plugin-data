@@ -69,7 +69,7 @@ tolerance is zero. The lane also checks the following, all exactly:
 - Decimals agree at every width, which shows the decimal-scale fix holds.
 - UTF-8, quoting, ordering and NULL handling agree.
 
-**Defects found, all FIXED in Wave 2** (`src/query/recordset.ts` now reads Arrow's raw
+**Defects found, all FIXED in Step 2** (`src/query/recordset.ts` now reads Arrow's raw
 buffers by type id, and `src/query/duckdb.ts` casts the types without a data-core kind to
 VARCHAR in SQL):
 
@@ -118,7 +118,7 @@ produce, and how close is our record flow?
 **Recording.** `record.sh` drives the local InDesign through `record.jsx`. The script builds
 each template from the fixture spec, then turns every `<<field>>` into a real Data Merge text
 placeholder and each image frame into an image placeholder. It saves the template as
-`templates/<id>.idml`, which InDesign wrote itself, so that Wave 5 can open it. It then runs
+`templates/<id>.idml`, which InDesign wrote itself, so that Step 5 can open it. It then runs
 `mergeRecords()` and writes `recorded/<id>.json`: page count, and for every page each text
 frame (bounds, the frame's own text, line count, overset) and each rectangle (bounds, placed
 image name and bounds). The script stages files in the fixed directory
@@ -146,9 +146,9 @@ rewriting all of them at once hides which answer changed.
    H and W are the margin box, h and w the template frame. Single Record mode gives each record
    its own page at the template position. Remove Blank Lines drops a line only when the line
    holds nothing but fields and every one of them is empty. Field text is inserted verbatim.
-   This is the rule the Wave 5 merge writer implements.
+   This is the rule the Step 5 merge writer implements.
 
-2. **The merge planner** (Wave 5). `DataSession::plan_merge` (`data-lower/src/merge.rs`) plans
+2. **The merge planner** (Step 5). `DataSession::plan_merge` (`data-lower/src/merge.rs`) plans
    the merge from the fixture's template frames over the same text ingest. Every planned text
    frame is put on the grid from its bounds, as InDesign's frames are.
 
@@ -238,7 +238,7 @@ lane still shows them, by design):
 - **DM-6.** A record-flow template has no image field.
 - **DM-7.** The record height is not measured text, so an overset record is not flagged.
 - **DM-8.** A CSV column that DuckDB sniffs as DOUBLE loses its trailing zeros (`1234.50` prints
-  as `1234.5`). Data Merge prints the field text. PARTLY FIXED (Wave 2): a DECIMAL(p, s) column
+  as `1234.5`). Data Merge prints the field text. PARTLY FIXED (Step 2): a DECIMAL(p, s) column
   now carries its scale (`Field.scale`), and a bare reference to it displays `1234.50`. A
   DOUBLE-sniffed CSV column has no scale left to carry, so this lane stays pinned until the CSV
   import keeps the text or declares the column type (a sources change).
@@ -277,14 +277,14 @@ published "Wikipedia" vector anchors it, and it rejects a symbol with one module
   three now follow ISO/IEC 18004. The QR property decodes every payload with `rqrr`. A data-barcode
   unit test decodes every version (1–10) under every mask (0–7), and the matrices match python
   `qrcode` module for module (checked once, 80 of 80).
-- **DP-1.** FIXED (Wave 2): dates and times before 1970 stabilized after later ones, because of
+- **DP-1.** FIXED (Step 2): dates and times before 1970 stabilized after later ones, because of
   big-endian two's-complement byte keys. The sort key now flips the sign bit.
 - **DP-2 (fixed).** An f64 in the payload drifted by one ulp through serde_json, which was built
   without `float_roundtrip`. The workspace now enables it (+8 bytes of wasm). The payload
   property draws any finite f64. The wasm boundary was always exact.
-- **DP-3.** FIXED (Wave 2): `RowDelta.removed` held internal key encodings (`"3:k2\u{1f}"`), so a
+- **DP-3.** FIXED (Step 2): `RowDelta.removed` held internal key encodings (`"3:k2\u{1f}"`), so a
   change report could not name the rows it removed. It now holds their indices in `old`.
-- **DP-4.** FIXED (Wave 2): a variable binding followed the delivery order, so the same rows
+- **DP-4.** FIXED (Step 2): a variable binding followed the delivery order, so the same rows
   delivered in another order reported a change. Record N is now record N of the stabilized
   order, for every per-record kind.
 

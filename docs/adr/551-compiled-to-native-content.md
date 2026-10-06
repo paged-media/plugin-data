@@ -12,7 +12,7 @@ recorded in ADR 316 (plugin-sdk): plugin content is stored as valid native docum
 
 The repo states the reason: bound content is compiled to native content through committed
 operations, "so frame ops (scale/rotate/skew/crop/reposition) are honored for free"
-(`CLAUDE.md:13-16`). `data-lower/src/lib.rs:45-47` says the same of its geometry.
+(`CLAUDE.md:13-16`). `data-lower/src/lib.rs:31-33` says the same of its geometry.
 
 ## Decision
 
@@ -38,13 +38,13 @@ sends them through `host.document.mutate`.
 
 ## Evidence
 
-- `data-lower/src/lib.rs:33-51` — the crate statement: pure, content-space geometry
-- `data-js/src/core.rs:76-86` — `LoweredOutput`, the value that crosses the wasm boundary
+- `data-lower/src/lib.rs:19-37` — the crate statement: pure, content-space geometry
+- `data-js/src/core.rs:62-72` — `LoweredOutput`, the value that crosses the wasm boundary
 - `packages/data-host-model/src/index.ts:19-21` — "data-in, mutations-out"
 - `packages/data-host-model/src/lower-to-mutations.ts:111-121`,
   `packages/data-bundle/src/lower.ts:130-161` — the native table path and its fallback
 - `packages/data-host-model/src/fields.ts:53-67`, `:183-189`, `:209-224` — field, image, cell style
-- `data-barcode/src/lib.rs:44-51`, `data-lower/src/lib.rs:143-151`,
+- `data-barcode/src/lib.rs:30-37`, `data-lower/src/lib.rs:129-137`,
   `packages/data-host-model/src/barcode.ts:79-95` — encoders, scaling, one path per module
 - `packages/data-bundle/manifest.json:8-14` — document read/write and `rendering: ["hitTest"]`
 
@@ -54,8 +54,8 @@ Tab-aligned text with drawn rules was the first table form, while the wire had n
 `insertTable`. It became the fallback when that operation arrived (commit `b6f40da`).
 
 A raster barcode placed as an image is ruled out: `placeImage` needs a resolvable URI and
-inline image bytes cannot be placed (`data-lower/src/lib.rs:148-150`). A GPL barcode library
-is ruled out in `data-barcode/src/lib.rs:46-48`.
+inline image bytes cannot be placed (`data-lower/src/lib.rs:134-136`). A GPL barcode library
+is ruled out in `data-barcode/src/lib.rs:32-34`.
 
 ## Consequences
 
@@ -67,7 +67,7 @@ The TypeScript types of the lowered value are a hand-written mirror of the Rust 
 (`packages/data-host-model/src/lowered.ts:19-22`). Limits of what is built:
 
 - Column widths are estimates from character counts (6 pt per character plus padding by
-  default); the plugin has no font metrics (`data-lower/src/lib.rs:47-48`, `:68-76`).
+  default); the plugin has no font metrics (`data-lower/src/lib.rs:33-34`, `:68-76`).
 - A table is committed in several separate `mutate` calls (frame, table, cell batch,
   metadata), and always into a new text frame at a 36 pt inset on the active page
   (`packages/data-bundle/src/lower.ts:97-141`, `packages/data-host-model/src/placement.ts:34-45`).
@@ -79,7 +79,7 @@ Comments contradict the code in three places. `packages/data-bundle/src/lower.ts
 that file the only caller of `host.document.mutate`; `packages/data-bundle/src/session.ts:1359`
 and `:1412` call it too. `packages/data-host-model/src/lower-to-mutations.ts:25-28` still
 says the wire has no `insertTable`, and `tableToMutations` there is tested but not called by
-the bundle. `data-lower/src/lib.rs:50-51` says the crate depends only on `data-core`; its
+the bundle. `data-lower/src/lib.rs:36-37` says the crate depends only on `data-core`; its
 `Cargo.toml` also lists `data-barcode`.
 
 ## Related

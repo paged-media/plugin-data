@@ -12,7 +12,7 @@ repo's rules name both and assign them differently: "binding defs + source manif
 document payload; resolved values are committed content — the panel says what is and isn't
 persisted" (`CLAUDE.md:136-137`). The repository does not record why.
 
-`data-core/src/binding.rs:35-36` adds that expressions are carried as source strings, "so
+`data-core/src/binding.rs:21-22` adds that expressions are carried as source strings, "so
 the binding is the document's serializable *recipe*" (see [ADR 550](550-own-binding-language.md)).
 
 ## Decision
@@ -37,9 +37,9 @@ Persistence is split in two.
 
 ## Evidence
 
-- `data-js/src/core.rs:196-221` — `DocumentPayload` and its fields
-- `data-js/src/core.rs:777-817` — `payload()` with redaction, and `from_payload()`
-- `data-conformance/tests/roundtrip.rs:96-122` — save, load, save again: lossless, no secrets
+- `data-js/src/core.rs:182-207` — `DocumentPayload` and its fields
+- `data-js/src/core.rs:763-803` — `payload()` with redaction, and `from_payload()`
+- `data-conformance/tests/roundtrip.rs:82-108` — save, load, save again: lossless, no secrets
 - `packages/data-host-model/src/binding.ts:25-43` — the key and the `{v, data}` envelope
 - `packages/data-host-model/src/fields.ts:41`, `:53-67` — the tagged placeholder field
 - `packages/data-bundle/src/session.ts:1376-1426` — the refresh loop over `placeholders()`
@@ -56,14 +56,14 @@ recipes in one value exceed it (`packages/data-host-model/src/__tests__/payload-
 
 The payload is a file format, and the recipe half of a batch job file
 ([ADR 555](555-batch-reuses-the-engine.md)). Captured data sets are the only part of it that
-grows with the record count (`data-js/src/core.rs:213-218`); the session measures the
+grows with the record count (`data-js/src/core.rs:199-204`); the session measures the
 variable set and warns above 80 % of 64 KiB (`packages/data-bundle/src/session.ts:977-987`).
 
 **Restoring a session on reopen is not built.** The bundle does not complete the recipe half.
 
 - `payload()` is declared in the bundle's engine interface
   (`packages/data-bundle/src/engine.ts:113`) and never called by the bundle.
-- The wasm class `DataEngine` exposes no `from_payload` (`data-js/src/lib.rs:74-442`).
+- The wasm class `DataEngine` exposes no `from_payload` (`data-js/src/lib.rs:60-428`).
   `from_payload` is called by `data-cli` and by the conformance tests only.
 - The envelopes the bundle writes are stubs: `{kind: "table", region}` on a table frame and
   `{kind: "barcode", target, symbology}` on a barcode. They hold no expression, query or

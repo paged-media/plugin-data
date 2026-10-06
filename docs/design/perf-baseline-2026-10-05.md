@@ -97,7 +97,7 @@ group-plan bench. They are now added once per row.
 | W6 200 reflow events on a record flow | 400 | 400 | 0 | — | 200 | 0 | 200 | 200 | 665,600 | 262 ms · 0 / 2.17 MB |
 | W7 cold boot (activate) | 21 | 0 | 0 | — | 0 | 0 | 0 | 0 | 0 | engine boot 9 ms, DuckDB boot 408 ms |
 
-**After Wave 2 (engine).** Only the engine-side counts moved; the host-call, mutate and undo
+**After Step 2 (engine).** Only the engine-side counts moved; the host-call, mutate and undo
 budgets belong to the TS optimisation round.
 
 | Scenario | Sorts | Sort keys | Trend: ms |
@@ -143,11 +143,11 @@ Notes:
 | Row diff, 5k rows, 100-row delta | 0 | 0 | 0 | 0 | 10,000 diff rows | 4.7 ms |
 | Per-group batch plan, 2k rows in 100 groups | 0 | 1 | 48,166 | 0 | 100,900 group-key compares | 3.2 ms |
 
-**After Wave 2 (engine), branch `wave2/rust`.** Every count below is the pin in
+**After Step 2 (engine), branch `wave2/rust`.** Every count below is the pin in
 `perf_counts.rs` as of that branch; each was lowered in the commit that earned it.
 Criterion is `cargo bench -p data-conformance --bench engine -- --baseline before`, where
-`before` was re-measured on the same machine at the campaign head (it ran slower than the
-Wave 1 figures above: 32.7 / 17.6 / 30.2 / 5.7 / 2.1 ms).
+`before` was re-measured on the same machine at the branch head (it ran slower than the
+Step 1 figures above: 32.7 / 17.6 / 30.2 / 5.7 / 2.1 ms).
 
 | Workload | Resolves | Sorts | Sort keys | Fingerprints | Other | Criterion before → after |
 |---|---:|---:|---:|---:|---|---:|
@@ -159,7 +159,7 @@ Wave 1 figures above: 32.7 / 17.6 / 30.2 / 5.7 / 2.1 ms).
 | Per-group batch plan, 2k rows in 100 groups | 0 | 1 | **0** | 0 | **1,900** group-key compares | 2.1 → 0.37 ms (−82 %) |
 | Column door: an unchanged 1k-row result re-delivered (new pin) | 0 | 0 | 0 | 0 | **0** cells ingested, **0** content hashes | — |
 
-The bench repeats the same resolve, so after Wave 2 the table and catalog benches hit the
+The bench repeats the same resolve, so after Step 2 the table and catalog benches hit the
 cached sort; with the in-place comparison alone (no cache), the table resolve measured
 20.5 ms and the catalog 10.9 ms. Two thirds of what is left is expression evaluation and
 lowering, now with each expression parsed once per resolve instead of once per cell.
@@ -183,7 +183,7 @@ measurement: 0.37 s. It is trended, not gated.
 A refresh that brings a 1M-row result into the engine costs about 2.1 s at the boundary
 today. About 70 % of that is the serde decode of per-cell objects.
 
-**After Wave 2 (engine): the column door.** The same 1M rows, two runs:
+**After Step 2 (engine): the column door.** The same 1M rows, two runs:
 
 | Step | ms |
 |---|---:|
@@ -240,7 +240,7 @@ Ranked by counts saved per user action. All rows are plugin-only unless marked.
 | 8 ✅ | `group_by` with a hash index | 2k × 100: compares 100,900 → 2,000 | Rust |
 | 9 | `resolveElementId` from a one-pass index or the known kind | not reached by any workload today | TS |
 
-Wave 2 (engine) status: ✅ done on `wave2/rust`; ◐ the engine half is done and the
+Step 2 (engine) status: ✅ done on `wave2/rust`; ◐ the engine half is done and the
 session switch is the TS round's. #3: values compare in place (no keys at all) and the
 stabilized order is cached per result content and sort keys. #4: a per-binding dependency
 stamp (definition, rows read, content hash of every column its expressions name) decides
@@ -268,7 +268,7 @@ budget 1 (OVER budget); placeholdersRead: measured 200 vs budget 100 (OVER budge
 With the injection reverted it passes. A count that drops below its pin also fails, with
 "UNDER budget — lower the pin in this commit".
 
-## Re-pinned at the Wave 4 merge (persistence)
+## Re-pinned at the Step 4 merge (persistence)
 
 Saving the session into the document is new work, so five budgets moved up
 by exactly its cost; each pin in `test/perf/` names the added calls. Per
@@ -279,13 +279,13 @@ the flush serialised). On open: `parts.read` and the document-switch,
 flush-before-save and client subscriptions. A burst of 200 reflows writes the
 session once.
 
-## After Wave 2 (TS)
+## After Step 2 (TS)
 
 The bundle-side optimisations. Each pin moved in the commit that earned it, with a
 behaviour assertion beside it, and each was shown red with its change reverted.
-"Before" is the pin as of the Wave 4 merge.
+"Before" is the pin as of the Step 4 merge.
 
-| Scenario | Count | Before | After Wave 2 (TS) | What earned it |
+| Scenario | Count | Before | After Step 2 (TS) | What earned it |
 |---|---|---:|---:|---|
 | W1 lower a 500-row table | host calls | 11 | 7 | frame, table, cells and label in one batch, addressed by core's batch handles (`$h:frame`, `$h:table`); the frame comes back in `minted`, so no `hitTest` |
 | | reads | 3 | 2 | |
@@ -312,7 +312,7 @@ which name what the op before them minted and write nothing.
 `resolveElementId` (#9 in the ranked list) now reads the scene tree once per command
 into an index. No workload reaches it, so a unit test pins it instead of a budget.
 
-### Corrections to the Wave 1 record
+### Corrections to the Step 1 record
 
 - **W2 did not run out of a bounded history.** The core history holds 1,000 steps. The
   fixture inserted each separator space at a field's start, and core 0.67 puts text
@@ -324,7 +324,7 @@ into an index. No workload reaches it, so a unit test pins it instead of a budge
 - **D-16 is closed by core's handles.** A `storyId` of `$h:<name>` resolves to the story
   a text frame minted, so the frame and what goes into it ride one batch.
 
-### Found while doing it (for Wave 8)
+### Found while doing it (for Step 8)
 
 - core: `insertText` at a placeholder run's start joins the run; a later field write
   erases the text, and its undo fails ("undo log empty") and drops the history record.
