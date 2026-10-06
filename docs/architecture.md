@@ -163,10 +163,56 @@ binding of the current session, and writes `setFieldValue` only where the value 
 | Resolved values | The document, as ordinary content: fields, tables, images, paths, element visibility, applied styles. |
 | The link from a text field to its binding | The field's own tag `{ plugin: "media.paged.data", key: <binding id> }`. |
 | A mark on the table frames and barcode paths the plugin created | Plugin metadata under the key `x-paged:media.paged.data`, an envelope `{ v, data }`. For a table `data` is `{ kind, region }`; for a barcode `{ kind, target, symbology }`. |
+| The definition of every binding that targets one page item (ADR 559, proposed) | That item's label, same key: `data.oid`, `data.bind`, `data.queries`, `data.sources`, `data.extra`. InDesign keeps it; the `session` part is a cache. |
 
 `DataSession::payload()` can serialise the whole recipe with credentials redacted, and
 `from_payload()` can rebuild a session. The bundle calls neither, and the wasm class has no
 `from_payload`. See [ADR 552](adr/552-binding-is-a-recipe.md).
+
+## Property bindings and the object model (ADR 558, 559 — proposed)
+
+On branch `om/universal-binding` (2026-10-06), against plugin-api/plugin-sdk
+0.2.43-canary.0 (unpublished) and canvas-wasm 0.70.0.
+
+- **`Binding::Property`** (`data-core/src/binding.rs`, types in `property.rs`):
+  `{ target: "host" | { selector }, path, query, expr, schema?, coerce, missing }`. The
+  target is a selector (ADR 131) resolved at apply time — never a raw `Self`. `schema` is the
+  target's ADR 132 row, read from `host.objects.schema` when the binding is defined.
+- **Coercion is Rust** (`data-bind/src/property.rs`): bool, number (integer, percent, range),
+  length (pt; `"3mm"`), colour (swatch name, `#hex`, `rgb()`, `cmyk()` → a `ColorIntent`),
+  enum (members), text (maxLength), ref, asset, bounds/point/transform. `coerce: strict`
+  fails a mismatch (sync state `Error`); `lenient` runs `missing` (`keepLast` writes nothing,
+  `clear`, `default`, `error`). The expression language gained `MM CM IN PT PX AS` and
+  `RGB CMYK HEX SWATCH ENUM` (`registry/functions/{units,color}.yaml`); a length is a number
+  in points and a colour is a canonical text literal, so no `Value` variant was added.
+- **One apply = one `host.objects.batch`** (`src/property-lane.ts`): `resolve_properties_at`
+  decides every value (pinned and overridden bindings answer `keep`), `data-host-model`
+  `planProperties` turns them into `set` ops, the lane resolves each distinct selector once
+  and the swatches once, and commits one batch (one undo step). A literal colour that no
+  swatch has is minted as `createSwatch` (`Color/R=255 G=0 B=0`, InDesign's unnamed-colour
+  name) in a batch of its own first — `host.objects` cannot create core objects yet.
+- **Old kinds re-expressed**: a visibility binding writes its `elementVisible` triple through
+  the same lane when the host has `host.objects` (the raw `setElementProperty` path stays as
+  the fallback); `StyleAction::property()` names a rule's applied-style path; a barcode's
+  module paint is a list of property triples in the IR (`LoweredBarcode.paint`).
+- **Persistence** (`src/labels.ts`, `src/property-session.ts`): every binding whose target is
+  one page item is also written into that item's label `x-paged:media.paged.data`
+  (`{ v: 1, data: { oid, bind: [definitions, target relative], queries, sources, extra } }`,
+  ASCII JSON, merged with a lowered table's own keys), at definition time and, for kinds
+  defined before labels existed, at the next save. A table's frame gets its recipe in the
+  lowering's own label. The document label carries the whole recipe next to the session
+  version (`setDocumentMetadata`). When the `session` part is missing (an InDesign save drops
+  it), the session is rebuilt from the labels (and the document label when present); every
+  source asks to be re-linked (`state.relink`).
+- **Object model** (`src/object-model.ts`, rows in the manifest): kinds `source`, `query`,
+  `binding`, `dataSet`, `variable` at `plugin:media.paged.data/<kind>/<id>`; `set` defines or
+  redefines through the session (zero undo steps — session state, not content); typed
+  commands `bindProperty`, `defineProperty`, `propertyBindings`, `refresh`, `apply`,
+  `defineSource`, `captureDataSet`, `applyDataSet`, `exportDataMergeTemplate`.
+- **Data Merge template export** (`src/datamerge-export.ts`): the document's IDML with every
+  merge field as `<<field>>` in a `HyperlinkTextSource`, `DBF_<field>` destinations and
+  hyperlinks, `<DataMergeImagePlaceholder>`s, `<DataMerge>` in Preferences, and the query's
+  rows as UTF-16 CSV with a BOM.
 
 ## The boundary to the host
 

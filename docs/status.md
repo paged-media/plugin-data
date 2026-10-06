@@ -109,6 +109,41 @@ of work, with file and line references, is
   materialised query results and prints the paginated flow of each output document. A
   script evaluated in Boa can supply the locale, the parameters and the build.
 
+## On branch `om/universal-binding` (2026-10-06, not on `main`)
+
+Built against plugin-api/plugin-sdk 0.2.43-canary.0 (unpublished; local `pnpm.overrides`) and
+canvas-wasm 0.70.0. ADR 558 and 559 are proposals in the thoughts register.
+
+- **Property bindings** (ADR 558): any property `host.objects` can set, bound to an
+  expression over a query, coerced in Rust against the target's schema row. One apply is
+  one `host.objects.batch` (one undo step); 50 bindings on 50 frames measured at 51 host
+  calls (one query per distinct selector plus the batch). Record stepping, pin/link, the
+  change report and data sets work over them. Visibility writes through the same lane.
+- **Bindings in the document** (ADR 559): each binding on a page item lives in that item's
+  label as well as in the `session` part. A `.paged` with its parts stripped, and InDesign
+  2025's own re-save of one (`conformance/indesign-binding/`), reopen with every binding;
+  only the data asks to be re-linked.
+- **"Export as InDesign Data Merge template"**: IDML + UTF-16 CSV; InDesign 2025 opened the
+  recorded template with fields `sku, name` and merged its three records.
+- **paged.data's own objects** in `host.objects` (sources, queries, bindings, data sets,
+  variables) and nine typed commands, including "Bind to data…" (`media.paged.data.bindProperty`,
+  which the Bindings panel completes).
+
+Not done there:
+
+- Variables are still placeholder fields; core has no op to create or set a custom text
+  variable on the published engines (0.69, 0.70), and a field exports to IDML as plain text.
+- `elementVisible` is not written to IDML by core 0.69/0.70 (`Visible="false"` missing): a
+  hidden item is hidden in paged only (pinned, `property-real-core.spec.ts`).
+- The document label (`setDocumentMetadata`) is kept in the container's model part, not in
+  `designmap.xml`, so the document-scope recipe (data sets, templates, sources and queries
+  no page item uses) does not survive an InDesign save.
+- A new literal colour costs one extra undo step (the `createSwatch` before the batch).
+- Plugin objects as targets bind through their selector and live in the document label:
+  `host.objects` has no `hostOf` door.
+- Rule bindings write through their old path (cell styles have no `host.objects` address on
+  the published engines).
+
 ## Limits of what is shipped
 
 - **Saving the session follows undo only on engine protocol 69** (core v0.69.0;

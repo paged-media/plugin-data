@@ -88,3 +88,11 @@ The codec depends on `quick-xml` 0.41 with default features off (`Cargo.toml:46-
 - [ADR 553](553-non-destructive-refresh.md) — `Overridden` and what it protects
 - [ADR 551](551-compiled-to-native-content.md) — the mutations a data set is applied with
 - [ADR 315](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/315-isolation-contract.md) — why graph data is not resolved through another plugin
+
+
+## Amendment, 2026-10-06 (proposed ADR 558)
+
+On branch `om/universal-binding`, a data set also captures and applies every
+`Binding::Property` (variable trait `property`, value `DataSetValue::Property`), which makes a
+data set range over any property `host.objects` exposes. The Illustrator library does not
+carry property variables (its deviation 3). Effective when ADR 558 is accepted.

@@ -23,5 +23,9 @@ the code as it stood, for decisions made earlier; their status says so.
 | [556](556-secrets-never-enter-the-plugin.md) | Secrets never enter the plugin | Accepted, recorded retroactively 2026-10-02 |
 | [557](557-variables-and-data-sets.md) | Variables and data sets are a projection over bindings | Accepted, recorded retroactively 2026-10-02 |
 
+Proposed, not yet accepted (in the thoughts register): **558** (one universal binding,
+`Binding::Property`) and **559** (bindings in the `.paged` file stay InDesign-compatible).
+Both are implemented on branch `om/universal-binding`; they move here when accepted.
+
 Decisions made in other repositories that this plugin's code rests on are listed in
 [`../README.md`](../README.md).

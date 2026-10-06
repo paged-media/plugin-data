@@ -88,3 +88,12 @@ writes either; the test measures objects built in the test file.
 - [ADR 553](553-non-destructive-refresh.md) — sync state, which is not in the payload
 - [ADR 311](https://github.com/paged-media/plugin-sdk/blob/main/docs/adr/311-plugin-state-under-own-id.md) — plugin metadata lives under the plugin's own id
 - [ADR 024](https://github.com/paged-media/editor/blob/main/docs/adr/024-context-sensitivity-is-a-core-concept.md) — the edit context that claims frames by this metadata
+
+
+## Amendment, 2026-10-06 (proposed ADR 559)
+
+On branch `om/universal-binding`, the recipe of every binding that targets one page item
+is also written into that item's label (`x-paged:media.paged.data`, `data.bind`), and the
+document label carries the whole recipe. The `session` part becomes a cache: a document whose
+part is missing (an InDesign save) is rebuilt from the labels. Effective when ADR 559 is
+accepted.
