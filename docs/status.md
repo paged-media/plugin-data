@@ -1,7 +1,10 @@
 # Status
 
-What `paged.data` ships and what it does not, read from the code at commit `6b96ce5`
-(`@paged-media/data` 0.1.0-canary.9), with the gates and records corrected on 2026-10-05. How
+What `paged.data` ships and what it does not, read from the code on branch
+`hardening/wave-0-gates` at `9077269` (2026-10-06; package version 0.1.0-canary.10, not yet
+published; the newest published version is 0.1.0-canary.9). The 2026-10-05 round of work up
+to the engine batch is on that branch; its outcome is summarised at the end of
+[`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). How
 the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
 of work, with file and line references, is
 [`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md).
@@ -63,8 +66,9 @@ of work, with file and line references, is
   flow (fields per record, optional grouping) with a preview list of what it would place. "Lower to document" writes native content: a variable as a
   tagged placeholder field, an image through `placeImage`, a barcode (EAN-13, UPC-A,
   Code-128, QR) as one closed vector path per dark module, scaled to the rectangle.
-- **Refresh.** "Refresh data" runs the queries again; "Refresh fields" rewrites the
-  placeholder fields whose value changed; "What changed?" lists the bindings whose resolved
+- **Refresh.** "Refresh data" runs the queries again (an unchanged result is recognised and
+  not decoded again); "Refresh fields" rewrites the placeholder fields whose value changed in
+  one back-to-front batch, which is one undo step, and skips pinned and overridden fields; "What changed?" lists the bindings whose resolved
   content differs from the previous report; a stepper previews the bindings against record N.
 - **Sync review** (since 2026-10-05, wave 7). Each binding in the Bindings panel shows its
   sync state (synced, stale, pinned, overridden, error) with Pin, Unpin and Accept source.
@@ -93,7 +97,8 @@ of work, with file and line references, is
   a query result as a data provider, which other plugins can read when the host has a
   provider registry; a variables palette that captures the current values or one data set
   per record, applies a data set in one undo step, and imports or exports a variable library.
-- **Seven commands, seven menu entries** and a `dataBinding` edit context: double-click on an
+- **Nine commands, nine menu entries, four panels, one importer** and a `dataBinding` edit
+  context: double-click on an
   element that carries this plugin's metadata; no canvas tools, the Bindings panel.
 - **The binding language**: 42 functions, arithmetic, comparison and `&`, with errors as
   values. The image and barcode bindings of the panel take an expression; so do all
@@ -112,7 +117,9 @@ of work, with file and line references, is
   (fields, tables, barcodes, styles, visibility) undoes as usual; the label on a lowered
   table or barcode names the binding, the hash of its definition and the hash of the session
   part it was lowered under, and goes with the content on undo. The engine has no
-  document-level label a plugin could write, so the session itself cannot follow undo.
+  document-level label a plugin could write, so the session itself cannot follow undo. Engine
+  protocol 68 (not yet released) adds one (`setDocumentMetadata`); naming the live session
+  part in it follows that release.
 - **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
   the Data query panel is used by bindings defined through the session or by its id.
   "Wire demo binding" still passes empty expressions.
@@ -158,8 +165,11 @@ of work, with file and line references, is
   - Core's IDML import misreads a template whose lines are bare placeholders: the paragraph
     mark lands two characters into the next placeholder (pinned in
     `test/merge-real-core.spec.ts`).
-- **A table lower is four undo steps** (frame, table, cell fill, label), measured by
-  `test/persist-real-core.spec.ts`.
+- **Lowering costs.** A table lower is one batch and one undo step (frame, table, cells and
+  label, addressed through core's batch handles; budget W1 in
+  `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" still places each
+  variable in its own batch, so 20 variables are 20 undo steps (budget W5); one batch for the
+  whole command is possible on the wire and is not built.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
 - **Remote sources.** A `credentialRef` can be stored on the descriptor, but nothing
   resolves it and the fetch is made without it. The editor's page policy cannot follow
@@ -183,20 +193,28 @@ of work, with file and line references, is
   `REQUIRE_REAL_ENGINE=1` and `REQUIRE_REAL_DUCKDB=1`, and the coverage gate requires every
   registry-mapped test to have run and passed. Publishing waits for both lanes on the same
   commit, runs the tests again, and fails when the package's inputs changed since the
-  published version without a version bump (`scripts/package-hash.mjs`). Baseline: 204 Rust
-  tests (one skipped: the oracle skeleton), 112 TypeScript tests in 22 files, of which one
-  file boots the real engine and none yet the real DuckDB.
+  published version without a version bump (`scripts/package-hash.mjs`). When this round of work
+  started there were 204 Rust tests (one skipped: the oracle skeleton) and 112 TypeScript
+  tests in 22 files, of which one file booted the real engine and none the real DuckDB. At
+  `9077269` (by grep) there are 293 Rust `#[test]` functions plus property tests and 52
+  TypeScript test files; 10 spec files run against the real core host and 11 against real
+  DuckDB, one of them in headless Chromium (`test/duckdb-browser.spec.ts`). The InDesign
+  Data Merge recordings and native DuckDB results are replayed in CI
+  ([`design/oracles.md`](design/oracles.md)).
 
-- **Performance is measured since 2026-10-05, not yet improved.** Count budgets are pinned:
+- **Performance is measured and pinned since 2026-10-05.** Count budgets are pinned:
   - Bundle side, against the real core host, the real data-js wasm and real DuckDB:
     `packages/data-bundle/test/perf/`.
   - Engine side: `data-conformance/tests/perf_counts.rs`, through the `perf-counters`
     feature. The shipped wasm exports `perfCounters()`.
   - Criterion benches trend the wall clock.
 
-  A 100-field refresh is 100 mutates and more undo steps than the bounded history reaches.
-  200 reflow events cost 200 full re-paginations. A 1-cell data change costs a re-resolve of
-  every binding.
+  After the optimisation round: a 100-field refresh is 1 mutate and 1 undo step (was 100);
+  a burst of 200 reflow events costs one chain read and one pagination (was 200); a 1-cell
+  data change re-resolves only the bindings whose inputs changed (10 of 50 in the workload,
+  was 50); a 10k-row table resolve allocates no sort keys (was 288,478); an unchanged result
+  delivered again is not decoded. The 57-record merge is pinned at 2 mutates and 2 undo
+  steps (W8).
 
   The "1M-row DuckDB" gate the records cited now has a lane. It is opt-in and trended, not
   gated, and measures a 1M-row CSV to a grouped RecordSet in 0.37 s. Bringing the full 1M rows
@@ -205,16 +223,16 @@ of work, with file and line references, is
 
 ## Not built
 
-- Arrow IPC across the wasm boundary: values cross as JSON-shaped objects
-  ([ADR 014](adr/014-data-provider-arrow-seam.md)). The registry row is `planned`.
+- Arrow IPC across the wasm boundary ([ADR 014](adr/014-data-provider-arrow-seam.md)). A
+  refresh now hands query results to the engine as typed column buffers, one copy per column
+  (`queryColumns` and `ingestColumnBatch`), not as one object per cell; the IPC format itself
+  is not used.
 - Database sources, SQLite included. `attach_plan` describes an attach in Rust; nothing
   performs one (see the wave-6 gaps below).
 - Reading a governed table and its metadata sidecar from a location, and applying a
   graph-data variable. Their registry rows are `planned`.
 - A Node binding for the batch runner (registry row `planned`); the CLI is the native route.
-- Turning a paginated flow into document content, in the editor or anywhere else.
 - Raster barcodes; an exporter contribution.
-- The differential test against native DuckDB: `data-conformance/tests/oracle.rs` is a stub.
 
 ## Host gaps found in wave 4
 
@@ -223,7 +241,7 @@ Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 
 | Gap | Class | Effect here |
 | --- | --- | --- |
 | Container parts are not undoable (`PartsSurface.write`/`delete`, "Not undoable") | not modelled in core (shared with paged.web) | the session part does not follow undo |
-| No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead |
+| No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead. Built in the engine as `setDocumentMetadata` (protocol 68, not yet released); the plugin adopts it after the release |
 | Window ▸ Bindings is greyed outside the `dataBinding` edit context | host UI | the Bindings panel opens from Object ▸ Insert data binding… or the command palette |
 
 ## Gaps found in wave 6
