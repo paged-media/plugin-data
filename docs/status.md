@@ -112,14 +112,17 @@ of work, with file and line references, is
 
 ## Limits of what is shipped
 
-- **Saving the session is not undoable.** Container parts take no part in undo, and
-  defining a binding is not a document change. What a binding writes into the document
-  (fields, tables, barcodes, styles, visibility) undoes as usual; the label on a lowered
-  table or barcode names the binding, the hash of its definition and the hash of the session
-  part it was lowered under, and goes with the content on undo. The engine has no
-  document-level label a plugin could write, so the session itself cannot follow undo. Engine
-  protocol 68 (not yet released) adds one (`setDocumentMetadata`); naming the live session
-  part in it follows that release.
+- **Saving the session follows undo only on engine protocol 69** (not yet released;
+  built and feature-detected, `src/doors.ts`, `src/doc-label.ts`). With the document-label
+  doors each session version is written once as `sessions/<hash>.json` and the document's
+  own label (`setDocumentMetadata`, undoable) names the live one. The label rides the batch
+  of the document write that made the change (a lower, a field refresh, a merge), so both
+  undo together; a change no write carried is labelled on save. An undo that takes the label
+  back reloads the version it names, and a reopen restores the labelled version before
+  `session.json`. Data parts are then never collected (an undo can bring back a session that
+  names them), and old versions are kept. On the published engine (68) and contract
+  (0.2.40) container parts take no part in undo and defining a binding is not a document
+  change: what a binding writes undoes as usual, the session part does not.
 - **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
   the Data query panel is used by bindings defined through the session or by its id.
   "Wire demo binding" still passes empty expressions.
@@ -152,15 +155,21 @@ of work, with file and line references, is
 - **Data Merge** (Wave 5, `src/merge.ts`; `docs/design/oracles.md` §2). The merge reads the
   `<<field>>` text frames (and the chosen image rectangles) of a page and merges every record,
   Single or Multiple Records, matching InDesign on all 8 recorded fixtures. The limits:
-  - It merges into the current document, keeping the template page or consuming it. No
-    plugin door creates a second document, so there is no "merge to a new document", and
-    `runRecordFlowBatch` returns paginated units, not documents.
+  - It merges into the current document, keeping the template page or consuming it.
+    "Merge to a new document" (`destination: "newDocument"`) copies the document through
+    the documents door (D-26, contract 0.2.41, unreleased), opens the copy (the host asks
+    before unsaved edits are discarded; keeping them cancels the merge) and consumes the
+    template there. A host without the door refuses it and says so. `runRecordFlowBatch`
+    returns paginated units, not documents.
   - Merged frames are minted fresh: core refuses to copy a frame whose story holds a
     hyperlink (every Data Merge placeholder is one), and a duplicated page shares its frames'
     stories. Story-level formatting is copied; formatting that varies inside the template
     story is not.
-  - A merge that needs new pages takes two undo steps (pages, then content), because a page
-    minted in a batch cannot be named. A merge that fits the template page takes one.
+  - A merge that needs new pages takes two undo steps (pages, then content) on engine 68,
+    because a page minted in a batch cannot be named. On protocol 69 the pages are named in
+    the batch and the merge is one batch (falling back to two if the engine refuses). A
+    merge that fits the template page takes one. Overset words are measured with one
+    `measureStrings` call per face and size where the host has it (D-27), else per word.
   - Added pages have zero margins (insertPage and duplicatePage do not carry them).
   - Core's IDML import misreads a template whose lines are bare placeholders: the paragraph
     mark lands two characters into the next placeholder (pinned in
@@ -170,6 +179,10 @@ of work, with file and line references, is
   `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" plans every
   variable first and places them in one batch, so 20 variables are one mutate and one undo
   step (budget W5, was 20); a batch core refuses falls back to one mutate per variable.
+- **Fields at the caret.** A field placed at the user's caret sends the caret both as
+  `offset` and as `insertField.contentOffset`: an engine on protocol 69 converts the caret
+  unit and places it right in any paragraph; an older engine ignores `contentOffset` and the
+  field lands early after the first paragraph.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
 - **Remote sources.** A `credentialRef` can be stored on the descriptor, but nothing
   resolves it and the fetch is made without it. The editor's page policy cannot follow

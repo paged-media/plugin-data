@@ -69,6 +69,8 @@ import {
 } from "./persist";
 import type { LowerStamp, LoweredTableAt } from "./lower";
 import { commitRecordFlow } from "./flow-writer";
+import { labelEnvelope, labelledVersion, labelRider, sessionVersionPath } from "./doc-label";
+import { documentLabelDoors, documentsDoors, engineHasDocumentLabels } from "./doors";
 import {
   mergeRecords as writeMerge,
   readMergeTemplate,
@@ -447,7 +449,19 @@ export interface SessionMergeOptions {
   imageBase?: string;
   /** Labels the output so a re-merge replaces it (default `merge-<query>`). */
   mergeId?: string;
+  /** `current` (default): merge into this document. `newDocument`: copy
+   *  this document, open the copy (the host asks before unsaved edits are
+   *  discarded) and merge into it, consuming the template page — InDesign's
+   *  "Create Merged Document". Needs the host's documents door (D-26). */
+  destination?: "current" | "newDocument";
+  /** The new document's name (`newDocument`; default "<name> (merged)"). */
+  documentName?: string;
 }
+
+/** Why a merge to a new document cannot run on a host without the
+ *  documents door (D-26). */
+export const NO_NEW_DOCUMENT_DOOR =
+  "this host cannot open a second document (no documents door, D-26) — merge into the current document instead";
 
 /** The session API the panels + commands drive. */
 export interface DataSourceSession extends ReviewSession {
@@ -795,7 +809,34 @@ interface QueryDef {
 
 /** Create a session bound to a host. Construction is synchronous + side-effect
  *  free (the engines boot lazily on first use) so `activate` stays light. */
-export function createSession(host: BundleHost, today: number): DataSourceSession {
+export function createSession(rawHost: BundleHost, today: number): DataSourceSession {
+  // The document label naming the live session version (engine protocol 69,
+  // doc-label.ts). `labelActive` is probed once per document; `labelHash` is
+  // the version the document's label names as far as this session knows;
+  // `pendingLabel` is the version the next document write carries.
+  let labelActive: boolean | null = null;
+  let labelHash: string | null = null;
+  let pendingLabel: string | null = null;
+  const knownVersions = new Set<string>();
+  // Every document write goes through the rider, which carries a pending
+  // label in the write's own batch (one undo step for both).
+  const host = labelRider(rawHost, {
+    pending: () => pendingLabel,
+    written: (hash) => {
+      labelHash = hash;
+      if (pendingLabel === hash) pendingLabel = null;
+    },
+    refused: () => {
+      labelActive = false;
+      pendingLabel = null;
+    },
+  });
+  /** Whether this document's session is labelled (the SDK forwards the label
+   *  doors and the engine has them). No host call when the SDK lacks them. */
+  async function labelOn(): Promise<boolean> {
+    if (labelActive === null) labelActive = await engineHasDocumentLabels(rawHost);
+    return labelActive;
+  }
   const sourceNames: string[] = [];
   const queries = new Map<string, QueryDef>();
   const bindingIds: string[] = [];
@@ -1093,6 +1134,15 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           lastWritten = text;
           persistence.hash = await contentHash(bytes);
         }
+        // Protocol 69: this version as its own part, and the label to name it.
+        if (persistence.hash && (await labelOn()) && epoch === docEpoch) {
+          const path = sessionVersionPath(persistence.hash);
+          if (!knownVersions.has(path)) {
+            await host.parts.write(path, bytes);
+            knownVersions.add(path);
+          }
+          pendingLabel = persistence.hash === labelHash ? null : persistence.hash;
+        }
         persistence.status = "saved";
       } catch (err) {
         report({
@@ -1110,6 +1160,9 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
    *  is not on the undo stack, so no undo step can name one again. */
   async function collectDataParts(): Promise<void> {
     if (!host.supports("storage.parts@2")) return;
+    // With labelled versions an undo can bring back a session that names a
+    // part the live one dropped: keep them all.
+    if (labelActive) return;
     try {
       const built = await buildPersisted();
       if (!built) return;
@@ -1133,6 +1186,120 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         message: `unused data parts were kept: ${errText(err)}`,
       });
     }
+  }
+
+  /** Resolved by `documentOpened` once the opened document is restored. */
+  let openedWaiters: (() => void)[] = [];
+
+  /** Merge into a COPY of this document (D-26): export it, open the copy
+   *  (the session follows the switch and restores the copy's session), then
+   *  merge there, consuming the template page. */
+  async function mergeToNewDocument(
+    options: SessionMergeOptions,
+    fail: (message: string) => MergeResult,
+  ): Promise<MergeResult> {
+    const docs = documentsDoors(rawHost);
+    if (!docs) return fail(NO_NEW_DOCUMENT_DOOR);
+    const pageId = options.pageId ?? (await startPage());
+    if (!pageId) return fail("no template page");
+    // The template must be readable here before the copy is made.
+    const probe = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields });
+    if (!probe.template) return fail(probe.diagnostics.join("; ") || "no template on the page");
+    await flushPersistInternal();
+    let bytes: Uint8Array;
+    try {
+      bytes = await docs.exportPaged();
+    } catch (err) {
+      return fail(`the document could not be copied: ${errText(err)}`);
+    }
+    let name = options.documentName;
+    if (!name) {
+      try {
+        const meta = await host.document.meta();
+        name = `${meta.documentName || "Untitled"} (merged)`;
+      } catch {
+        name = "Merged document";
+      }
+    }
+    const opened = new Promise<void>((resolve) => openedWaiters.push(resolve));
+    let result;
+    try {
+      result = await docs.open(bytes, { name });
+    } catch (err) {
+      openedWaiters = [];
+      return fail(`the merged document could not be opened: ${errText(err)}`);
+    }
+    if (!result.opened) {
+      openedWaiters = [];
+      state.status = "ready";
+      state.message = "Merge cancelled: the current document was kept.";
+      emit();
+      return { ok: false, plan: null, pages: [], records: [], overset: [], mutateCalls: 0, diagnostics: ["merge: the user kept the current document"] };
+    }
+    // The host announces the new document; wait for the session to follow
+    // (or follow it here when the host does not announce it).
+    const announced = await Promise.race([
+      opened.then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), 5000)),
+    ]);
+    if (!announced) {
+      openedWaiters = [];
+      await self.documentOpened();
+    }
+    return self.mergeRecords({ ...options, destination: "current", template: "consume", pageId: pageId as string });
+  }
+
+  /** Before a document write: write a pending session change now, so the
+   *  write carries the label naming it. Nothing to do without labels. */
+  async function settleLabel(): Promise<void> {
+    if (persistTimer && (await labelOn())) await flushPersistInternal();
+  }
+
+  /** A session change no document write carried is labelled on its own
+   *  (on save): one undo step that names the version being saved. */
+  async function writePendingLabel(): Promise<void> {
+    const hash = pendingLabel;
+    const doors = documentLabelDoors(rawHost);
+    if (!hash || !doors || !labelActive) return;
+    try {
+      const o = await doors.setDocumentMetadata(labelEnvelope(hash));
+      if (o.applied) {
+        labelHash = hash;
+        if (pendingLabel === hash) pendingLabel = null;
+      }
+    } catch (err) {
+      report({ level: "warn", source: "persist", message: `the session label was not written: ${errText(err)}` });
+    }
+  }
+
+  /** After an undo or redo: if the document's label now names another
+   *  session version, reload that version (the session follows undo). */
+  async function followLabel(): Promise<void> {
+    const doors = documentLabelDoors(rawHost);
+    if (!doors) return;
+    let named: string | null;
+    try {
+      named = labelledVersion(await doors.getDocumentMetadata());
+    } catch {
+      return;
+    }
+    if (named === labelHash) return;
+    labelHash = named;
+    pendingLabel = null;
+    if (!named || named === persistence.hash) return;
+    let bytes: Uint8Array | null = null;
+    try {
+      bytes = await host.parts.read(sessionVersionPath(named));
+    } catch {
+      bytes = null;
+    }
+    if (!bytes) {
+      report({ level: "warn", source: "restore", message: `the session version ${named} the document names is missing; the session stays as it is` });
+      return;
+    }
+    await resetState();
+    restorePromise = restoreInternal(bytes);
+    await restorePromise;
   }
 
   /** The label a lowering stamps on the content it creates: the binding, the
@@ -1227,6 +1394,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     source: SessionDiagnostic["source"],
     writes: readonly { storyId: string; offset: number; key: string; value: string | null }[],
   ): Promise<number> {
+    if (writes.length > 0) await settleLabel();
     let pending = backToFront(writes);
     const rejected = (w: (typeof pending)[number], err: unknown) =>
       report({
@@ -1555,16 +1723,86 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     }
   }
 
+  /** Drop everything this session holds for the current document (another
+   *  document opened, or an undo named another session version). */
+  async function resetState(): Promise<void> {
+    docEpoch += 1;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = null;
+    await restorePromise?.catch(() => {});
+    for (const h of providerHandles.values()) h.dispose();
+    providerHandles.clear();
+    sourceNames.length = 0;
+    bindingIds.length = 0;
+    diagnostics.length = 0;
+    queries.clear();
+    bindingKinds.clear();
+    visibilityTargets.clear();
+    imageTargets.clear();
+    barcodeTargets.clear();
+    placedVariables.clear();
+    ruleTargets.clear();
+    remoteSources.clear();
+    importedCsv.clear();
+    pendingCsv.clear();
+    importedFiles.clear();
+    pendingFiles.clear();
+    csvFileNames.clear();
+    refreshPolicies.clear();
+    poller.stopAll();
+    state.polling = [];
+    loweredInto.clear();
+    pendingDefs.length = 0;
+    knownDataParts.clear();
+    bootPayload = null;
+    lastWritten = null;
+    persistence.status = "empty";
+    persistence.hash = null;
+    partsMissingReported = false;
+    engine?.free();
+    engine = null;
+    const oldDuck = duck;
+    duck = null;
+    void oldDuck?.close();
+    state.status = "idle";
+    state.message = "No data sources yet — import a CSV to begin.";
+    emit();
+  }
+
+  /** The session version the document's label names, or null (no label
+   *  doors, no label, or the part is missing — then `session.json` is read). */
+  async function labelledSession(): Promise<Uint8Array | null> {
+    const doors = documentLabelDoors(rawHost);
+    if (!doors) return null;
+    const named = labelledVersion(await doors.getDocumentMetadata().catch(() => null));
+    if (!named) return null;
+    labelHash = named;
+    const path = sessionVersionPath(named);
+    const bytes = await host.parts.read(path).catch(() => null);
+    if (bytes) {
+      knownVersions.add(path);
+      return bytes;
+    }
+    report({
+      level: "warn",
+      source: "restore",
+      message: `the document names session version ${named}, which it does not hold; the last saved session is restored`,
+    });
+    return null;
+  }
+
   /** Restore the document's `session` part: the engine recipe, the locale and
    *  the sync decisions, the host-side targets, the imported data (registered
    *  in DuckDB on its first boot) and remote descriptors (inert). Then reconcile
    *  with the document: which variable fields are placed, and whether each
    *  recorded table is still there and still labelled with its binding. */
-  async function restoreInternal(): Promise<void> {
+  async function restoreInternal(given?: Uint8Array): Promise<void> {
     if (!partsAvailable()) return;
-    let bytes: Uint8Array | null;
+    let bytes: Uint8Array | null = given ?? null;
     try {
-      bytes = await host.parts.read(SESSION_PART);
+      // Protocol 69: the version the document's label names, else the part.
+      if (!bytes) bytes = await labelledSession();
+      if (!bytes) bytes = await host.parts.read(SESSION_PART);
     } catch (err) {
       report({
         level: "error",
@@ -1741,6 +1979,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     hostSubs.push(
       host.document.onWillSave(async () => {
         await flushPersistInternal();
+        await writePendingLabel();
         await collectDataParts();
       }),
     );
@@ -1750,8 +1989,12 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       host.document.onDidChange((ev) => {
         docChanges += 1;
         // Undo/redo can take a placed field away or bring it back; a stale
-        // "placed" would make Lower skip placing it again.
-        if (ev.kind === "undoApplied" || ev.kind === "redoApplied") void reconcilePlaced();
+        // "placed" would make Lower skip placing it again. It can also take
+        // the session label back: the session follows it.
+        if (ev.kind === "undoApplied" || ev.kind === "redoApplied") {
+          void reconcilePlaced();
+          if (labelActive) void followLabel();
+        }
       }),
     );
   }
@@ -2616,6 +2859,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         for (const id of [...bindingIds]) {
           await this.lowerBinding(id);
         }
+        if (ctx.variables!.length > 0) await settleLabel();
         const placed = await commitLoweredVariables(host, ctx.variables!, ctx);
         for (const key of placed.keys()) placedVariables.add(key);
       } finally {
@@ -3173,6 +3417,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       }
       if (!queries.has(options.query)) return fail(`no query "${options.query}"`);
       // The merge reads the query's result as delivered: run it if it has none.
+      if (options.destination === "newDocument") return mergeToNewDocument(options, fail);
       if ((e.query_record_count?.(options.query) ?? 0) === 0) {
         await this.refreshData();
         if (state.status === "error" && (e.query_record_count?.(options.query) ?? 0) === 0) {
@@ -3195,6 +3440,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       }
       // Replace the previous run of this merge in the first batch.
       const plan = await relowerPlan({ kind: "merge", merge: mergeId });
+      await settleLabel();
       const engineForMerge = e as Required<Pick<DataEngineLike, "plan_merge" | "merge_words" | "merge_overset">>;
       const result = await writeMerge(host, engineForMerge, template, {
         query: options.query,
@@ -3205,6 +3451,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         mergeId,
         clear: plan.remove,
         templatePresent,
+        pageHandles: await labelOn(),
       });
       if (result.ok) mergeTemplates.set(mergeId, template);
       for (const d of result.diagnostics) {
@@ -3293,49 +3540,13 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     },
 
     async documentOpened() {
-      docEpoch += 1;
-      if (persistTimer) clearTimeout(persistTimer);
-      persistTimer = null;
-      await restorePromise?.catch(() => {});
-      for (const h of providerHandles.values()) h.dispose();
-      providerHandles.clear();
-      sourceNames.length = 0;
-      bindingIds.length = 0;
-      diagnostics.length = 0;
-      queries.clear();
-      bindingKinds.clear();
-      visibilityTargets.clear();
-      imageTargets.clear();
-      barcodeTargets.clear();
-      placedVariables.clear();
-      ruleTargets.clear();
-      remoteSources.clear();
-      importedCsv.clear();
-      pendingCsv.clear();
-      importedFiles.clear();
-      pendingFiles.clear();
-      csvFileNames.clear();
-      refreshPolicies.clear();
-      poller.stopAll();
-      state.polling = [];
-      loweredInto.clear();
-      pendingDefs.length = 0;
-      knownDataParts.clear();
-      bootPayload = null;
-      lastWritten = null;
-      persistence.status = "empty";
-      persistence.hash = null;
-      partsMissingReported = false;
-      engine?.free();
-      engine = null;
-      const oldDuck = duck;
-      duck = null;
-      void oldDuck?.close();
-      state.status = "idle";
-      state.message = "No data sources yet — import a CSV to begin.";
-      emit();
+      await resetState();
+      labelActive = null;
+      labelHash = null;
+      knownVersions.clear();
       restorePromise = restoreInternal();
       await restorePromise;
+      for (const w of openedWaiters.splice(0)) w();
     },
 
     async whenRestored() {

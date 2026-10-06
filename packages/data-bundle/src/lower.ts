@@ -288,13 +288,14 @@ function errorText(error: unknown): string {
  *  `supports` without injecting the surface, and a caret inside a table cell
  *  answers `null` on purpose so cell-local offsets never leak as story-local.
  *
- *  OFFSET CONVENTION — an open core question, not fixed here. The caret
- *  answers in the `ContentSelection` convention (UTF-8 bytes of the runs plus
- *  one synthetic `\n` per paragraph boundary), while `insertField`,
- *  `setFieldValue` and `placeholders()` count CHARS with no paragraph
- *  separators (core paged-mutate apply/path_topology.rs). The two agree only
- *  in the first paragraph of ASCII text; elsewhere a caret offset passed
- *  straight to `insertField` lands early. */
+ *  OFFSET CONVENTION. The caret answers in the `ContentSelection` convention
+ *  (UTF-8 bytes of the runs plus one synthetic `\n` per paragraph boundary),
+ *  while `insertField.offset`, `setFieldValue` and `placeholders()` count
+ *  CHARS with no paragraph separators. The two agree only in the first
+ *  paragraph of ASCII text. Engine protocol 69 takes the caret as
+ *  `insertField.contentOffset` and converts it, so a caret point is sent as
+ *  both (`insertFieldMutation`): a v69 engine lands it in any paragraph, an
+ *  older one ignores `contentOffset` and lands early past the first. */
 function readCaret(host: BundleHost): { storyId: string; offset: number } | null {
   try {
     if (!host.supports("text.caret@1")) return null;
@@ -304,6 +305,14 @@ function readCaret(host: BundleHost): { storyId: string; offset: number } | null
   } catch {
     return null;
   }
+}
+
+/** A point in existing text. `caret`: the offset is the user's caret, in the
+ *  caret unit (sent as `contentOffset` as well, see `insertFieldMutation`). */
+interface InsertionPoint {
+  storyId: string;
+  offset: number;
+  caret?: boolean;
 }
 
 /** Where a NEW variable field goes: a `{story, offset}` in existing text, or
@@ -322,13 +331,13 @@ function readCaret(host: BundleHost): { storyId: string; offset: number } | null
 async function variableInsertionPoint(
   host: BundleHost,
   ctx?: LowerContext,
-): Promise<{ storyId: string; offset: number } | { mint: PageId } | null> {
+): Promise<InsertionPoint | { mint: PageId } | null> {
   const caret = readCaret(host);
   if (caret) {
     host.log.info(
       `lower: inserting at the user's caret (story ${caret.storyId}, offset ${caret.offset})`,
     );
-    return caret;
+    return { storyId: caret.storyId, offset: caret.offset, caret: true };
   }
 
   // Selection: a selected text frame's story is the natural anchor.
@@ -392,16 +401,14 @@ export async function commitLoweredVariable(
     );
     return null;
   }
-  let point: { storyId: string; offset: number } | { mint: PageId } | null;
+  let point: InsertionPoint | { mint: PageId } | null;
   if (targetStoryId) {
     // A caller-pinned story still honors the caret's OFFSET, but only when the
     // caret is actually inside that story — using a foreign story's offset would
     // insert at an arbitrary point in the pinned one.
     const caret = readCaret(host);
-    point = {
-      storyId: targetStoryId,
-      offset: caret && caret.storyId === targetStoryId ? caret.offset : 0,
-    };
+    const inStory = !!caret && caret.storyId === targetStoryId;
+    point = { storyId: targetStoryId, offset: inStory ? caret!.offset : 0, caret: inStory };
   } else {
     point = await variableInsertionPoint(host, ctx);
   }
@@ -433,7 +440,9 @@ export async function commitLoweredVariable(
     return { storyId, offset: 0 };
   }
   const { storyId, offset } = point;
-  const outcome = await host.document.mutate(insertFieldMutation(storyId, offset, bindingKey, value));
+  const outcome = await host.document.mutate(
+    insertFieldMutation(storyId, offset, bindingKey, value, point.caret ? offset : undefined),
+  );
   if (!outcome.applied) {
     host.log.warn(`variable "${variable.target}": insertField rejected`);
     return null;
@@ -488,7 +497,7 @@ export async function commitLoweredVariables(
         insertFieldMutation(`$h:v${i}`, 0, it.key, value),
       );
     } else {
-      ops.push(insertFieldMutation(point.storyId, point.offset, it.key, value));
+      ops.push(insertFieldMutation(point.storyId, point.offset, it.key, value, point.caret ? point.offset : undefined));
     }
   });
   const outcome = await host.document.mutate({ op: "batch", args: { ops } });

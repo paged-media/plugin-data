@@ -47,12 +47,19 @@ export const FIELD_PLUGIN = "media.paged.data";
  *
  *  `offset` is caller-supplied, in core's field convention: chars of the
  *  story's runs, no paragraph separators. The bundle takes it from the user's
- *  caret (C-9) when there is one, else story start. */
+ *  caret (C-9) when there is one, else story start.
+ *
+ *  `contentOffset` (engine protocol 69) is the same point in the CARET unit
+ *  (UTF-8 bytes of the runs plus one `\n` per paragraph boundary): a v69
+ *  engine converts it against the story at apply time and ignores `offset`;
+ *  an older engine ignores `contentOffset` and uses `offset`. So a caller
+ *  holding a caret passes it as both, and either engine does its best. */
 export function insertFieldMutation(
   storyId: string,
   offset: number,
   key: string,
   value: string | null,
+  contentOffset?: number,
 ): Mutation {
   return {
     op: "insertField",
@@ -60,8 +67,10 @@ export function insertFieldMutation(
       storyId,
       offset,
       field: { placeholder: { plugin: FIELD_PLUGIN, key, value: value ?? undefined } },
+      // Typed by plugin-api 0.2.41 (protocol 69); 0.2.40 lacks the field.
+      ...(contentOffset !== undefined ? { contentOffset } : {}),
     },
-  };
+  } as Mutation;
 }
 
 /** Re-resolve an existing placeholder field to a new value (D-01). `offset` is a

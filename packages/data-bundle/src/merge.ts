@@ -28,9 +28,11 @@
 //   `insertTextFrame` + `bindCreated` names it, and `$h:<handle>` addresses the
 //   frame AND its story in later children (insertText, a storyRange
 //   setElementProperty, setPluginMetadata).
-// - A page minted in a batch cannot be named (`bindCreated` refuses: "nothing
-//   to name"), so a merge that needs new pages costs TWO undo steps: the pages,
-//   then everything on them. One step when the merge fits the template page.
+// - Before engine protocol 69 a page minted in a batch cannot be named
+//   (`bindCreated` refuses: "nothing to name"), so a merge that needs new pages
+//   costs TWO undo steps: the pages, then everything on them. Protocol 69 names
+//   them (`$h:<name>` as a page id), and the session asks for ONE batch
+//   (`pageHandles`), falling back to two if the engine refuses it.
 // - Template frames cannot be copied: `duplicateElements` refuses a story that
 //   holds a hyperlink, and every InDesign Data Merge placeholder IS a
 //   HyperlinkTextSource; `duplicatePage` copies a frame but SHARES its story
@@ -38,20 +40,23 @@
 //   fresh at the planned bounds, and the template's story-level formatting is
 //   copied onto each (`setElementProperty` over the story range). Per-run
 //   formatting inside the template is not copied yet.
-// - There is no plugin door that creates a second document, so "merge to a new
-//   document" is a documented gap: the merge writes into the current document,
-//   either CONSUMING the template page (its merge frames are replaced, the
-//   output starts on it — what InDesign's new document holds) or KEEPING it
-//   (the output goes on new pages after it).
+// - The merge writes into the current document, either CONSUMING the template
+//   page (its merge frames are replaced, the output starts on it — what
+//   InDesign's new document holds) or KEEPING it (the output goes on new pages
+//   after it). "Merge to a new document" copies the document through the
+//   documents door (D-26, `exportPaged` + `open`) and consumes the template in
+//   the copy (session.ts); a host without that door refuses it.
 // - Headless core reports no overset (it lays out without fonts), so overset is
 //   MEASURED (DM-7): the engine lists each template frame's words, the host
-//   measures them (`host.text.measureString`), and the engine wraps every
+//   measures them (`host.text.measureStrings`, one call per face and size;
+//   `measureString` per word on a host without it), and the engine wraps every
 //   merged text and compares its lines × leading with the frame. A host that
 //   does report a story overset is believed as well.
 
-import type { BundleHost, ElementId, Mutation, PageId } from "@paged-media/plugin-api";
+import type { BundleHost, ElementId, Mutation, MutationOutcome, PageId } from "@paged-media/plugin-api";
 
 import { BINDING_KEY, makeEnvelope, type IdmlFit } from "../../data-host-model/src";
+import { measureStringsDoor } from "./doors";
 
 // ── the engine contract (data-lower/src/merge.rs, camelCase serde) ──────────
 
@@ -426,6 +431,10 @@ export interface MergeWriteOptions {
   /** False when a consumed template's frames are already gone (a re-merge
    *  over the stored template): nothing of the template is left to remove. */
   templatePresent?: boolean;
+  /** The engine names pages minted in a batch (protocol 69: `bindCreated`
+   *  after `insertPage` / `duplicatePage`, then `$h:<name>` as a page id), so
+   *  pages and content go in ONE batch: one undo step for any merge. */
+  pageHandles?: boolean;
 }
 
 /** The page mutations: what has to exist before anything can be placed.
@@ -455,6 +464,37 @@ export function pageMutations(
 
 function removeTemplateFrames(template: MergeTemplate): Mutation[] {
   return template.frames.map((f) => ({ op: "deleteFrame", args: { frameId: f.element.id as string } }));
+}
+
+/** The whole merge as ONE batch, for an engine that names pages minted in a
+ *  batch (`pageHandles`): the page ops of [`pageMutations`], each new page
+ *  named `p<i>`, then the content of [`contentMutation`] addressing them as
+ *  `$h:p<i>`. Every page is inserted right after the template, so the i-th
+ *  of n new pages ends up (n-1-i)-th after it. `null` when the merge needs no
+ *  new page (the content batch alone is one step). */
+export function oneStepMutation(
+  plan: Pick<MergePlan, "pageCount" | "records">,
+  template: MergeTemplate,
+  opts: MergeWriteOptions,
+): Mutation | null {
+  const pagesOp = pageMutations(plan, template, opts);
+  if (!pagesOp) return null;
+  const ops: Mutation[] = [];
+  let minted = 0;
+  for (const op of (pagesOp.args as { ops: Mutation[] }).ops) {
+    ops.push(op);
+    if (op.op === "insertPage" || op.op === "duplicatePage") {
+      ops.push({ op: "bindCreated", args: { handle: `p${minted}` } } as Mutation);
+      minted += 1;
+    }
+  }
+  const handle = (k: number) => `$h:p${minted - 1 - (opts.template === "consume" ? k - 1 : k)}` as PageId;
+  const pages: PageId[] = Array.from({ length: plan.pageCount }, (_, k) =>
+    opts.template === "consume" && k === 0 ? template.pageId : handle(k),
+  );
+  const content = contentMutation(plan, template, pages, opts);
+  ops.push(...(content.args as { ops: Mutation[] }).ops);
+  return { op: "batch", args: { ops } };
 }
 
 /** Resolve an image reference against `imageBase`. */
@@ -552,14 +592,19 @@ export interface MergeResult {
   diagnostics: string[];
 }
 
+/** An applied `mutate` answer. */
+type AppliedOutcome = Extract<MutationOutcome, { applied: true }>;
+
 function failed(diagnostics: string[], mutateCalls = 0, plan: MergePlan | null = null): MergeResult {
   return { ok: false, plan, pages: [], records: [], overset: [], mutateCalls, diagnostics };
 }
 
 /**
  * Merge a query's records into the document through a template read with
- * [`readMergeTemplate`]. Plans in the engine, writes in at most two mutates
- * (pages, then content), then measures every merged text for overset.
+ * [`readMergeTemplate`]. Plans in the engine, writes in one mutate where the
+ * engine names pages minted in a batch (`pageHandles`) and at most two
+ * otherwise (pages, then content), then measures every merged text for
+ * overset.
  */
 export async function mergeRecords(
   host: BundleHost,
@@ -583,50 +628,44 @@ export async function mergeRecords(
   const mergeId = opts.mergeId ?? `merge-${opts.query}`;
   const wopts: MergeWriteOptions = { ...opts, mergeId };
 
-  // 1. Pages.
+  // 1. Pages and content: one batch where the engine names pages minted in
+  // a batch (protocol 69), else pages, then content.
   let mutateCalls = 0;
-  const before = (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
-  const pagesOp = pageMutations(plan, template, wopts);
-  if (pagesOp) {
+  let outcome: AppliedOutcome | null = null;
+  let pages: PageId[] = [];
+  const one = wopts.pageHandles ? oneStepMutation(plan, template, wopts) : null;
+  if (one) {
     mutateCalls += 1;
-    const o = await host.document.mutate(pagesOp);
-    if (!o.applied) return failed([...diagnostics, `merge: adding pages was refused: ${errorText(o.error)}`], mutateCalls, plan);
+    const tried = await host.document.mutate(one);
+    if (tried.applied) {
+      outcome = tried;
+      pages = outputPages(await pageIds(host), template, wopts, plan.pageCount);
+    } else {
+      diagnostics.push(`merge: the one-step batch was refused (${errorText(tried.error)}); pages, then content`);
+    }
   }
-  const after = (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
-  const at = after.indexOf(template.pageId);
-  const pages: PageId[] = (
-    wopts.template === "consume"
-      ? after.slice(at, at + plan.pageCount)
-      : after.slice(at + 1, at + 1 + plan.pageCount)
-  ) as PageId[];
-  // (Not "the ids that are new": a re-merge deletes the pages it added before
-  // adding them again, and core may hand the same ids out again.)
-  if (pages.length !== plan.pageCount || (pagesOp === null && after.length !== before.length)) {
+  if (!outcome) {
+    const two = await writeInTwoSteps(host, plan, template, wopts);
+    mutateCalls += two.mutateCalls;
+    if ("error" in two) return failed([...diagnostics, two.error], mutateCalls, plan);
+    outcome = two.outcome;
+    pages = two.pages;
+  }
+  if (pages.length !== plan.pageCount) {
     return failed([...diagnostics, `merge: expected ${plan.pageCount} output pages, found ${pages.length}`], mutateCalls, plan);
   }
-
-  // 2. Content.
-  mutateCalls += 1;
-  const o = await host.document.mutate(contentMutation(plan, template, pages, wopts));
-  if (!o.applied) return failed([...diagnostics, `merge: the content batch was refused: ${errorText(o.error)}`], mutateCalls, plan);
-  // Minted in creation order, one per record frame. The handle names each;
-  // where a host reports it null, the position does.
+  // Minted in creation order, one per record frame (pages a one-step batch
+  // minted are left out). The handle names each; where a host reports it
+  // null, the position does.
   const order = plan.records.flatMap((rec) => rec.frames.map((f) => `m${rec.record}f${f.template}`));
-  const minted = new Map((o.minted ?? []).map((m, i) => [m.handle ?? order[i] ?? "", m]));
+  const frames = (outcome.minted ?? []).filter((m) => !/page|spread/i.test(m.element.kind));
+  const minted = new Map(frames.map((m, i) => [m.handle ?? order[i] ?? "", m]));
 
   // 3. Overset (DM-7): the engine lists the words, the host measures them at
   // each template frame's font, the engine wraps and compares. A host that
   // lays out with fonts and reports a story overset is believed as well.
   const words = engine.merge_words(plan, template.frames.length) as string[][];
-  const metrics: FrameMetrics[] = [];
-  for (let i = 0; i < template.frames.length; i++) {
-    const font = template.frames[i].font;
-    const advances: Record<string, number> = {};
-    for (const w of words[i] ?? []) {
-      advances[w] = (await host.text.measureString(font.family, font.style, w, font.sizePt)).advance;
-    }
-    metrics.push({ leadingPt: font.leadingPt, advances });
-  }
+  const metrics = await measureWords(host, template, words);
   const measured = engine.merge_overset(plan, metrics) as boolean[][];
   const reported = new Set(
     (await host.document.collection<{ selfId: string; overset?: boolean }>("stories"))
@@ -651,6 +690,94 @@ export async function mergeRecords(
   });
   if (overset.length > 0) diagnostics.push(`merge: ${overset.length} record(s) overset`);
   return { ok: true, plan, pages, records, overset, mutateCalls, diagnostics };
+}
+
+/** The document's page ids, in order. */
+async function pageIds(host: BundleHost): Promise<string[]> {
+  return (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
+}
+
+/** The merge's output pages: from the template on (`consume`) or after it
+ *  (`keep`). Not "the ids that are new": a re-merge deletes the pages it
+ *  added before adding them again, and core may hand the same ids out again. */
+function outputPages(
+  after: readonly string[],
+  template: MergeTemplate,
+  opts: Pick<MergeWriteOptions, "template">,
+  count: number,
+): PageId[] {
+  const at = after.indexOf(template.pageId);
+  return (opts.template === "consume" ? after.slice(at, at + count) : after.slice(at + 1, at + 1 + count)) as PageId[];
+}
+
+/** The merge as two steps: the pages (when it needs new ones), then the
+ *  content on them. */
+async function writeInTwoSteps(
+  host: BundleHost,
+  plan: MergePlan,
+  template: MergeTemplate,
+  wopts: MergeWriteOptions,
+): Promise<{ error: string; mutateCalls: number } | { outcome: AppliedOutcome; pages: PageId[]; mutateCalls: number }> {
+  let mutateCalls = 0;
+  const before = await pageIds(host);
+  const pagesOp = pageMutations(plan, template, wopts);
+  if (pagesOp) {
+    mutateCalls += 1;
+    const o = await host.document.mutate(pagesOp);
+    if (!o.applied) return { error: `merge: adding pages was refused: ${errorText(o.error)}`, mutateCalls };
+  }
+  const after = await pageIds(host);
+  const pages = outputPages(after, template, wopts, plan.pageCount);
+  if (pages.length !== plan.pageCount || (pagesOp === null && after.length !== before.length)) {
+    return { error: `merge: expected ${plan.pageCount} output pages, found ${pages.length}`, mutateCalls };
+  }
+  mutateCalls += 1;
+  const o = await host.document.mutate(contentMutation(plan, template, pages, wopts));
+  if (!o.applied) return { error: `merge: the content batch was refused: ${errorText(o.error)}`, mutateCalls };
+  return { outcome: o, pages, mutateCalls };
+}
+
+/** Every template frame's words measured at its font. With the batch door
+ *  (D-27, `text.measureStrings`) one host call per distinct face and size;
+ *  without it one `measureString` per word, as before. */
+export async function measureWords(
+  host: BundleHost,
+  template: Pick<MergeTemplate, "frames">,
+  words: readonly (readonly string[] | undefined)[],
+): Promise<FrameMetrics[]> {
+  const batch = measureStringsDoor(host);
+  if (batch) {
+    // Group the words by face + size: one call per group.
+    const groups = new Map<string, { font: TemplateFrameInfo["font"]; words: Set<string> }>();
+    template.frames.forEach((f, i) => {
+      const key = JSON.stringify([f.font.family, f.font.style, f.font.sizePt]);
+      const g = groups.get(key) ?? { font: f.font, words: new Set<string>() };
+      for (const w of words[i] ?? []) g.words.add(w);
+      groups.set(key, g);
+    });
+    const advance = new Map<string, Map<string, number>>();
+    for (const [key, g] of groups) {
+      const list = [...g.words];
+      const measured = list.length > 0 ? await batch(g.font.family, g.font.style, list, g.font.sizePt) : [];
+      advance.set(key, new Map(list.map((w, k) => [w, measured[k]?.advance ?? 0])));
+    }
+    return template.frames.map((f, i) => {
+      const byWord = advance.get(JSON.stringify([f.font.family, f.font.style, f.font.sizePt]))!;
+      const advances: Record<string, number> = {};
+      for (const w of words[i] ?? []) advances[w] = byWord.get(w) ?? 0;
+      return { leadingPt: f.font.leadingPt, advances };
+    });
+  }
+  const metrics: FrameMetrics[] = [];
+  for (let i = 0; i < template.frames.length; i++) {
+    const font = template.frames[i].font;
+    const advances: Record<string, number> = {};
+    for (const w of words[i] ?? []) {
+      advances[w] = (await host.text.measureString(font.family, font.style, w, font.sizePt)).advance;
+    }
+    metrics.push({ leadingPt: font.leadingPt, advances });
+  }
+  return metrics;
 }
 
 function errorText(e: unknown): string {
