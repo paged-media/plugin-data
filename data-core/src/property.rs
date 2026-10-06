@@ -145,9 +145,9 @@ impl TargetType {
 /// A numeric range from the schema row.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct TargetRange {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
 }
 
@@ -161,9 +161,9 @@ pub struct TargetSchema {
     pub value_type: TargetType,
     #[serde(default)]
     pub nullable: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<TargetRange>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PropValue>,
 }
 
