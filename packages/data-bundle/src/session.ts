@@ -3472,14 +3472,14 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       const pageId = options.pageId ?? (await startPage());
       if (!pageId) return fail("no template page");
       // A consumed template is gone from its page; a re-merge reuses the one
-      // read last time.
-      let template = mode === "consume" ? (mergeTemplates.get(mergeId) ?? null) : null;
-      const templatePresent = template === null;
-      if (!template) {
-        const read = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields });
-        if (!read.template) return fail(read.diagnostics.join("; ") || "no template on the page");
-        template = read.template;
-      }
+      // read last time. The page is read first all the same: after an undo of
+      // the merge the template frames are back, and they are consumed again
+      // (reusing the stored template then left them on every output page).
+      const read = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields });
+      const stored = mode === "consume" ? (mergeTemplates.get(mergeId) ?? null) : null;
+      const template = read.template ?? stored;
+      const templatePresent = read.template !== null;
+      if (!template) return fail(read.diagnostics.join("; ") || "no template on the page");
       // Replace the previous run of this merge in the first batch.
       const plan = await relowerPlan({ kind: "merge", merge: mergeId });
       await settleLabel();
