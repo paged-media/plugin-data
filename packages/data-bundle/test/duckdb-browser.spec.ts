@@ -9,7 +9,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 import { REQUIRE_REAL_BROWSER, startBrowserLane, type BrowserLane } from "./browser-lane";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ALLOWED, FIXTURE_CSV, REFUSED } from "./guard-matrix";
+
+const PARQUET = readFileSync(join(__dirname, "..", "..", "..", "conformance", "sources", "products.parquet"));
 
 let lane: BrowserLane | undefined;
 let why = "";
@@ -35,6 +39,7 @@ async function inPage<T>(body: string, arg?: unknown): Promise<T> {
       const w = window as any;
       if (!w.duck) {
         w.duck = await L.bootDuckDB();
+        await L.lockDownDuckDB(w.duck); // as the session does on boot
         for (const [name, text] of Object.entries(csv)) {
           await L.loadIntoDuckDB(w.duck, name, "csv", new TextEncoder().encode(text), () => {
             throw new Error("no xlsx here");
@@ -103,6 +108,34 @@ describe.skipIf(!REQUIRED && process.env.PAGED_BROWSER_LANE === "0")(
         expect(out[i].error, sql).toBeUndefined();
         expect(out[i].rows, sql).toEqual(rows);
       });
+    });
+
+    it("the engine lock: no statement changes a setting, and imports still work after it [data.security.gates]", async (ctx) => {
+      if (!lane && !REQUIRED) ctx.skip();
+      const out = await inPage<{ set: string[]; late: unknown }>(
+        `const set = [];
+         for (const sql of ["SET enable_external_access = true", "SET lock_configuration = false",
+                            "RESET lock_configuration", "PRAGMA enable_external_access = true",
+                            "SET autoinstall_known_extensions = true"]) {
+           try { await d.exec(sql); set.push("ran: " + sql); } catch (e) { set.push(String(e && e.message || e)); }
+         }
+         await L.loadIntoDuckDB(d, "late", "csv", new TextEncoder().encode("a,b\\n1,2\\n"), () => null);
+         return { set, late: (await d.rows("SELECT * FROM late")).rows };`,
+      );
+      for (const m of out.set) expect(m).toMatch(/configuration has been locked/);
+      expect(out.late).toEqual([["1", "2"]]);
+    });
+
+    it.fails("DEFECT: a Parquet import autoloads DuckDB's parquet extension from extensions.duckdb.org, which the editor's CSP refuses [data.source.adapters]", async () => {
+      const out = await inPage<{ rows?: unknown; error?: string }>(
+        `try {
+           await L.loadIntoDuckDB(d, "products", "parquet", new Uint8Array(arg), () => null);
+           return { rows: (await d.rows("SELECT count(*) FROM products")).rows };
+         } catch (e) { return { error: String(e && e.message || e) }; }`,
+        [...PARQUET],
+      );
+      expect(out.error).toBeUndefined();
+      expect(lane!.offOrigin).toEqual([]);
     });
   },
 );

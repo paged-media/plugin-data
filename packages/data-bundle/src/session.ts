@@ -86,7 +86,7 @@ import {
   type ImportFormat,
   type XlsxImport,
 } from "./query/import";
-import { diagnoseDuckDBError, guardQuery, previewSql, type SqlDiagnostic } from "./query/sql";
+import { checkQuery, diagnoseDuckDBError, lockDownDuckDB, previewSql, type SqlDiagnostic } from "./query/sql";
 import {
   IntervalScheduler,
   MANUAL,
@@ -904,9 +904,6 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
   // The file a CSV / TSV source came from (display only).
   const csvFileNames = new Map<string, { format: "csv" | "tsv"; fileName: string }>();
   const refreshPolicies = new Map<string, RefreshPolicy>();
-  // The guard's verdict per query text: a refresh asks DuckDB's parser once
-  // per distinct query, not on every run.
-  const guardVerdicts = new Map<string, SqlDiagnostic | null>();
   const poller = new IntervalScheduler((name) => pollRemote(name));
 
   function emit(): void {
@@ -1381,6 +1378,8 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     if (duck) return duck;
     try {
       const d = await bootDuckDB();
+      // The engine half of the query guard, before any query runs.
+      await lockDownDuckDB(d);
       duck = d;
       for (const [name, text] of [...pendingCsv]) {
         try {
@@ -1429,14 +1428,6 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       }
       return e.xlsx_import(bytes, sheet) as XlsxImport;
     };
-  }
-
-  /** Ask the guard once per query text (query/sql.ts). */
-  async function guardOnce(d: DuckDBHandle, sql: string): Promise<SqlDiagnostic | null> {
-    if (guardVerdicts.has(sql)) return guardVerdicts.get(sql)!;
-    const verdict = await guardQuery(d, sql);
-    guardVerdicts.set(sql, verdict);
-    return verdict;
   }
 
   /** Is this source a remote one, a local one, or unknown? */
@@ -2020,7 +2011,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       } catch (err) {
         return { ...empty, diagnostic: { kind: "Engine", message: errText(err) } };
       }
-      const refused = await guardOnce(d, sql);
+      const refused = checkQuery(sql);
       if (refused) return { ...empty, diagnostic: refused };
       try {
         const limited = previewSql(sql, limit);
@@ -2049,7 +2040,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       } catch (err) {
         return { kind: "Engine", message: errText(err) };
       }
-      const refused = await guardOnce(d, sql);
+      const refused = checkQuery(sql);
       if (refused) return refused;
       try {
         await d.rows(`DESCRIBE ${previewSql(sql, 0)}`);
@@ -2424,7 +2415,7 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
         for (const q of queries.values()) {
           // A document's queries are code (§11): only a SELECT over the
           // source tables runs (query/sql.ts).
-          const refused = await guardOnce(d, q.sql);
+          const refused = checkQuery(q.sql);
           if (refused) {
             report({
               level: "error",
@@ -3312,7 +3303,6 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
       pendingFiles.clear();
       csvFileNames.clear();
       refreshPolicies.clear();
-      guardVerdicts.clear();
       poller.stopAll();
       state.polling = [];
       loweredInto.clear();

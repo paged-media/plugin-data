@@ -1,4 +1,4 @@
-// Wave 6 query lane, pure parts: the builders' SQL, the guard's AST walk,
+// Wave 6 query lane, pure parts: the builders' SQL, the guard's lexer,
 // DuckDB error text → diagnostics, file naming and quoting. The same SQL is
 // run against real DuckDB in test/sources-real.spec.ts.
 
@@ -12,7 +12,8 @@ import {
   sourceNameOf,
   virtualFileName,
 } from "../query/import";
-import { diagnoseDuckDBError, findForbiddenReach, positionOf, previewSql, trimSql } from "../query/sql";
+import { checkQuery, diagnoseDuckDBError, positionOf, previewSql, trimSql } from "../query/sql";
+import { ALLOWED, REFUSED } from "../../test/guard-matrix";
 
 describe("file names and quoting [data.source.adapters]", () => {
   it("maps extensions to formats, case-insensitively", () => {
@@ -92,31 +93,54 @@ describe("query builders [data.query.seam]", () => {
   });
 });
 
-describe("the query guard's AST walk [data.security.gates]", () => {
-  const base = (name: string, extra: Record<string, string> = {}) => ({
-    type: "BASE_TABLE",
-    table_name: name,
-    schema_name: "",
-    catalog_name: "",
-    ...extra,
-  });
-  const fn = (name: string) => ({ type: "TABLE_FUNCTION", function: { function_name: name } });
-
-  it("admits plain tables and the pure table functions", () => {
-    expect(findForbiddenReach([{ node: { from_table: base("products") } }])).toBeNull();
-    expect(findForbiddenReach([{ node: { from_table: base("t", { schema_name: "main" }) } }])).toBeNull();
-    expect(findForbiddenReach([{ from_table: fn("range") }, { x: fn("UNNEST") }])).toBeNull();
+describe("the query guard's lexer and allow-list [data.security.gates]", () => {
+  it("refuses every reach in the shared security matrix", () => {
+    for (const [sql, why] of REFUSED) {
+      const v = checkQuery(sql);
+      expect(v?.kind, sql).toBe("Guard");
+      expect(v?.message, sql).toMatch(why);
+    }
   });
 
-  it("refuses file/URL readers, path-like tables and other catalogs, at any depth", () => {
-    expect(findForbiddenReach({ a: { b: [fn("read_csv")] } })).toMatch(/read_csv\(\)/);
-    expect(findForbiddenReach({ deep: [[{ from_table: fn("read_parquet") }]] })).toMatch(/read_parquet/);
-    expect(findForbiddenReach(base("https://x/y.csv"))).toMatch(/not an imported source table/);
-    expect(findForbiddenReach(base("data.csv"))).toMatch(/"data.csv"/);
-    expect(findForbiddenReach(base("t", { catalog_name: "other" }))).toMatch(/"other.t"/);
-    expect(findForbiddenReach(base("t", { schema_name: "information_schema" }))).toMatch(
-      /information_schema\.t/,
+  it("admits every ordinary query in the shared matrix", () => {
+    for (const [sql] of ALLOWED) expect(checkQuery(sql), sql).toBeNull();
+  });
+
+  it("reads strings, quoted names and comments the way DuckDB does", () => {
+    // Statement words inside strings, quoted names and comments are data.
+    expect(checkQuery("SELECT 'DROP TABLE x; read_csv(1)' AS s FROM t")).toBeNull();
+    expect(checkQuery('SELECT "update", "set" FROM t')).toBeNull();
+    expect(checkQuery("SELECT 1 /* outer /* nested ; */ still comment ; */ FROM t")).toBeNull();
+    // A bare statement word is refused, with a hint and a position.
+    expect(checkQuery("SELECT update FROM t")).toMatchObject({
+      kind: "Guard",
+      message: expect.stringMatching(/UPDATE is not allowed.*"update"/),
+      line: 1,
+      column: 8,
+    });
+  });
+
+  it("knows FROM inside function arguments and IS DISTINCT FROM is not a table", () => {
+    expect(checkQuery("SELECT extract(year FROM d), substring(s FROM 2 FOR 3), trim(BOTH 'x' FROM s) FROM t")).toBeNull();
+    expect(checkQuery("SELECT * FROM t WHERE a IS NOT DISTINCT FROM 'x'")).toBeNull();
+    // …but a subquery inside such a call has a real FROM.
+    expect(checkQuery("SELECT substring((FROM read_csv('x') SELECT 'a') FROM 1) FROM t")?.message).toMatch(
+      /read_csv\(\)/,
     );
+  });
+
+  it("refuses unbalanced brackets, so the text cannot escape the preview wrapper", () => {
+    const escape = "SELECT 1) AS a, read_csv('x') AS b, (SELECT 1";
+    expect(checkQuery(escape)?.message).toMatch(/unbalanced brackets/);
+    expect(checkQuery("SELECT (1")?.message).toMatch(/unbalanced brackets/);
+    expect(checkQuery("SELECT [1, 2)")?.message).toMatch(/unbalanced brackets/);
+  });
+
+  it("allows list and struct literals and commas in a join condition", () => {
+    expect(checkQuery("SELECT [1, 2], {'a': 1, 'b': 2} FROM t")).toBeNull();
+    expect(checkQuery("SELECT * FROM a JOIN b ON (a.x, a.y) = (b.x, b.y), c")).toBeNull();
+    expect(checkQuery("SELECT * FROM a JOIN b USING (x, y) ORDER BY 1, 2")).toBeNull();
+    expect(checkQuery("SELECT * FROM a JOIN b ON a.x = b.x, read_csv('y')")?.message).toMatch(/read_csv/);
   });
 });
 
