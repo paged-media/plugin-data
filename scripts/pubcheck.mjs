@@ -33,7 +33,9 @@ const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-script
   encoding: "utf8",
   stdio: ["ignore", "pipe", "inherit"],
 });
-const [pack] = JSON.parse(out);
+// npm ≤ 11 answers an array of packs; npm 12 an object keyed by package name.
+const parsed = JSON.parse(out);
+const pack = Array.isArray(parsed) ? parsed[0] : (parsed.files ? parsed : Object.values(parsed)[0]);
 const files = new Map(pack.files.map((f) => [f.path, f.size]));
 
 const errors = [];
