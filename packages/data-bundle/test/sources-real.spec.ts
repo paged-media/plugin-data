@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { DataSourceSession } from "../src/session";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
+import { NODE_EXTENSION_REPO, refusedExtensionUrls, servedExtensionUrls } from "./duckdb-node-ext";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, "..", "..", "..", "conformance", "sources");
@@ -153,6 +154,17 @@ describe.skipIf(!ready && !REQUIRE_REAL_DUCKDB)(
         ["en", "1.0"],
       ]);
       expect(s.getState().files[0]).toMatchObject({ source: "products", sheet: "Prices" });
+    });
+
+    it("JSON, Parquet and XLSX load DuckDB's json/parquet extensions from the shipped bin/duckdb-ext, never the network [data.source.adapters]", () => {
+      // The specs above ran read_json_auto, read_parquet and read_json; each
+      // needed an extension the eh build lacks. They came from the bundle's
+      // own files (bin/duckdb-ext), the same ones the browser loads.
+      expect(refusedExtensionUrls).toEqual([]);
+      const names = servedExtensionUrls.map((u) => u.slice(NODE_EXTENSION_REPO.length));
+      expect(new Set(names)).toEqual(
+        new Set(["/v1.1.1/wasm_eh/json.duckdb_extension.wasm", "/v1.1.1/wasm_eh/parquet.duckdb_extension.wasm"]),
+      );
     });
 
     it("an unknown extension and a corrupt workbook are visible errors [data.source.adapters]", async () => {

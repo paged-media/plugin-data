@@ -209,7 +209,8 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
   if (!HAVE_DUCK) {
     throw new Error(`${DUCK_WASM} or the Node API is missing — run \`bash scripts/vendor-duckdb.sh\``);
   }
-  const { duckdbHandle, LOCKDOWN_SQL } = await import("../../src/query/duckdb");
+  const { duckdbHandle } = await import("../../src/query/duckdb");
+  const { nodeBootSql } = await import("../duckdb-node-ext");
   const duckdb = requireNodeDuckDB();
   const db = await duckdb.createDuckDB(
     {
@@ -221,7 +222,7 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
   );
   await db.instantiate();
   const conn = db.connect();
-  conn.query(LOCKDOWN_SQL); // as bootDuckDB does
+  for (const s of nodeBootSql()) conn.query(s); // as bootDuckDB does
   const inner = duckdbHandle(db, conn, () => db.reset?.());
   let log: DuckLog = { registerCsv: 0, registerFileBuffer: 0, queries: 0, rowsOut: 0 };
   const handle: DuckDBHandle = {

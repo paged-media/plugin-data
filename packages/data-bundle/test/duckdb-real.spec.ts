@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { binUrl } from "../src/bin-url";
 import { DUCKDB_ARTIFACTS, duckdbHandle, type DuckDBHandle } from "../src/query/duckdb";
+import { nodeBootSql } from "./duckdb-node-ext";
 import { assertLowered, bootEngine, defineCatalog, partA } from "./pipeline-parts.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +70,7 @@ async function tryBoot(): Promise<{ handle?: DuckDBHandle; error?: string }> {
     );
     await db.instantiate();
     const conn = db.connect();
+    for (const s of nodeBootSql()) conn.query(s); // as bootDuckDB does
     return { handle: duckdbHandle(db, conn, () => db.reset?.()) };
   } catch (err) {
     return { error: `DuckDB failed to boot: ${err instanceof Error ? err.message : String(err)}` };
