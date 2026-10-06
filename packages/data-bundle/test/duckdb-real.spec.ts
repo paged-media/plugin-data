@@ -139,6 +139,17 @@ describe.skipIf(!boot.handle || !engineBuilt)("real DuckDB → recordset.ts → 
     expect(lowered.text).toBe(expected.text);
   });
 
+  it("re-registering a CSV source replaces its table (importing the file again)", async () => {
+    const duck = boot.handle!;
+    await duck.registerCsv("reimported", "name\nApple 14\n");
+    // The second import of the same source: DuckDB's CSV insert creates the
+    // table, so without dropping the first one it fails "already exists".
+    await duck.registerCsv("reimported", "name\nAardvark 14\n");
+    const rs = await duck.query("SELECT name FROM reimported");
+    expect(rs.row_count).toBe(1);
+    expect(rs.columns[0][0]).toEqual({ t: "text", v: "Aardvark 14" });
+  });
+
   it("queries registered file bytes (the file-import path)", async () => {
     const duck = boot.handle!;
     await duck.registerFileBuffer("stock.csv", new TextEncoder().encode("sku,qty\nA-1,3\nB-2,0\n"));

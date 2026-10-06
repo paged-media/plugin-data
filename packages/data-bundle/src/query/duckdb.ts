@@ -210,10 +210,15 @@ export function duckdbHandle(
   return {
     async registerCsv(name: string, csvText: string) {
       await db.registerFileText(`${name}.csv`, csvText);
+      // The CSV insert CREATES the table: a source imported again replaces it.
+      await conn.query(`DROP TABLE IF EXISTS ${ident(name)}`);
       await conn.insertCSVFromPath(`${name}.csv`, { name, schema: "main", detect: true });
     },
     async registerFileBuffer(name: string, bytes: Uint8Array) {
-      await db.registerFileBuffer(name, bytes);
+      // A copy: the browser AsyncDuckDB transfers the buffer to its worker,
+      // which would detach the caller's bytes — the bytes the session saves
+      // with the document.
+      await db.registerFileBuffer(name, bytes.slice());
     },
     async query(sql: string): Promise<RecordSetJson> {
       return arrowToRecordSet(await runQuery(conn, sql));
