@@ -40,6 +40,8 @@ import {
   bootCountedDuck,
   bootCountedEngine,
   expectBudget,
+  LABELLED,
+  onLabelled,
   measure,
   openDataHost,
   printTable,
@@ -70,7 +72,19 @@ const normalise = (s: string) => s.replace(/\r/g, "\n").replace(/﻿/g, "");
 //    re-merge plan reads);
 //  · wasm 4: query_record_count, plan_merge, merge_words, merge_overset. The
 //    query already ran (refreshData before the merge): no DuckDB statement.
-const W8: Measured = {
+//
+// W8 on protocol 69 (LABELLED, harness.ts), where the merge consumes the
+// whole batch:
+//  · ONE mutate, ONE undo step: pages and content in one batch, each page
+//    minted by duplicatePage named by bindCreated and addressed as `$h:p<i>`
+//    (core ADR 128). mutates 2 → 1, undo steps 2 → 1.
+//  · host calls 148 → 18: the 133 words are measured by ONE
+//    text.measureStrings call (one face and size in this template; D-27);
+//    one pages read fewer (no pages-then-content round trip): reads 13 → 12;
+//    the session change the batch is labelled with is written first
+//    (parts.write ×2, wasm +2: payload, sync_report).
+//  · mutation ops 402 → 403: the label op rides the batch.
+const W8: Measured = onLabelled({
   hostCalls: 148,
   hostReads: 13,
   mutates: 2,
@@ -84,7 +98,7 @@ const W8: Measured = {
   keyAllocs: 0,
   fingerprints: 0,
   duckQueries: 0,
-};
+}, { hostCalls: 18, hostReads: 12, mutates: 1, mutationOps: 403, undoSteps: 1, wasmCalls: 6 });
 
 describe.skipIf(!RUN_BUDGETS)("perf budgets — Data Merge [data.perf.gates]", () => {
   let h: HeadlessHost | null = null;
@@ -132,7 +146,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — Data Merge [data.perf.gates]", (
 
     // ── behaviour: InDesign's pages and texts ──────────────────────────────
     expect(r.ok, r.diagnostics.join("; ")).toBe(true);
-    expect(r.mutateCalls).toBe(2);
+    expect(r.mutateCalls).toBe(LABELLED ? 1 : 2);
     const rec = JSON.parse(readFileSync(join(LANE, "recorded", `${ID}.json`), "utf8"));
     const pages = await h.host.document.collection<{ selfId: string }>("pages");
     expect(pages.length).toBe(rec.merged.page_count);

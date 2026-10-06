@@ -30,7 +30,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
 import type { DataEngineLike } from "../src/engine";
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { ENGINE_ANCHOR, fixedFrom, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { undoMark, undoSteps } from "./perf/harness";
 
 const run = ENGINE_ANCHOR !== null || REQUIRE_REAL_CORE;
@@ -265,14 +265,15 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
     expect((await ours(h)).map((p) => p.value)).toEqual(["GAMMA-LONG", "GAMMA-LONG"]);
   });
 
-  // DEFECT (core 0.67, paged-mutate): `insertText` at a placeholder run's
-  // START goes INTO that run, so the inserted text becomes part of the field.
-  // `setFieldValue` then replaces the run's text with the new display and the
-  // inserted text is gone; undoing that write fails with "undo log empty" and
-  // drops the history record. The Wave 1 W2 fixture built its separators this
-  // way, which read as "the undo history is bounded at 89". Goes green when
-  // core keeps text inserted at a field boundary out of the field.
-  it.fails("DEFECT core: text inserted at a field's start joins the field and a field write erases it [data.lower.v43-consumers]", async () => {
+  // DEFECT (core 0.67/0.68, paged-mutate): `insertText` at a placeholder
+  // run's START goes INTO that run, so the inserted text becomes part of the
+  // field. `setFieldValue` then replaces the run's text with the new display
+  // and the inserted text is gone; undoing that write fails with "undo log
+  // empty" and drops the history record. The Wave 1 W2 fixture built its
+  // separators this way, which read as "the undo history is bounded at 89".
+  // FIXED in engine protocol 69 (core ADR 127: typing at a field's edge lands
+  // beside the field): passes there, stays pinned on 68.
+  fixedFrom(69, it)("DEFECT core <69: text inserted at a field's start joins the field and a field write erases it [data.lower.v43-consumers]", async () => {
     h = await openRealHost();
     const story = await newStory(h);
     const host = h.host;

@@ -35,18 +35,49 @@ export function labelEnvelope(hash: string): { v: number; data: { session: strin
   return { v: LABEL_VERSION, data: { session: hash } };
 }
 
-/** The raw op that writes the label (the SDK gates the key to this plugin). */
-export function labelMutation(hash: string): Mutation {
+/** The raw op that writes the label. The key is the calling plugin's own
+ *  (`x-paged:<manifest id>`, the key `getDocumentMetadata` reads); the SDK
+ *  refuses any other. */
+export function labelMutation(hash: string, key: string = BINDING_KEY): Mutation {
   return {
     op: "setDocumentMetadata",
-    args: { key: BINDING_KEY, value: JSON.stringify(labelEnvelope(hash)) },
+    args: { key, value: JSON.stringify(labelEnvelope(hash)) },
   } as unknown as Mutation;
+}
+
+/** The label key of `host`'s plugin. */
+export function labelKey(host: BundleHost): string {
+  const id = (host as { manifest?: { id?: string } }).manifest?.id;
+  return id ? `x-paged:${id}` : BINDING_KEY;
 }
 
 /** The session version a label envelope names, or null. */
 export function labelledVersion(envelope: unknown): string | null {
   const data = (envelope as { data?: { session?: unknown } } | null)?.data;
   return typeof data?.session === "string" && /^[0-9a-f]{8,64}$/.test(data.session) ? data.session : null;
+}
+
+/** The session part with the label it extends: `session.json` records the
+ *  version the document's label named when the part was written (`base`).
+ *  A reopen whose label still names `base` reads the part (it holds the
+ *  changes made since); one whose label names another version (an undo or
+ *  redo moved it) reads that version. So a change no document write carried
+ *  needs no label step of its own. */
+export function withBase(versionJson: string, base: string | null): string {
+  return base === null ? versionJson : `${versionJson.slice(0, -1)},"base":${JSON.stringify(base)}}`;
+}
+
+/** The `base` a session part records, and the version bytes without it. */
+export function splitBase(bytes: Uint8Array): { base: string | null; version: Uint8Array } {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || !("base" in parsed)) return { base: null, version: bytes };
+    const base = typeof parsed.base === "string" ? parsed.base : null;
+    delete parsed.base;
+    return { base, version: new TextEncoder().encode(JSON.stringify(parsed)) };
+  } catch {
+    return { base: null, version: bytes };
+  }
 }
 
 /** Where the rider reads the label to carry and reports what it wrote. */
@@ -69,26 +100,29 @@ const WRAPPABLE = new Set(["setFieldValue", "insertField"]);
 /**
  * The host the session uses: `host` with `document.mutate` carrying the
  * pending label as the last child of every batch (and of a single field
- * write, wrapped). A batch refused at the label child is sent again without
- * it, and the rider stops. A wrapped single op refused for its own reason is
- * sent again alone, so its caller sees the op's own error.
+ * write, wrapped). A write refused with the label is sent again without it:
+ * if it then applies, the label was what was refused and the rider stops;
+ * if not, the caller gets the write's own error and the label stays pending.
  */
 export function labelRider(host: BundleHost, state: LabelRiderState): BundleHost {
   const doc = host.document;
+  const key = labelKey(host);
   const mutate = async (m: Mutation): Promise<MutationOutcome> => {
     const hash = state.pending();
     const single = m.op !== "batch";
     if (!hash || (single && !WRAPPABLE.has(m.op))) return doc.mutate(m);
     const ops = single ? [m] : (m.args as { ops: Mutation[] }).ops;
-    const outcome = await doc.mutate({ op: "batch", args: { ops: [...ops, labelMutation(hash)] } } as Mutation);
+    const outcome = await doc.mutate({ op: "batch", args: { ops: [...ops, labelMutation(hash, key)] } } as Mutation);
     if (outcome.applied) {
       state.written(hash);
       return outcome;
     }
+    // A batch the engine rolled back at an earlier child failed on its own.
     const child = BATCH_CHILD.exec(errorText(outcome.error));
-    const atLabel = !!child && Number(child[1]) === ops.length;
-    if (atLabel) state.refused();
-    return atLabel || single ? doc.mutate(m) : outcome;
+    if (!single && child && Number(child[1]) < ops.length) return outcome;
+    const bare = await doc.mutate(m);
+    if (bare.applied) state.refused();
+    return bare;
   };
   // A host without a document surface (a headless or partial one) is used
   // as it is.

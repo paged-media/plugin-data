@@ -42,13 +42,13 @@ import { fileURLToPath } from "node:url";
 import { vi } from "vitest";
 
 import type { BundleHost } from "@paged-media/plugin-api";
-import type { HeadlessHost } from "@paged-media/plugin-sdk";
+import { HOST_FEATURES, type HeadlessHost } from "@paged-media/plugin-sdk";
 
 import type { DataEngineLike } from "../../src/engine";
 import type { DuckDBHandle } from "../../src/query/duckdb";
 import type { DataSourceSession } from "../../src/session";
 import manifest from "../../manifest.json";
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "../real-core";
+import { ENGINE_ANCHOR, ENGINE_PROTOCOL, openRealHost, REQUIRE_REAL_CORE } from "../real-core";
 import { type WorkLog } from "./counting-host";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -278,7 +278,7 @@ export async function bootCountedDuck(): Promise<CountedDuck> {
  *  host would reject the bundle's binding-metadata writes as foreign, and a
  *  rejected batch costs nothing, which would make the budgets lie. */
 export async function openDataHost(): Promise<HeadlessHost> {
-  const h = await openRealHost();
+  const h = await openRealHost({ engineShaper: true });
   h.loadBundle({
     manifest: manifest as never,
     activate: () => ({ dispose() {} }),
@@ -468,6 +468,17 @@ export function printTable(): void {
 /** Assert a measured count set equals its pinned budget, field by field, with
  *  a message that says which way it moved. Budgets are lowered only in the
  *  commit that earns it and never raised. */
+/** Engine protocol 69 behind a contract that forwards its doors: the
+ *  session is labelled in the document (doc-label.ts), pages are named in a
+ *  batch, and overset words are measured in one call per face. */
+export const LABELLED = ENGINE_PROTOCOL >= 69 && HOST_FEATURES.includes("document.documentMetadata@1");
+export const BATCH_MEASURE = HOST_FEATURES.includes("text.measureStrings@1");
+
+/** A budget pinned on protocol 68, with the counts protocol 69 changes. */
+export function onLabelled(base: Measured, v69: Partial<Measured>): Measured {
+  return LABELLED ? { ...base, ...v69 } : base;
+}
+
 export function expectBudget(scenario: string, m: Measured, budget: Measured): void {
   const moved: string[] = [];
   for (const k of Object.keys(budget) as (keyof Measured)[]) {

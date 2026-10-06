@@ -33,7 +33,8 @@ import { createHeadlessHost, defineBundle, type HeadlessHost } from "@paged-medi
 
 import manifestJson from "../manifest.json";
 import { mergeRecords, pageElements, readMergeTemplate, type RecordsPerPage } from "../src/merge";
-import { ENGINE_ANCHOR, REQUIRE_REAL_CORE } from "./real-core";
+import { documentLabelDoors, engineHasDocumentLabels } from "../src/doors";
+import { ENGINE_ANCHOR, ENGINE_PROTOCOL, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealEngine, DATA_JS_WASM } from "./real-duckdb";
 
 const LANE = fileURLToPath(new URL("../../../conformance/indesign-merge/", import.meta.url));
@@ -199,17 +200,22 @@ describe.skipIf(!ready && !REQUIRE_REAL_CORE)(
           textFrame.content = { kind: "text", text: expected };
         }
 
+        // Page handles: detected as the session detects them (a v69 engine
+        // behind an SDK with the label doors), and right about the engine.
+        const pageHandles = await engineHasDocumentLabels(host);
+        expect(pageHandles).toBe(ENGINE_PROTOCOL >= 69 && documentLabelDoors(host) !== null);
         const result = await mergeRecords(host, engine, template!, {
           query: "q",
           ...mergeOptions(fx),
           template: "consume",
           imageBase: join(LANE, "images"),
+          pageHandles,
         });
         expect(result.diagnostics.filter((d) => !d.includes("overset"))).toEqual([]);
         expect(result.ok).toBe(true);
-        // One undo step when the merge fits the template page, two otherwise
-        // (a page minted in a batch cannot be named: Wave 8).
-        expect(result.mutateCalls).toBe(rec.merged.page_count > 1 ? 2 : 1);
+        // One undo step when the merge fits the template page or the engine
+        // names the pages it mints in the batch (protocol 69); two otherwise.
+        expect(result.mutateCalls).toBe(rec.merged.page_count > 1 && !pageHandles ? 2 : 1);
 
         // ── read back, independently of the plan ─────────────────────────
         const pages = await host.document.collection<{ selfId: string }>("pages");

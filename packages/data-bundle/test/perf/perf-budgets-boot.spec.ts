@@ -33,6 +33,7 @@ import {
   bootCountedDuck,
   bootCountedEngine,
   expectBudget,
+  onLabelled,
   measure,
   openDataHost,
   printTable,
@@ -48,6 +49,16 @@ vi.setConfig({ testTimeout: BUDGET_TIMEOUT_MS });
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
+// Protocol 69 (LABELLED, harness.ts): the session version is named in the
+// document label (doc-label.ts), so a write from data carries the label op
+// (+1 mutation op, same undo step) and first writes the session change it
+// is labelled with: the session part and its content-addressed version
+// (parts.write ×2, or +1 where the command already flushed), and buildPersisted's
+// payload + sync_report (+2 wasm) where nothing flushed before.
+// W6: the debounced session write lands inside the 200-event window, and
+// writes the version part too (+1). W7: the restore reads the document label
+// first (getDocumentMetadata) and the session probes the engine once per
+// document (supports + meta): +4 calls, +2 reads.
 describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates]", () => {
   let h: HeadlessHost | null = null;
   let duck: CountedDuck | null = null;
@@ -70,7 +81,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // Wave 2: the subscription coalesces the burst — one chain read and one
   // pagination once it is quiet. hostCalls 402 → 4, reads 400 → 2, wasm
   // calls 202 → 3, resolves / sorts 200 → 1, sort keys 665,600 → 3,328.
-  const W6: Measured = {
+  const W6: Measured = onLabelled({
     hostCalls: 4,
     hostReads: 2,
     mutates: 0,
@@ -89,7 +100,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  };
+  }, { hostCalls: 5 });
   it("W6 re-paginates a record flow across 200 reflow events [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -171,7 +182,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // contribute.command (editQuery), contribute.menu (Data ▸ Query…).
   // Wave 5 (Data Merge): +2 — contribute.command (mergeRecords),
   // contribute.menu (Data ▸ Merge records into the document).
-  const W7: Measured = {
+  const W7: Measured = onLabelled({
     hostCalls: 33,
     hostReads: 1,
     mutates: 0,
@@ -185,7 +196,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  };
+  }, { hostCalls: 37, hostReads: 3 });
   it("W7 activates without booting either engine [data.perf.gates]", async () => {
     h = await openRealHost();
     let work: WorkLog | null = null;

@@ -117,10 +117,15 @@ of work, with file and line references, is
   doors each session version is written once as `sessions/<hash>.json` and the document's
   own label (`setDocumentMetadata`, undoable) names the live one. The label rides the batch
   of the document write that made the change (a lower, a field refresh, a merge), so both
-  undo together; a change no write carried is labelled on save. An undo that takes the label
-  back reloads the version it names, and a reopen restores the labelled version before
-  `session.json`. Data parts are then never collected (an undo can bring back a session that
-  names them), and old versions are kept. On the published engine (68) and contract
+  undo together. A change no write carried takes no undo step: `session.json` records the
+  version the label named when it was written (`base`), and a reopen reads `session.json`
+  while the label still names that base, else the version the label names. An undo that
+  takes the label back reloads the version it names without rebooting either engine (DuckDB
+  keeps its tables; a source whose saved data differs is loaded again). Data parts are then
+  never collected (an undo can bring back a session that names them), and old versions are
+  kept. Verified on a local protocol-69 build (`test/protocol69-real-core.spec.ts`); the
+  count budgets carry a protocol-69 variant (`onLabelled`, `test/perf/harness.ts`): a write
+  from data carries one more op and first writes the session change it is labelled with. On the published engine (68) and contract
   (0.2.40) container parts take no part in undo and defining a binding is not a document
   change: what a binding writes undoes as usual, the session part does not.
 - **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
@@ -179,6 +184,12 @@ of work, with file and line references, is
   `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" plans every
   variable first and places them in one batch, so 20 variables are one mutate and one undo
   step (budget W5, was 20); a batch core refuses falls back to one mutate per variable.
+- **Engine fixes that protocol 69 brings** (verified on a local build of core
+  `data/protocol-69`): typing at a field's edge lands beside the field, and undoing a
+  `deleteRange` puts its runs and fields back. Both stay pinned as defects against 68
+  (`fixedFrom(69, it)` in `test/real-core.ts`). The IDML import's paragraph mark between
+  adjacent placeholders (D-25) is fixed in plugin-publish branch `data/br-between-sources`
+  but not yet in core's import pin, so its pin stays.
 - **Fields at the caret.** A field placed at the user's caret sends the caret both as
   `offset` and as `insertField.contentOffset`: an engine on protocol 69 converts the caret
   unit and places it right in any paragraph; an older engine ignores `contentOffset` and the

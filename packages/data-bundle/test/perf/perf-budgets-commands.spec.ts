@@ -45,6 +45,8 @@ import {
   bootCountedDuck,
   bootCountedEngine,
   expectBudget,
+  LABELLED,
+  onLabelled,
   measure,
   printTable,
   productCsv,
@@ -85,6 +87,13 @@ async function ourFields(h: HeadlessHost) {
   return (await h.host.document.placeholders()).filter((p) => p.plugin === PLUGIN);
 }
 
+// Protocol 69 (LABELLED, harness.ts): the session version is named in the
+// document label (doc-label.ts), so a write from data carries the label op
+// (+1 mutation op, same undo step) and first writes the session change it
+// is labelled with: the session part and its content-addressed version
+// (parts.write ×2, or +1 where the command already flushed), and buildPersisted's
+// payload + sync_report (+2 wasm) where nothing flushed before.
+// W5 also pays the label doors' supports check in the batch placement path.
 describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]", () => {
   let h: HeadlessHost | null = null;
   let duck: CountedDuck | null = null;
@@ -134,7 +143,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // lock is boot cost (LOCKDOWN_SQL in bootDuckDB). duckQueries 2 → 1.
   // Wave 5 (update in place): +1 read — document.tree, to find a table this
   // binding lowered before and swap it inside its own frame.
-  const W1_LOWER: Measured = {
+  const W1_LOWER: Measured = onLabelled({
     hostCalls: 8,
     hostReads: 3,
     mutates: 1,
@@ -149,7 +158,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 1,
-  };
+  }, { hostCalls: 9, mutationOps: 1507 });
   it("W1 imports a 500-row CSV and lowers it as one table [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -185,7 +194,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     // the frame, the table, 1,503 cells and the label in ONE batch (the two
     // bindCreated names are not counted), which applied: the minted frame is
     // selected.
-    expect(lowerWork.mutations.map((m) => `${m.op}(${m.ops})`)).toEqual([`batch(${2 + 501 * 3 + 1})`]);
+    expect(lowerWork.mutations.map((m) => `${m.op}(${m.ops})`)).toEqual([`batch(${2 + 501 * 3 + 1 + (LABELLED ? 1 : 0)})`]);
     expect(s.getState().status).toBe("ready");
     expect(h.host.selection.get().map((e) => e.kind)).toEqual(["textFrame"]);
     const undo = await undoSteps(h, mark);
@@ -204,7 +213,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // call. hostCalls 102 → 3, mutates 100 → 1, undo 89 (unreachable) → 1,
   // wasm calls 200 → 1.
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
-  const W2: Measured = {
+  const W2: Measured = onLabelled({
     hostCalls: 3,
     hostReads: 1,
     mutates: 1,
@@ -218,7 +227,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  };
+  }, { hostCalls: 6, mutationOps: 101, wasmCalls: 4 });
   it("W2 refreshes 100 fields in one story [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -283,7 +292,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // write moved no address): one read for the 20 steps. hostCalls 40 → 21,
   // reads and fields read 20 → 1. One write per step stays — each step is
   // its own preview state, one undo step each.
-  const W3: Measured = {
+  const W3: Measured = onLabelled({
     hostCalls: 21,
     hostReads: 1,
     mutates: 20,
@@ -302,7 +311,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  };
+  }, { hostCalls: 24, mutationOps: 21, wasmCalls: 22 });
   it("W3 steps the preview through 20 records [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -341,7 +350,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // Wave 4 (persistence): +1 parts.write, +1 log; +1 payload +1 sync_report to build the session part.
   // Wave 5 (update in place): +1 read — document.tree, to find the previous
   // symbol's modules by their label and remove them in the same batch.
-  const W4: Measured = {
+  const W4: Measured = onLabelled({
     hostCalls: 9,
     hostReads: 5,
     mutates: 1,
@@ -355,7 +364,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  };
+  }, { hostCalls: 10, mutationOps: 674 });
   it("W4 lowers one QR barcode into its frame [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -410,7 +419,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // frame's story as `$h:v<i>`): 2 reads, one supports, one caret probe,
   // selection.get, one mutate, one log. hostCalls 102 → 7, mutates 20 → 1,
   // undo steps 20 → 1.
-  const W5: Measured = {
+  const W5: Measured = onLabelled({
     hostCalls: 7,
     hostReads: 2,
     mutates: 1,
@@ -424,7 +433,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 1,
-  };
+  }, { hostCalls: 10, mutationOps: 41, wasmCalls: 28 });
   it("W5 lowers 20 variable bindings at once [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);

@@ -10,7 +10,7 @@
 // When nothing is found the suite SKIPS — unless REQUIRE_REAL_CORE=1, under
 // which it fails instead, so a CI lane that opts in can never silently drop it.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,13 +40,31 @@ export function findEngineAnchor(): string | null {
 }
 
 export const ENGINE_ANCHOR = findEngineAnchor();
+
+/** The engine protocol of the canvas-wasm the suite boots (the version's
+ *  minor: `0.<protocol>.<patch>`), or 0 when none is found. */
+export const ENGINE_PROTOCOL: number = (() => {
+  if (!ENGINE_ANCHOR) return 0;
+  try {
+    const v = (JSON.parse(readFileSync(join(ENGINE_ANCHOR, PKG), "utf8")) as { version: string }).version;
+    return Number(v.split(".")[1]) || 0;
+  } catch {
+    return 0;
+  }
+})();
+
+/** `it` from engine protocol `min` on, `it.fails` (a pinned defect) before
+ *  it: a defect a released engine fixes stays pinned against the older one. */
+export function fixedFrom<T extends { fails: unknown }>(min: number, it: T): T | T["fails"] {
+  return ENGINE_PROTOCOL >= min ? it : it.fails;
+}
 export const REQUIRE_REAL_CORE = process.env.REQUIRE_REAL_CORE === "1";
 
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** Boot a headless host over the real engine and load the minimal fixture
  *  (one page, Self="usp"). */
-export async function openRealHost(): Promise<HeadlessHost> {
+export async function openRealHost(extra: { engineShaper?: boolean } = {}): Promise<HeadlessHost> {
   if (!ENGINE_ANCHOR) {
     throw new Error(
       "REQUIRE_REAL_CORE=1 but no @paged-media/canvas-wasm was found " +
@@ -56,6 +74,9 @@ export async function openRealHost(): Promise<HeadlessHost> {
   const h = await createHeadlessHost({
     console: silent,
     resolveFrom: ENGINE_ANCHOR,
+    // The engine shaper (contract 0.2.41: `measureStrings` in one call);
+    // an older SDK ignores the option.
+    ...extra,
   } as Parameters<typeof createHeadlessHost>[0]);
   await h.load(minimalIdml());
   return h;

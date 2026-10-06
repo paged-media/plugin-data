@@ -69,7 +69,7 @@ import {
 } from "./persist";
 import type { LowerStamp, LoweredTableAt } from "./lower";
 import { commitRecordFlow } from "./flow-writer";
-import { labelEnvelope, labelledVersion, labelRider, sessionVersionPath } from "./doc-label";
+import { labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
 import { documentLabelDoors, documentsDoors, engineHasDocumentLabels } from "./doors";
 import {
   mergeRecords as writeMerge,
@@ -832,9 +832,12 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     },
   });
   /** Whether this document's session is labelled (the SDK forwards the label
-   *  doors and the engine has them). No host call when the SDK lacks them. */
+   *  doors and the engine has them). Probed once per document, as the
+   *  session starts and when another document opens, so no command pays for
+   *  it; no host call at all when the SDK lacks the doors. */
+  let labelProbe: Promise<boolean> = engineHasDocumentLabels(rawHost);
   async function labelOn(): Promise<boolean> {
-    if (labelActive === null) labelActive = await engineHasDocumentLabels(rawHost);
+    if (labelActive === null) labelActive = await labelProbe;
     return labelActive;
   }
   const sourceNames: string[] = [];
@@ -1127,18 +1130,21 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       try {
         const built = await buildPersisted();
         if (!built || epoch !== docEpoch) return;
-        const bytes = encodeSession(built);
-        const text = new TextDecoder().decode(bytes);
+        const version = encodeSession(built);
+        const labels = (await labelOn()) && epoch === docEpoch;
+        // Protocol 69: the part records the version the label names (`base`).
+        const text = labels ? withBase(new TextDecoder().decode(version), labelHash) : new TextDecoder().decode(version);
         if (text !== lastWritten) {
-          await host.parts.write(SESSION_PART, bytes);
+          await host.parts.write(SESSION_PART, labels ? new TextEncoder().encode(text) : version);
           lastWritten = text;
-          persistence.hash = await contentHash(bytes);
+          persistence.hash = await contentHash(version);
         }
-        // Protocol 69: this version as its own part, and the label to name it.
-        if (persistence.hash && (await labelOn()) && epoch === docEpoch) {
+        // Protocol 69: this version as its own part, and the label to name it
+        // (carried by the next document write).
+        if (persistence.hash && labels) {
           const path = sessionVersionPath(persistence.hash);
           if (!knownVersions.has(path)) {
-            await host.parts.write(path, bytes);
+            await host.parts.write(path, version);
             knownVersions.add(path);
           }
           pendingLabel = persistence.hash === labelHash ? null : persistence.hash;
@@ -1255,23 +1261,6 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     if (persistTimer && (await labelOn())) await flushPersistInternal();
   }
 
-  /** A session change no document write carried is labelled on its own
-   *  (on save): one undo step that names the version being saved. */
-  async function writePendingLabel(): Promise<void> {
-    const hash = pendingLabel;
-    const doors = documentLabelDoors(rawHost);
-    if (!hash || !doors || !labelActive) return;
-    try {
-      const o = await doors.setDocumentMetadata(labelEnvelope(hash));
-      if (o.applied) {
-        labelHash = hash;
-        if (pendingLabel === hash) pendingLabel = null;
-      }
-    } catch (err) {
-      report({ level: "warn", source: "persist", message: `the session label was not written: ${errText(err)}` });
-    }
-  }
-
   /** After an undo or redo: if the document's label now names another
    *  session version, reload that version (the session follows undo). */
   async function followLabel(): Promise<void> {
@@ -1297,9 +1286,43 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       report({ level: "warn", source: "restore", message: `the session version ${named} the document names is missing; the session stays as it is` });
       return;
     }
-    await resetState();
-    restorePromise = restoreInternal(bytes);
+    // Reload the version without rebooting either engine: an undo must stay
+    // cheap. DuckDB keeps its tables; a source whose saved data differs from
+    // what is loaded is loaded again, the rest is left as it is.
+    const loaded = { csv: new Map(importedCsv), files: new Map(importedFiles) };
+    await resetState({ keepEngines: true });
+    restorePromise = restoreInternal(bytes, true);
     await restorePromise;
+    const kept = duck as DuckDBHandle | null;
+    if (!kept) return;
+    for (const [name, text] of [...pendingCsv]) {
+      pendingCsv.delete(name);
+      if (loaded.csv.get(name) === text) continue;
+      try {
+        await kept.exec(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
+        await kept.registerCsv(name, text);
+      } catch (err) {
+        report({ level: "error", source: "restore", message: `the source "${name}" could not be reloaded: ${errText(err)}` });
+      }
+    }
+    for (const [name, f] of [...pendingFiles]) {
+      pendingFiles.delete(name);
+      const was = loaded.files.get(name);
+      if (was && was.sheet === f.sheet && sameBytes(was.bytes, f.bytes)) continue;
+      try {
+        const e = f.format === "xlsx" ? await ensureEngine() : null;
+        await kept.exec(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
+        await loadIntoDuckDB(kept, name, f.format, f.bytes, xlsxReader(e), f.sheet);
+      } catch (err) {
+        report({ level: "error", source: "restore", message: `the file "${f.fileName}" could not be reloaded: ${errText(err)}` });
+      }
+    }
+  }
+
+  function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
   }
 
   /** The label a lowering stamps on the content it creates: the binding, the
@@ -1506,6 +1529,18 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   }
 
   async function ensureEngine(): Promise<DataEngineLike> {
+    if (engine && bootPayload !== null && typeof engine.load_payload === "function") {
+      // A kept engine (an undo reloaded another session version): the saved
+      // recipe replaces its own.
+      const saved = bootPayload;
+      bootPayload = null;
+      try {
+        engine.set_locale(locale);
+      } catch {
+        // the locale is reported where the session applies it
+      }
+      engine.load_payload(saved);
+    }
     if (engine) return engine;
     try {
       const e = await bootEngine(today);
@@ -1724,8 +1759,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   }
 
   /** Drop everything this session holds for the current document (another
-   *  document opened, or an undo named another session version). */
-  async function resetState(): Promise<void> {
+   *  document opened, or an undo named another session version). An undo
+   *  keeps the engines (`keepEngines`): the data engine takes the version's
+   *  recipe, and DuckDB keeps its tables (see `followLabel`). */
+  async function resetState(opts: { keepEngines?: boolean } = {}): Promise<void> {
     docEpoch += 1;
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = null;
@@ -1759,36 +1796,42 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     persistence.status = "empty";
     persistence.hash = null;
     partsMissingReported = false;
-    engine?.free();
-    engine = null;
-    const oldDuck = duck;
-    duck = null;
-    void oldDuck?.close();
+    if (!opts.keepEngines) {
+      engine?.free();
+      engine = null;
+      const oldDuck = duck;
+      duck = null;
+      void oldDuck?.close();
+    }
     state.status = "idle";
     state.message = "No data sources yet — import a CSV to begin.";
     emit();
   }
 
-  /** The session version the document's label names, or null (no label
-   *  doors, no label, or the part is missing — then `session.json` is read). */
-  async function labelledSession(): Promise<Uint8Array | null> {
+  /** Which saved session a document holds: the session part, unless the
+   *  document's label (protocol 69) names a version other than the one the
+   *  part extends — an undo or redo moved it after the part was written —
+   *  then that version. */
+  async function labelledSession(latest: Uint8Array | null): Promise<Uint8Array | null> {
     const doors = documentLabelDoors(rawHost);
-    if (!doors) return null;
+    if (!doors) return latest;
     const named = labelledVersion(await doors.getDocumentMetadata().catch(() => null));
-    if (!named) return null;
     labelHash = named;
+    if (!named) return latest;
+    if (latest && splitBase(latest).base === named) return latest;
     const path = sessionVersionPath(named);
     const bytes = await host.parts.read(path).catch(() => null);
     if (bytes) {
       knownVersions.add(path);
       return bytes;
     }
+    if (latest && (await contentHash(splitBase(latest).version)) === named) return latest;
     report({
       level: "warn",
       source: "restore",
       message: `the document names session version ${named}, which it does not hold; the last saved session is restored`,
     });
-    return null;
+    return latest;
   }
 
   /** Restore the document's `session` part: the engine recipe, the locale and
@@ -1796,13 +1839,12 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
    *  in DuckDB on its first boot) and remote descriptors (inert). Then reconcile
    *  with the document: which variable fields are placed, and whether each
    *  recorded table is still there and still labelled with its binding. */
-  async function restoreInternal(given?: Uint8Array): Promise<void> {
+  async function restoreInternal(given?: Uint8Array, reload = false): Promise<void> {
     if (!partsAvailable()) return;
     let bytes: Uint8Array | null = given ?? null;
     try {
-      // Protocol 69: the version the document's label names, else the part.
-      if (!bytes) bytes = await labelledSession();
-      if (!bytes) bytes = await host.parts.read(SESSION_PART);
+      // Protocol 69: the part, or the version the document's label names.
+      if (!bytes) bytes = await labelledSession(await host.parts.read(SESSION_PART));
     } catch (err) {
       report({
         level: "error",
@@ -1961,7 +2003,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     }
 
     lastWritten = new TextDecoder().decode(bytes);
-    persistence.hash = await contentHash(bytes);
+    persistence.hash = await contentHash(splitBase(bytes).version);
     persistence.status = "saved";
     state.status = "ready";
     state.message = `Restored ${bindingIds.length} binding(s) over ${sourceNames.length} source(s) from the document.`;
@@ -1969,7 +2011,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     // Refresh policies: interval polling for consented remote sources, and
     // what the document asked to happen on open.
     syncPolling();
-    await applyOnOpen();
+    // An undo that reloads a version is not an open.
+    if (!reload) await applyOnOpen();
     emit();
   }
 
@@ -1979,7 +2022,6 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     hostSubs.push(
       host.document.onWillSave(async () => {
         await flushPersistInternal();
-        await writePendingLabel();
         await collectDataParts();
       }),
     );
@@ -3542,6 +3584,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     async documentOpened() {
       await resetState();
       labelActive = null;
+      labelProbe = engineHasDocumentLabels(rawHost);
       labelHash = null;
       knownVersions.clear();
       restorePromise = restoreInternal();

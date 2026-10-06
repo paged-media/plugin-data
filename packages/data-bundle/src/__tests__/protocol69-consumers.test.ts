@@ -272,16 +272,32 @@ describe("the session version is named in the document label (protocol 69) [data
     expect(h.mutations.at(-1)).toEqual({ op: "setFieldValue", args: { storyId: "s1", offset: 0, value: "new" } });
   });
 
-  it("a change no write carried is labelled on save [data.plugin.persistence]", async () => {
+  it("a change no write carried takes no undo step: the part records the label it extends [data.plugin.persistence]", async () => {
     const h = labelHost({ v69: true });
-    const s = await sessionWith(h.host, fakeEngine());
+    const s = await sessionWith(h.host, fakeEngine({ resolve_lowered: () => variable("new") }));
     s.addVariableBinding("v", "anchor", "q", "a");
-    await s.recordCount("q"); // boots the engine: there is a session to save
-    await s.flushPersist();
-    expect(h.label()).toBeNull();
+    await s.refreshFields();
+    const labelled = h.label()!;
+    const writes = h.mutations.length;
+    s.addVariableBinding("w", "anchor", "q", "b"); // no document write
     await h.save();
-    expect(h.label()).not.toBeNull();
-    expect(h.parts.has(sessionVersionPath(h.label()!))).toBe(true);
+    expect(h.mutations.length).toBe(writes); // nothing written to the document
+    expect(h.label()).toBe(labelled);
+    const part = JSON.parse(new TextDecoder().decode(h.parts.get("session.json")!));
+    expect(part.base).toBe(labelled);
+  });
+
+  it("reopen: the part while the label names its base, else the labelled version [data.plugin.persistence]", async () => {
+    const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const other = "cccccccccccccccccccccccccccccccc";
+    const latest = JSON.stringify({ v: 1, engine: { tag: "latest" }, base });
+    const versions = { [sessionVersionPath(other)]: JSON.stringify({ v: 1, engine: { tag: "older" } }), "session.json": latest };
+    const same = labelHost({ v69: true, label: JSON.stringify({ v: 1, data: { session: base } }), parts: versions });
+    await (await sessionWith(same.host, fakeEngine())).restore();
+    expect(same.reads).toEqual(["session.json"]);
+    const moved = labelHost({ v69: true, label: JSON.stringify({ v: 1, data: { session: other } }), parts: versions });
+    await (await sessionWith(moved.host, fakeEngine())).restore();
+    expect(moved.reads).toEqual(["session.json", sessionVersionPath(other)]);
   });
 
   it("restore reads the version the label names before the session part [data.plugin.persistence]", async () => {
@@ -292,8 +308,8 @@ describe("the session version is named in the document label (protocol 69) [data
     const h = labelHost({ v69: true, label: JSON.stringify({ v: 1, data: { session: hash } }), parts: { [sessionVersionPath(hash)]: older, "session.json": latest } });
     const s = await sessionWith(h.host, fakeEngine({ load_payload: (p: unknown) => void loaded.push(p) } as never));
     await s.restore();
-    expect(h.reads[0]).toBe(sessionVersionPath(hash));
-    expect(h.reads).not.toContain("session.json");
+    // The part does not extend that label (no base): the labelled version.
+    expect(h.reads).toEqual(["session.json", sessionVersionPath(hash)]);
   });
 
   it("restore without the doors reads the session part [data.plugin.persistence]", async () => {
@@ -303,9 +319,14 @@ describe("the session version is named in the document label (protocol 69) [data
     expect(h.reads).toEqual(["session.json"]);
   });
 
-  it("an undo that takes the label back reloads the version it names [data.plugin.persistence]", async () => {
+  it("an undo that takes the label back reloads the version it names, keeping the engines [data.plugin.persistence]", async () => {
     const h = labelHost({ v69: true });
-    const s = await sessionWith(h.host, fakeEngine({ resolve_lowered: () => variable("new") }));
+    let freed = 0;
+    const loaded: unknown[] = [];
+    const s = await sessionWith(
+      h.host,
+      fakeEngine({ resolve_lowered: () => variable("new"), free: () => void freed++, load_payload: (p: unknown) => void loaded.push(p) } as never),
+    );
     s.addVariableBinding("v", "anchor", "q", "a");
     await s.refreshFields();
     const first = h.label()!;
@@ -318,6 +339,10 @@ describe("the session version is named in the document label (protocol 69) [data
     h.reads.length = 0;
     h.undo();
     await vi.waitFor(() => expect(h.reads).toContain(sessionVersionPath(first)));
+    await s.whenRestored();
+    // The data engine took the version's recipe; neither engine rebooted.
+    expect(loaded).toHaveLength(1);
+    expect(freed).toBe(0);
   });
 });
 
