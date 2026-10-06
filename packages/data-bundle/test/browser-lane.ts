@@ -71,6 +71,8 @@ export interface BrowserLane {
   errors: string[];
   /** Requests to any origin but the lane's (DuckDB extension autoloads). */
   offOrigin: string[];
+  /** Every path the lane's server answered 200, in order (bin/ and lane/). */
+  served: string[];
   close(): Promise<void>;
 }
 
@@ -106,6 +108,7 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
   });
   writeFileSync(join(out, "index.html"), `<!doctype html><meta charset="utf-8"><script type="module" src="./entry.js"></script>`);
 
+  const served: string[] = [];
   const server: Server = createServer((rq, rs) => {
     const url = new URL(rq.url ?? "/", "http://x");
     const file = url.pathname.startsWith("/bin/")
@@ -131,6 +134,7 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
       "content-security-policy": "connect-src 'self' blob: data:",
       "cache-control": "no-cache",
     });
+    served.push(url.pathname);
     rs.end(readFileSync(file));
   });
   // Port 0: the OS picks a free port (never reuse a running server).
@@ -156,6 +160,7 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
       page,
       errors,
       offOrigin,
+      served,
       async close() {
         await browser.close();
         await new Promise<void>((ok) => server.close(() => ok()));

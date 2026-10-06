@@ -28,6 +28,8 @@
 //                                    the EH variant (exceptions, no threads)
 //   bin/duckdb-browser-eh.worker.js  the worker that instantiates it
 //   bin/duckdb-browser.mjs           the JS API, apache-arrow inlined
+//   bin/duckdb-ext/v1.1.1/wasm_eh/   DuckDB's json + parquet extensions,
+//                                    loaded same-origin (DUCKDB_EXTENSIONS)
 //
 // Exactly one variant ships: mvp (40.6 MB) is over the cap and coi needs
 // threads plus cross-origin isolation. Nothing here reads vendor/ any more;
@@ -69,6 +71,47 @@ export const DUCKDB_ARTIFACTS = {
  *  configuration, so no statement can change a setting (`SET`, `RESET`,
  *  `PRAGMA`) for the session's life. Boot cost, not a per-command query. */
 export const LOCKDOWN_SQL = "SET lock_configuration = true";
+
+/** DuckDB's own extensions the shipped engine needs, served from the bundle's
+ *  `bin/`. The eh build (DuckDB-WASM 1.29.0, engine v1.1.1) has neither json
+ *  nor parquet built in; DuckDB loads them on first use (`read_json`,
+ *  `read_parquet`) from `<repository>/<engine version>/<platform>/<name>.duckdb_extension.wasm`.
+ *  The default repository is extensions.duckdb.org, which a host CSP with
+ *  `connect-src 'self'` refuses — and the worker then traps. So the boot
+ *  points the repository at `bin/duckdb-ext/`, where
+ *  scripts/vendor-duckdb.sh stages the two signed files. */
+export const DUCKDB_EXTENSIONS = {
+  dir: "duckdb-ext",
+  engineVersion: "v1.1.1",
+  platform: "wasm_eh",
+  names: ["json", "parquet"],
+} as const;
+
+/** The bin/-relative path of one shipped extension. */
+export function extensionPath(name: (typeof DUCKDB_EXTENSIONS.names)[number]): string {
+  const e = DUCKDB_EXTENSIONS;
+  return `${e.dir}/${e.engineVersion}/${e.platform}/${name}.duckdb_extension.wasm`;
+}
+
+/** The boot statements that make DuckDB load extensions only from `repo`
+ *  (an absolute URL, no trailing slash), run before [`LOCKDOWN_SQL`] locks
+ *  them. Autoload stays on (that is how `read_json` finds json); autoinstall
+ *  is off, so nothing is installed from DuckDB's default repository. */
+export function extensionRepoSql(repo: string): string[] {
+  const r = repo.replace(/\/+$/, "").replace(/'/g, "''");
+  return [
+    `SET custom_extension_repository = '${r}'`,
+    `SET autoinstall_extension_repository = '${r}'`,
+    "SET autoinstall_known_extensions = false",
+    "SET autoload_known_extensions = true",
+  ];
+}
+
+/** Every statement a boot runs right after connecting, in order: the
+ *  extension repository, then the configuration lock (which freezes it). */
+export function bootSql(repo: string): string[] {
+  return [...extensionRepoSql(repo), LOCKDOWN_SQL];
+}
 
 /** A booted DuckDB session over the vendored engine. */
 export interface DuckDBHandle {
@@ -225,7 +268,7 @@ export async function bootDuckDB(): Promise<DuckDBHandle> {
     );
   }
   const conn = await db.connect();
-  await conn.query(LOCKDOWN_SQL);
+  for (const sql of bootSql(binUrl(DUCKDB_EXTENSIONS.dir))) await conn.query(sql);
   return duckdbHandle(db, conn, async () => {
     await db.terminate();
     worker.terminate();

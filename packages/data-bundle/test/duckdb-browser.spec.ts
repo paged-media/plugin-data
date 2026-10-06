@@ -13,7 +13,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ALLOWED, FIXTURE_CSV, REFUSED } from "./guard-matrix";
 
-const PARQUET = readFileSync(join(__dirname, "..", "..", "..", "conformance", "sources", "products.parquet"));
+const SOURCES = join(__dirname, "..", "..", "..", "conformance", "sources");
+const PARQUET = readFileSync(join(SOURCES, "products.parquet"));
+const XLSX = readFileSync(join(SOURCES, "products.xlsx"));
 
 let lane: BrowserLane | undefined;
 let why = "";
@@ -125,16 +127,94 @@ describe.skipIf(!REQUIRED && process.env.PAGED_BROWSER_LANE === "0")(
       expect(out.late).toEqual([["1", "2"]]);
     });
 
-    it.fails("DEFECT: a Parquet import autoloads DuckDB's parquet extension from extensions.duckdb.org, which the editor's CSP refuses [data.source.adapters]", async () => {
-      const out = await inPage<{ rows?: unknown; error?: string }>(
+    // DuckDB-WASM 1.29.0's eh build has neither json nor parquet built in;
+    // DuckDB loads them on first use. They used to come from
+    // extensions.duckdb.org, which the editor's CSP refuses (the worker
+    // trapped "unreachable"); bootDuckDB now points DuckDB at the bundle's own
+    // bin/duckdb-ext, so they load same-origin.
+    it("JSON imports — an array of objects and newline-delimited records — load json from bin/duckdb-ext [data.source.adapters]", async () => {
+      const out = await inPage<{ arr?: unknown; nd?: unknown; error?: string }>(
+        `try {
+           const enc = new TextEncoder();
+           await L.loadIntoDuckDB(d, "catalog", "json",
+             enc.encode('[{"sku":"A-1","price":9.99,"tags":"x"},{"sku":"B-2","price":19.5,"tags":null}]'), () => null);
+           await L.loadIntoDuckDB(d, "events", "json",
+             enc.encode('{"id":1,"at":"2026-01-15"}\\n{"id":2,"at":"2026-02-01"}\\n'), () => null);
+           return {
+             arr: (await d.rows("SELECT sku, CAST(price AS VARCHAR), tags FROM catalog ORDER BY sku")).rows,
+             nd: (await d.rows("SELECT id, CAST(at AS VARCHAR), typeof(at) FROM events ORDER BY id")).rows,
+           };
+         } catch (e) { return { error: String(e && e.message || e) }; }`,
+      );
+      expect(out.error).toBeUndefined();
+      expect(out.arr).toEqual([
+        ["A-1", "9.99", "x"],
+        ["B-2", "19.5", null],
+      ]);
+      expect(out.nd).toEqual([
+        ["1", "2026-01-15", "DATE"],
+        ["2", "2026-02-01", "DATE"],
+      ]);
+      expect(lane!.served).toContain("/bin/duckdb-ext/v1.1.1/wasm_eh/json.duckdb_extension.wasm");
+      expect(lane!.offOrigin).toEqual([]);
+      expect(lane!.errors.filter((e) => /unreachable|RuntimeError|Content Security Policy/.test(e))).toEqual([]);
+    });
+
+    it("a Parquet import loads parquet from bin/duckdb-ext: DECIMAL keeps its scale, DATE stays a date [data.source.adapters]", async () => {
+      const out = await inPage<{ types?: unknown; rows?: unknown; error?: string }>(
         `try {
            await L.loadIntoDuckDB(d, "products", "parquet", new Uint8Array(arg), () => null);
-           return { rows: (await d.rows("SELECT count(*) FROM products")).rows };
+           return {
+             types: (await d.rows("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'products' ORDER BY ordinal_position")).rows,
+             rows: (await d.rows("SELECT sku, CAST(price AS VARCHAR), qty, CAST(launched AS VARCHAR) FROM products ORDER BY sku")).rows,
+           };
          } catch (e) { return { error: String(e && e.message || e) }; }`,
         [...PARQUET],
       );
       expect(out.error).toBeUndefined();
+      expect(out.types).toEqual([
+        ["sku", "VARCHAR"],
+        ["price", "DECIMAL(10,2)"],
+        ["qty", "INTEGER"],
+        ["launched", "DATE"],
+      ]);
+      expect(out.rows).toEqual([
+        ["A-1", "9.99", "3", "2026-01-15"],
+        ["B-2", "19.50", "10", "2026-02-01"],
+        ["C-3", "7.00", null, null],
+      ]);
+      expect(lane!.served).toContain("/bin/duckdb-ext/v1.1.1/wasm_eh/parquet.duckdb_extension.wasm");
       expect(lane!.offOrigin).toEqual([]);
+      expect(lane!.errors.filter((e) => /unreachable|RuntimeError|Content Security Policy/.test(e))).toEqual([]);
+    });
+
+    it("an XLSX import (the data engine reads the sheet, DuckDB's read_json the records) runs in the worker [data.source.adapters]", async () => {
+      const out = await inPage<{ rows?: unknown; sheet?: unknown; error?: string }>(
+        `try {
+           const e = await L.bootEngine(Date.UTC(2026, 9, 6) / 86400000);
+           const r = await L.loadIntoDuckDB(d, "xl", "xlsx", new Uint8Array(arg), (b, sh) => e.xlsx_import(b, sh));
+           return {
+             sheet: r.sheet,
+             rows: (await d.rows("SELECT sku, CAST(price AS VARCHAR), qty, CAST(launched AS VARCHAR), active FROM xl ORDER BY sku")).rows,
+           };
+         } catch (e) { return { error: String(e && e.message || e) }; }`,
+        [...XLSX],
+      );
+      expect(out.error).toBeUndefined();
+      expect(out.sheet).toBe("Products");
+      expect(out.rows).toEqual([
+        ["A-1", "9.99", "3", "2026-01-15", "true"],
+        ["B-2", "19.5", "10", "2026-02-01", "false"],
+        ["C-3", "7.0", null, null, "true"],
+        ["D-4", null, "5", "2026-04-01", null],
+      ]);
+      expect(lane!.offOrigin).toEqual([]);
+    });
+
+    it("the whole lane made no request outside its origin, and loaded extensions only from bin/duckdb-ext [data.security.gates]", () => {
+      expect(lane!.offOrigin).toEqual([]);
+      const ext = lane!.served.filter((p) => p.includes("duckdb_extension"));
+      expect(ext.every((p) => p.startsWith("/bin/duckdb-ext/v1.1.1/wasm_eh/")), ext.join(", ")).toBe(true);
     });
   },
 );
