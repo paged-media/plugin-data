@@ -15,6 +15,8 @@ missing=0
 for f in package/package.json package/manifest.json package/dist/index.js \
          package/bin/data_js_bg.wasm package/bin/data_js.js \
          package/bin/duckdb-engine.wasm \
+         package/bin/duckdb-ext/v1.1.1/wasm_eh/json.duckdb_extension.wasm \
+         package/bin/duckdb-ext/v1.1.1/wasm_eh/parquet.duckdb_extension.wasm \
          package/bin/SOURCE_HASH package/bin/PACKAGE_HASH; do
   if ! grep -qx "$f" <<<"$listing"; then
     echo "pubcheck: $tgz lacks $f" >&2

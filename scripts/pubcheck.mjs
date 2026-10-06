@@ -8,7 +8,11 @@
 //   - the data-js engine (bin/data_js.js + bin/data_js_bg.wasm);
 //   - the DuckDB engine set src/query/duckdb.ts loads: bin/duckdb-engine.wasm,
 //     bin/duckdb-browser-eh.worker.js, bin/duckdb-browser.mjs;
-//   - exactly ONE DuckDB wasm, within the manifest's declared maxBytes;
+//   - DuckDB's json + parquet extensions under bin/duckdb-ext/ (the eh build
+//     has neither built in; bootDuckDB points DuckDB's extension repository
+//     there, so a missing one is a trap under the editor's CSP);
+//   - exactly ONE DuckDB engine wasm, no undeclared wasm, and every declared
+//     wasm within its manifest maxBytes;
 //   - no vendor/ file and no other DuckDB variant (mvp/coi);
 //   - the bin/SOURCE_HASH stamp, and with --release also bin/PACKAGE_HASH.
 //
@@ -43,11 +47,18 @@ need("bin/data_js_bg.wasm", "data-js engine — run `bash scripts/build-wasm.sh`
 need("bin/duckdb-engine.wasm", "DuckDB engine — run `bash scripts/vendor-duckdb.sh`");
 need("bin/duckdb-browser-eh.worker.js", "DuckDB worker — run `bash scripts/vendor-duckdb.sh`");
 need("bin/duckdb-browser.mjs", "DuckDB JS API — run `bash scripts/vendor-duckdb.sh`");
+for (const name of ["json", "parquet"]) {
+  const w = manifest.capabilities.wasm.find((a) => a.name === `duckdb-ext-${name}`);
+  if (!w) errors.push(`the manifest declares no duckdb-ext-${name} artifact`);
+  else need(w.path, `DuckDB ${name} extension — run \`bash scripts/vendor-duckdb.sh\``);
+}
 need("bin/SOURCE_HASH", "wasm freshness stamp — run `bash scripts/build-wasm.sh`");
 if (process.argv.includes("--release")) need("bin/PACKAGE_HASH", "bump-check stamp — run `node scripts/package-hash.mjs --stamp`");
 
-const duckWasm = [...files.keys()].filter((p) => /duckdb[^/]*\.wasm$/.test(p));
-if (duckWasm.length !== 1) errors.push(`expected exactly one DuckDB wasm, found ${duckWasm.length}: ${duckWasm.join(", ")}`);
+const duckWasm = [...files.keys()].filter((p) => /^bin\/duckdb[^/]*\.wasm$/.test(p));
+if (duckWasm.length !== 1) errors.push(`expected exactly one DuckDB engine wasm, found ${duckWasm.length}: ${duckWasm.join(", ")}`);
+for (const p of files.keys())
+  if (p.endsWith(".wasm") && !wasmDecl[p]) errors.push(`undeclared wasm in tarball: ${p}`);
 for (const p of files.keys()) {
   if (p.startsWith("vendor/") || p.includes("/vendor/")) errors.push(`vendor file in tarball: ${p}`);
   if (/duckdb-(mvp|coi)|duckdb-node/.test(p)) errors.push(`unshipped DuckDB variant in tarball: ${p}`);

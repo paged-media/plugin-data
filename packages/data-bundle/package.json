@@ -46,6 +46,8 @@
     "bin/duckdb-engine.wasm",
     "bin/duckdb-browser-eh.worker.js",
     "bin/duckdb-browser.mjs",
+    "bin/duckdb-ext/v1.1.1/wasm_eh/json.duckdb_extension.wasm",
+    "bin/duckdb-ext/v1.1.1/wasm_eh/parquet.duckdb_extension.wasm",
     "bin/SOURCE_HASH",
     "bin/PACKAGE_HASH",
     "manifest.json"

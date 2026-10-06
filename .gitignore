@@ -20,6 +20,9 @@ packages/data-bundle/bin/PACKAGE_HASH
 # duckdb-browser-eh.worker.js, duckdb-browser.mjs — shipped in the tarball,
 # never committed
 packages/data-bundle/bin/*.mjs
+# DuckDB's json + parquet extensions for the shipped engine
+# (scripts/vendor-duckdb.sh; bin/duckdb-ext/<engine>/wasm_eh/*.duckdb_extension.wasm)
+packages/data-bundle/bin/duckdb-ext/
 
 # vendored DuckDB-WASM dist — acquired by scripts/vendor-duckdb.sh, NOT
 # committed (multi-MB MIT artifact; SOURCE.md records provenance). The
@@ -29,6 +32,7 @@ vendor/duckdb-wasm/*.js
 vendor/duckdb-wasm/*.mjs
 vendor/duckdb-wasm/*.worker.js
 vendor/duckdb-wasm/dist/
+vendor/duckdb-wasm/extensions/
 
 # oracle venv (native-DuckDB differential harness, if ever local)
 .venv/
