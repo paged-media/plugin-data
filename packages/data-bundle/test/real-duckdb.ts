@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DUCKDB_ARTIFACTS, duckdbHandle, type DuckDBHandle } from "../src/query/duckdb";
+import { DUCKDB_ARTIFACTS, duckdbHandle, LOCKDOWN_SQL, type DuckDBHandle } from "../src/query/duckdb";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, "..");
@@ -50,6 +50,7 @@ export async function bootRealDuckDB(): Promise<{ handle?: DuckDBHandle; error?:
     );
     await db.instantiate();
     const conn = db.connect();
+    conn.query(LOCKDOWN_SQL); // as bootDuckDB does
     return { handle: duckdbHandle(db, conn, () => db.reset?.()) };
   } catch (err) {
     return { error: `DuckDB failed to boot: ${err instanceof Error ? err.message : String(err)}` };

@@ -86,7 +86,7 @@ import {
   type ImportFormat,
   type XlsxImport,
 } from "./query/import";
-import { checkQuery, diagnoseDuckDBError, lockDownDuckDB, previewSql, type SqlDiagnostic } from "./query/sql";
+import { checkQuery, diagnoseDuckDBError, previewSql, type SqlDiagnostic } from "./query/sql";
 import {
   IntervalScheduler,
   MANUAL,
@@ -1378,8 +1378,6 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     if (duck) return duck;
     try {
       const d = await bootDuckDB();
-      // The engine half of the query guard, before any query runs.
-      await lockDownDuckDB(d);
       duck = d;
       for (const [name, text] of [...pendingCsv]) {
         try {

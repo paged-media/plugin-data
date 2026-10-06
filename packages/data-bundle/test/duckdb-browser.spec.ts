@@ -39,7 +39,6 @@ async function inPage<T>(body: string, arg?: unknown): Promise<T> {
       const w = window as any;
       if (!w.duck) {
         w.duck = await L.bootDuckDB();
-        await L.lockDownDuckDB(w.duck); // as the session does on boot
         for (const [name, text] of Object.entries(csv)) {
           await L.loadIntoDuckDB(w.duck, name, "csv", new TextEncoder().encode(text), () => {
             throw new Error("no xlsx here");

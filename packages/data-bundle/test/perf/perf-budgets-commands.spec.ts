@@ -129,6 +129,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   // Wave 6 (query guard): +1 DuckDB statement — the first refresh asks DuckDB's
   // parser about the query once (`json_serialize_sql`, query/sql.ts guardQuery).
+  // Guard fix (browser): -1 — the guard is a TypeScript lexer that asks DuckDB
+  // nothing (json_serialize_sql trapped in the browser worker); the config
+  // lock is boot cost (LOCKDOWN_SQL in bootDuckDB). duckQueries 2 → 1.
   // Wave 5 (update in place): +1 read — document.tree, to find a table this
   // binding lowered before and swap it inside its own frame.
   const W1_LOWER: Measured = {
@@ -145,7 +148,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
     keyAllocs: 0,
     fingerprints: 0,
-    duckQueries: 2,
+    duckQueries: 1,
   };
   it("W1 imports a 500-row CSV and lowers it as one table [data.perf.gates]", async () => {
     h = await openDataHost();
@@ -400,6 +403,8 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
   // Wave 6 (query guard): +1 DuckDB statement — `json_serialize_sql` once for the
   // one query on its first refresh (query/sql.ts guardQuery).
+  // Guard fix (browser): -1 — the guard asks DuckDB nothing now (a TypeScript
+  // lexer; the config lock is boot cost). duckQueries 2 → 1.
   const W5: Measured = {
     hostCalls: 102,
     hostReads: 2,
@@ -413,7 +418,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     stabilizeCalls: 0,
     keyAllocs: 0,
     fingerprints: 0,
-    duckQueries: 2,
+    duckQueries: 1,
   };
   it("W5 lowers 20 variable bindings at once [data.perf.gates]", async () => {
     h = await openDataHost();

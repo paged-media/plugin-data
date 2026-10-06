@@ -6,7 +6,7 @@ import Module, { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DUCKDB_ARTIFACTS, duckdbHandle, type DuckDBHandle } from "../src/query/duckdb";
+import { DUCKDB_ARTIFACTS, duckdbHandle, LOCKDOWN_SQL, type DuckDBHandle } from "../src/query/duckdb";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const PKG = join(HERE, "..");
@@ -51,6 +51,7 @@ export async function tryBootNodeDuckDB(): Promise<{ duck?: NodeDuckDB; error?: 
     );
     await db.instantiate();
     const conn = db.connect();
+    conn.query(LOCKDOWN_SQL); // as bootDuckDB does
     return {
       duck: {
         handle: duckdbHandle(db, conn, () => db.reset?.()),

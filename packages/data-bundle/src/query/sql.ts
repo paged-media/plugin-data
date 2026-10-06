@@ -38,13 +38,11 @@
 //     `main.` name), a subquery, or an allowed table function. A string or
 //     quoted file name there (DuckDB's replacement scan reads it as a file)
 //     or any other table function is refused.
-// The engine side adds `lock_configuration` at boot (lockDownDuckDB): no
-// statement can change a DuckDB setting afterwards. `enable_external_access
+// The engine side adds `lock_configuration` at boot (LOCKDOWN_SQL in
+// query/duckdb.ts): no statement can change a DuckDB setting afterwards. `enable_external_access
 // = false` was evaluated and rejected: it is global and one-way, and it also
 // refuses DuckDB's own readers over registered in-memory buffers, so every
 // import after the first query would fail (proven in the browser lane).
-
-import type { DuckDBHandle } from "./duckdb";
 
 /** A query problem the panel can point at. `line`/`column` are 1-based,
  *  in the query text as the user wrote it. */
@@ -326,13 +324,6 @@ export function checkQuery(sql: string): SqlDiagnostic | null {
 /** Check one query (the session's entry point; see [`checkQuery`]). */
 export async function guardQuery(sql: string): Promise<SqlDiagnostic | null> {
   return checkQuery(sql);
-}
-
-/** The engine half of the guard, run once right after DuckDB boots and
- *  before any document query: lock DuckDB's configuration, so no statement
- *  can change a setting (`SET`, `RESET`, `PRAGMA`) for the session's life. */
-export async function lockDownDuckDB(duck: DuckDBHandle): Promise<void> {
-  await duck.exec("SET lock_configuration = true");
 }
 
 /** The statement a preview runs: the user's query on its own line (so

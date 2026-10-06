@@ -5,7 +5,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { DuckDBHandle } from "../src/query/duckdb";
 import { loadIntoDuckDB } from "../src/query/import";
-import { checkQuery, lockDownDuckDB } from "../src/query/sql";
+import { checkQuery } from "../src/query/sql";
 import { ALLOWED, FIXTURE_CSV, REFUSED } from "./guard-matrix";
 import { bootRealDuckDB, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 
@@ -17,7 +17,6 @@ describe.skipIf(!ready && !REQUIRE_REAL_DUCKDB)("the query guard over real DuckD
   beforeAll(async () => {
     expect(boot.handle, boot.error).toBeDefined();
     d = boot.handle!;
-    await lockDownDuckDB(d);
     for (const [name, text] of Object.entries(FIXTURE_CSV)) {
       await loadIntoDuckDB(d, name, "csv", new TextEncoder().encode(text), () => {
         throw new Error("no xlsx here");

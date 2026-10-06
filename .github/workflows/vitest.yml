@@ -80,6 +80,17 @@ jobs:
       # results would still be published as evidence), which also meant the
       # TS lane could never go red: a failing spec merged green. Evidence
       # still ships: the JUnit steps below run under `!cancelled()`.
+      # The real-BROWSER DuckDB lane (test/duckdb-browser.spec.ts): the
+      # shipped eh worker + engine in headless Chrome under the editor's
+      # headers. The Node lane cannot see what only the browser worker does
+      # (the json_serialize_sql guard passed every Node spec and trapped on
+      # every refresh in the editor). The runner's preinstalled Chrome —
+      # no browser download, no apt.
+      - name: browser for the DuckDB browser lane (fail, never skip)
+        run: |
+          CHROME=$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)
+          test -n "$CHROME"
+          echo "PAGED_CHROMIUM=$CHROME" >> "$GITHUB_ENV"
       - name: vitest (junit per package)
         env:
           # The spec-level half of the dual gate (engine-real.spec.ts,
@@ -89,6 +100,7 @@ jobs:
           REQUIRE_REAL_ENGINE: "1"
           REQUIRE_REAL_DUCKDB: "1"
           REQUIRE_REAL_CORE: "1"
+          REQUIRE_REAL_BROWSER: "1"
         run: |
           pnpm -r --no-bail --dir plugin-data exec \
             vitest run --reporter=default --reporter=junit --outputFile.junit=junit.xml

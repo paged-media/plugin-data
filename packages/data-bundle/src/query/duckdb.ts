@@ -64,6 +64,12 @@ export const DUCKDB_ARTIFACTS = {
   api: "duckdb-browser.mjs",
 } as const;
 
+/** The engine half of the query guard (query/sql.ts), run by every boot
+ *  right after connecting and before anything else: lock DuckDB's
+ *  configuration, so no statement can change a setting (`SET`, `RESET`,
+ *  `PRAGMA`) for the session's life. Boot cost, not a per-command query. */
+export const LOCKDOWN_SQL = "SET lock_configuration = true";
+
 /** A booted DuckDB session over the vendored engine. */
 export interface DuckDBHandle {
   /** Register an inline CSV text as a named table (the InlineSeed / pasted path). */
@@ -219,6 +225,7 @@ export async function bootDuckDB(): Promise<DuckDBHandle> {
     );
   }
   const conn = await db.connect();
+  await conn.query(LOCKDOWN_SQL);
   return duckdbHandle(db, conn, async () => {
     await db.terminate();
     worker.terminate();
