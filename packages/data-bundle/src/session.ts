@@ -807,7 +807,7 @@ export interface DataSourceSession extends ReviewSession, PropertyMethods {
   syncStatusOf(id: string): string | null;
   /** ADR 559: write this document as an InDesign Data Merge template (IDML
    *  + a UTF-16 CSV of the merged query); `save` hands both to the user. */
-  exportDataMergeTemplate(opts?: { save?: boolean }): Promise<DataMergeExport>;
+  exportDataMergeTemplate(opts?: { save?: boolean; dataSourceFile?: string }): Promise<DataMergeExport>;
   /** Listen for session changes (a restore finishing, a diagnostic, a save). */
   onDidChange(listener: () => void): Disposable;
   /** Restore the document's saved session part (activate calls this once).
@@ -3558,7 +3558,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         return fail(`the document could not be exported: ${errText(err)}`);
       }
       const csvName = `${queryId ?? "data"}.csv`;
-      const res = dm.dataMergeTemplate(entries, { texts, images, dataSourceFile: csvName });
+      const res = dm.dataMergeTemplate(entries, { texts, images, dataSourceFile: opts.dataSourceFile ?? csvName });
       if (res.fields.length === 0) return { ...fail("no merge field: place a variable or image binding over a column, or type <<field>> into a frame"), skipped: res.skipped };
       // The data source: the query's rows, the template's columns.
       let rows: (string | null)[][] = [];

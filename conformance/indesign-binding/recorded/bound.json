@@ -1,0 +1,27 @@
+{
+  "fixture": "bound.idml",
+  "indesign_version": "20.0.1.32",
+  "open": "ok",
+  "labels": [
+    {
+      "item": "TextFrame",
+      "name": "x-paged:media.paged.data",
+      "value": "{\"v\":1,\"data\":{\"oid\":\"pd-fd5d2cc6\",\"bind\":[{\"id\":\"v_name\",\"kind\":\"variable\",\"target\":\"v_name\",\"query\":\"q\",\"expr\":\"name\",\"missing\":{\"missing\":\"blank\"}}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}]}}"
+    },
+    {
+      "item": "TextFrame",
+      "name": "x-paged:media.paged.data",
+      "value": "{\"v\":1,\"data\":{\"oid\":\"pd-e93d61d6\",\"bind\":[{\"id\":\"opacity\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameOpacity\",\"query\":\"q\",\"expr\":\"IF(shown = \\\"yes\\\", 100, 40)\",\"schema\":{\"type\":{\"kind\":\"number\",\"integer\":false,\"unit\":\"percent\"},\"nullable\":true,\"range\":{\"min\":0,\"max\":100}},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"badge\",\"kind\":\"visibility\",\"target\":\"$host\",\"query\":\"q\",\"expr\":\"shown\",\"options\":{\"invert\":false,\"missing\":\"hide\"}}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}],\"extra\":{\"badge\":{\"kind\":\"textFrame\"}}}}"
+    },
+    {
+      "item": "Rectangle",
+      "name": "x-paged:media.paged.data",
+      "value": "{\"v\":1,\"data\":{\"oid\":\"pd-0c0d4547\",\"bind\":[{\"id\":\"weight\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameStrokeWeight\",\"query\":\"q\",\"expr\":\"MM(weight_mm)\",\"schema\":{\"type\":{\"kind\":\"length\"},\"nullable\":true},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"fill\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameFillColor\",\"query\":\"q\",\"expr\":\"tint\",\"schema\":{\"type\":{\"kind\":\"color\"},\"nullable\":true},\"coerce\":\"strict\",\"missing\":\"keepLast\"}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}]}}"
+    }
+  ],
+  "data_merge": {
+    "fields": [],
+    "text_placeholders": [],
+    "image_placeholders": []
+  }
+}

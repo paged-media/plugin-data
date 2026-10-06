@@ -1,0 +1,82 @@
+{
+  "badge": {
+    "id": "badge",
+    "kind": "visibility",
+    "query": "q",
+    "expr": "shown",
+    "options": {
+      "invert": false,
+      "missing": "hide"
+    }
+  },
+  "fill": {
+    "id": "fill",
+    "kind": "property",
+    "target": {
+      "selector": "frame[label.x-paged:media.paged.data*=\"\\\"oid\\\":\\\"pd-0c0d4547\\\"\"]"
+    },
+    "path": "frameFillColor",
+    "query": "q",
+    "expr": "tint",
+    "schema": {
+      "type": {
+        "kind": "color"
+      },
+      "nullable": true
+    },
+    "coerce": "strict",
+    "missing": "keepLast"
+  },
+  "opacity": {
+    "id": "opacity",
+    "kind": "property",
+    "target": {
+      "selector": "frame[label.x-paged:media.paged.data*=\"\\\"oid\\\":\\\"pd-e93d61d6\\\"\"]"
+    },
+    "path": "frameOpacity",
+    "query": "q",
+    "expr": "IF(shown = \"yes\", 100, 40)",
+    "schema": {
+      "type": {
+        "kind": "number",
+        "integer": false,
+        "unit": "percent"
+      },
+      "nullable": true,
+      "range": {
+        "min": 0,
+        "max": 100
+      }
+    },
+    "coerce": "strict",
+    "missing": "keepLast"
+  },
+  "v_name": {
+    "id": "v_name",
+    "kind": "variable",
+    "target": "v_name",
+    "query": "q",
+    "expr": "name",
+    "missing": {
+      "missing": "blank"
+    }
+  },
+  "weight": {
+    "id": "weight",
+    "kind": "property",
+    "target": {
+      "selector": "frame[label.x-paged:media.paged.data*=\"\\\"oid\\\":\\\"pd-0c0d4547\\\"\"]"
+    },
+    "path": "frameStrokeWeight",
+    "query": "q",
+    "expr": "MM(weight_mm)",
+    "schema": {
+      "type": {
+        "kind": "length"
+      },
+      "nullable": true
+    },
+    "coerce": "strict",
+    "missing": "keepLast"
+  }
+}
