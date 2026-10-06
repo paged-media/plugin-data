@@ -18,17 +18,17 @@ importers:
   packages/data-bundle:
     devDependencies:
       '@paged-media/canvas-wasm':
-        specifier: 0.67.0
-        version: 0.67.0
+        specifier: 0.68.0
+        version: 0.68.0
       '@paged-media/data-host-model':
         specifier: workspace:*
         version: link:../data-host-model
       '@paged-media/plugin-api':
-        specifier: 0.2.39-canary.0
-        version: 0.2.39-canary.0
+        specifier: 0.2.40-canary.0
+        version: 0.2.40-canary.0
       '@paged-media/plugin-sdk':
-        specifier: 0.2.39-canary.0
-        version: 0.2.39-canary.0(react@18.3.1)
+        specifier: 0.2.40-canary.0
+        version: 0.2.40-canary.0(react@18.3.1)
       '@types/node':
         specifier: 20.19.39
         version: 20.19.39
@@ -54,8 +54,8 @@ importers:
   packages/data-host-model:
     dependencies:
       '@paged-media/plugin-api':
-        specifier: 0.2.39-canary.0
-        version: 0.2.39-canary.0
+        specifier: 0.2.40-canary.0
+        version: 0.2.40-canary.0
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -379,14 +379,14 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@paged-media/canvas-wasm@0.67.0':
-    resolution: {integrity: sha512-V/hk/fkMOqI0AL0kFcPnsywetkSJnT1EBTZGRMSL2/t9o1H+Ug3De1MiXwuR2gD5CbqdoGQbtLfMxdBZWsmYng==}
+  '@paged-media/canvas-wasm@0.68.0':
+    resolution: {integrity: sha512-Q4xINSrrB4RzVBvcL4USN1R6KqNGD8UMzBfEeFJdouTATyN0GqJ702bcu9w8Sdy8vPmrFx1kmGyNejNiR+ITNw==}
 
-  '@paged-media/plugin-api@0.2.39-canary.0':
-    resolution: {integrity: sha512-bdOOQreSPcgyrFAhdM3r2JdtcOzav/P2LQ5D+ZxN9NNIfm3g0lAj0Z+ayaq6clwHIQPkVlBT7KRW8dR7MCg1Jw==}
+  '@paged-media/plugin-api@0.2.40-canary.0':
+    resolution: {integrity: sha512-pyIMaUlgGNSFAzoaHevv2eV3LviYkfU4gD+q4GHt8zqlU603rN0nQyd+xVOkcUYf5MnRq1SeeXFJNY91j5H3kA==}
 
-  '@paged-media/plugin-sdk@0.2.39-canary.0':
-    resolution: {integrity: sha512-v7gPfO7y1TtoftO2GmBBCVxS33fyG3BH+D6UyQsHWiVbfthW3lsSl5ZiY6RbiPbjXdjNuq5aWz1Ckl5qa/Ukng==}
+  '@paged-media/plugin-sdk@0.2.40-canary.0':
+    resolution: {integrity: sha512-3IBd/ALyTP2dbZQoINBVKXRJrWBF8ft/3Apn/rW4rmsYEuuv1tBkF4Aec28+YG6V7l0XSJT+7MXPHjWk3qF04Q==}
     peerDependencies:
       react: ^18.3.0
     peerDependenciesMeta:
@@ -1180,15 +1180,15 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
-  '@paged-media/canvas-wasm@0.67.0': {}
+  '@paged-media/canvas-wasm@0.68.0': {}
 
-  '@paged-media/plugin-api@0.2.39-canary.0':
+  '@paged-media/plugin-api@0.2.40-canary.0':
     dependencies:
       '@types/react': 18.3.31
 
-  '@paged-media/plugin-sdk@0.2.39-canary.0(react@18.3.1)':
+  '@paged-media/plugin-sdk@0.2.40-canary.0(react@18.3.1)':
     dependencies:
-      '@paged-media/plugin-api': 0.2.39-canary.0
+      '@paged-media/plugin-api': 0.2.40-canary.0
     optionalDependencies:
       react: 18.3.1
 
