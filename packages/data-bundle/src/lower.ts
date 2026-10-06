@@ -60,6 +60,20 @@ export interface LowerContext {
   page?: Promise<PageId | null>;
   /** The scene tree indexed by raw id, built once (see `sceneIndex`). */
   scene?: Promise<Map<string, ElementId> | null>;
+  /** Variable placements collected while the command runs, written together
+   *  by `commitLoweredVariables` as ONE batch (one undo step). Absent: each
+   *  variable is placed by its own mutate. */
+  variables?: VariablePlacement[];
+  /** Set when an already-placed variable asked for a field refresh: the
+   *  command refreshes once at its end instead of once per variable. */
+  refreshFields?: boolean;
+}
+
+/** One variable a command places: the engine's lowering and the field key
+ *  (the binding id). */
+export interface VariablePlacement {
+  variable: LoweredVariable;
+  key: string;
 }
 
 /** The active page id, read once per command when a context is given. */
@@ -426,6 +440,81 @@ export async function commitLoweredVariable(
   }
   host.log.info(`variable "${variable.target}" placed as field "${bindingKey}" in story ${storyId}`);
   return { storyId, offset };
+}
+
+/** Place every collected variable of one command as ONE batch — one rebuild
+ *  and one undo step (perf budget W5). The insertion point is planned once
+ *  for the command (caret, else the selected frame's story, else fresh frames
+ *  on the active page); with fresh frames every variable mints its own frame,
+ *  named `v<i>` by `bindCreated`, and its field addresses the frame's story as
+ *  `$h:v<i>`, exactly as the one-variable path does. Fields placed at the same
+ *  point land in the order a run of single inserts would leave them.
+ *
+ *  If core refuses the batch (it rolls back whole), every variable is placed
+ *  on its own instead, so one bad field cannot lose the rest. Returns where
+ *  each placed key landed. */
+export async function commitLoweredVariables(
+  host: BundleHost,
+  items: readonly VariablePlacement[],
+  ctx?: LowerContext,
+): Promise<Map<string, { storyId: string; offset: number }>> {
+  const placed = new Map<string, { storyId: string; offset: number }>();
+  if (items.length === 0) return placed;
+  if (items.length === 1) {
+    const one = await commitLoweredVariable(host, items[0]!.variable, items[0]!.key, null, ctx);
+    if (one) placed.set(items[0]!.key, one);
+    return placed;
+  }
+  if (!host.supports("document.placeholders@1")) {
+    host.log.info(
+      `${items.length} variables resolved; the host predates the placeholder field model ` +
+        "(document.placeholders@1) — placement skipped",
+    );
+    return placed;
+  }
+  const point = await variableInsertionPoint(host, ctx);
+  if (!point) {
+    host.log.warn(`${items.length} variables: no target story to place the fields into`);
+    return placed;
+  }
+  const ops: Mutation[] = [];
+  items.forEach((it, i) => {
+    const value = it.variable.hidden ? null : it.variable.text;
+    if ("mint" in point) {
+      const placement = defaultPlacement(point.mint, { widthPt: 160, heightPt: 60 });
+      ops.push(
+        { op: "insertTextFrame", args: { pageId: point.mint, bounds: placement.bounds } },
+        { op: "bindCreated", args: { handle: `v${i}` } } as Mutation,
+        insertFieldMutation(`$h:v${i}`, 0, it.key, value),
+      );
+    } else {
+      ops.push(insertFieldMutation(point.storyId, point.offset, it.key, value));
+    }
+  });
+  const outcome = await host.document.mutate({ op: "batch", args: { ops } });
+  if (!outcome.applied) {
+    host.log.warn(
+      `lower: the ${items.length}-variable batch was refused (${String(errorText(outcome.error))}) — placing each on its own`,
+    );
+    for (const it of items) {
+      const one = await commitLoweredVariable(host, it.variable, it.key, null, ctx);
+      if (one) placed.set(it.key, one);
+    }
+    return placed;
+  }
+  if ("mint" in point) {
+    // Core may report `handle: null` for a named element; the frames were
+    // minted in item order, so the i-th text frame is the i-th variable's.
+    const frames = (outcome.minted ?? []).filter((m) => m.element.kind === "textFrame");
+    items.forEach((it, i) => {
+      const m = (outcome.minted ?? []).find((x) => x.handle === `v${i}`) ?? frames[i];
+      if (m?.storyId) placed.set(it.key, { storyId: m.storyId, offset: 0 });
+    });
+  } else {
+    for (const it of items) placed.set(it.key, { storyId: point.storyId, offset: point.offset });
+  }
+  host.log.info(`lower: ${placed.size} variable(s) placed as fields in one batch`);
+  return placed;
 }
 
 /** Resolve a raw Self id to a typed `ElementId` from the live scene tree

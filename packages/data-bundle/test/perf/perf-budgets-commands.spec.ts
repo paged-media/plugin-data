@@ -405,12 +405,17 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // one query on its first refresh (query/sql.ts guardQuery).
   // Guard fix (browser): -1 — the guard asks DuckDB nothing now (a TypeScript
   // lexer; the config lock is boot cost). duckQueries 2 → 1.
+  // Wave 9: the command plans every variable first and places them in ONE
+  // batch (each fresh frame named by `bindCreated`, its field addressing the
+  // frame's story as `$h:v<i>`): 2 reads, one supports, one caret probe,
+  // selection.get, one mutate, one log. hostCalls 102 → 7, mutates 20 → 1,
+  // undo steps 20 → 1.
   const W5: Measured = {
-    hostCalls: 102,
+    hostCalls: 7,
     hostReads: 2,
-    mutates: 20,
+    mutates: 1,
     mutationOps: 40,
-    undoSteps: 20,
+    undoSteps: 1,
     placeholdersRead: 0,
     wasmCalls: 26,
     cellsIn: 0,

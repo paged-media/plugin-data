@@ -167,9 +167,9 @@ of work, with file and line references, is
     `test/merge-real-core.spec.ts`).
 - **Lowering costs.** A table lower is one batch and one undo step (frame, table, cells and
   label, addressed through core's batch handles; budget W1 in
-  `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" still places each
-  variable in its own batch, so 20 variables are 20 undo steps (budget W5); one batch for the
-  whole command is possible on the wire and is not built.
+  `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" plans every
+  variable first and places them in one batch, so 20 variables are one mutate and one undo
+  step (budget W5, was 20); a batch core refuses falls back to one mutate per variable.
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
 - **Remote sources.** A `credentialRef` can be stored on the descriptor, but nothing
   resolves it and the fetch is made without it. The editor's page policy cannot follow

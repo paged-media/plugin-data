@@ -100,6 +100,7 @@ import {
   commitLoweredImage,
   commitLoweredTable,
   commitLoweredVariable,
+  commitLoweredVariables,
   commitLoweredVisibility,
   commitRule,
   failedBatchChild,
@@ -2565,8 +2566,16 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
           // D-01: place the variable as a tagged placeholder field ONCE (keyed by
           // the binding id), then re-resolve it through the placeholders() loop.
           if (!placedVariables.has(id)) {
-            const placed = await commitLoweredVariable(host, lowered as never, id, null, lowerCtx);
-            if (placed) placedVariables.add(id);
+            if (lowerCtx?.variables) {
+              // lowerAll: planned now, placed with the others in ONE batch.
+              lowerCtx.variables.push({ variable: lowered as never, key: id });
+            } else {
+              const placed = await commitLoweredVariable(host, lowered as never, id, null, lowerCtx);
+              if (placed) placedVariables.add(id);
+            }
+          } else if (lowerCtx) {
+            // Already placed: the command re-resolves the live fields once.
+            lowerCtx.refreshFields = true;
           } else {
             // Already placed — a re-lower just re-resolves the live field.
             await this.refreshFields();
@@ -2599,14 +2608,20 @@ export function createSession(host: BundleHost, today: number): DataSourceSessio
     async lowerAll() {
       await this.refreshData();
       // One command: its lowerings share one read of the active page.
-      lowerCtx = {};
+      // Variables are planned first and placed together: one batch, one undo
+      // step for the whole command (budget W5).
+      const ctx: LowerContext = { variables: [] };
+      lowerCtx = ctx;
       try {
         for (const id of [...bindingIds]) {
           await this.lowerBinding(id);
         }
+        const placed = await commitLoweredVariables(host, ctx.variables!, ctx);
+        for (const key of placed.keys()) placedVariables.add(key);
       } finally {
         lowerCtx = undefined;
       }
+      if (ctx.refreshFields) await this.refreshFields();
       // The document is now written from these results: the row diff's "before".
       await this.markApplied();
     },
