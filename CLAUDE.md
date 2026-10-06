@@ -29,7 +29,11 @@ surface), `data-conformance` (TEST-ONLY), plus the §10 automation lane —
 (manifest + `activate(host)` + three panels [sources/bindings/dataset] + five
 commands + DuckDB-WASM query integration). Vendored MIT engine:
 `vendor/duckdb-wasm/` (fetched by `scripts/vendor-duckdb.sh`, which stages ONE
-variant, eh, into `packages/data-bundle/bin/`; the runtime loads only `bin/`).
+variant, eh, into `packages/data-bundle/bin/`, plus DuckDB's json + parquet
+extensions into `bin/duckdb-ext/<engine>/wasm_eh/` — the eh build has neither, and
+`bootDuckDB` points `custom_extension_repository` there so nothing loads from
+extensions.duckdb.org; the runtime loads only `bin/`, and the Node test lanes
+load the same files with every other URL refused, `test/duckdb-node-ext.ts`).
 
 **State (the live ledger is the Cockpit feature registry and `docs/status.md`,
 not this prose; the 2026-10-05 analysis is `docs/design/analysis-2026-10-05.md`).**

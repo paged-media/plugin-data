@@ -43,7 +43,8 @@ of work, with file and line references, is
   no statement can change a DuckDB setting. A failing query is a diagnostic for that query;
   the refresh carries on with the others. The first guard (wave 6) parsed with DuckDB's
   `json_serialize_sql`, which lives in the json extension: DuckDB autoloaded it from
-  extensions.duckdb.org, the editor's CSP refused that, and the worker trapped on every
+  extensions.duckdb.org (the json and parquet extensions now ship in `bin/duckdb-ext/`
+  and load same-origin), the editor's CSP refused that, and the worker trapped on every
   refresh. `test/duckdb-browser.spec.ts` runs the shipped worker in headless Chromium under
   the editor's headers (CI: `REQUIRE_REAL_BROWSER=1`), and both lanes prove the same
   security matrix (`test/guard-matrix.ts`). `enable_external_access = false` was measured
@@ -170,8 +171,8 @@ of work, with file and line references, is
 - **DuckDB was not in the npm package.** Every version up to 0.1.0-canary.9 shipped without
   `bin/duckdb-engine.wasm`. The publish workflow now runs `scripts/vendor-duckdb.sh` and
   refuses a tarball without it (`scripts/pubcheck.sh`, `scripts/pubcheck.mjs`). The bundle now
-  loads DuckDB from the package's own `bin/` (one variant, eh: `duckdb-engine.wasm`, its worker
-  and `duckdb-browser.mjs`), so a host serves the installed package rather than a checkout of
+  loads DuckDB from the package's own `bin/` (one variant, eh: `duckdb-engine.wasm`, its worker,
+  `duckdb-browser.mjs`, and DuckDB's json + parquet extensions in `bin/duckdb-ext/`), so a host serves the installed package rather than a checkout of
   this repo ([ADR 015](adr/015-duckdb-wasm-vendored.md)). The first version that ships it is
   the next one published.
 - **Smaller gaps.** The column list is built with an empty metadata sidecar, so every column
@@ -236,4 +237,4 @@ Measured on 2026-10-05 against DuckDB-WASM 1.29.0 (engine v1.1.1), the shipped E
 | Contested importer extensions go to the first registrant, with no per-file choice | host UI | CSV/TSV/XLSX import stays in the Sources panel |
 | A page CSP cannot follow runtime consent grants; following them needs a fetch door outside the page's policy (`host.network.fetch` plus a broker origin or proxy) | no plugin door + host UI | remote sources reach only origins a deployment lists (editor ADR 218) |
 | A local file cannot be watched from a browser page | platform | file sources refresh on open or by importing again; interval is refused |
-| The shipped eh build has no parquet or json extension: DuckDB autoloads them from extensions.duckdb.org. The editor's CSP (connect-src 'self') refuses that, and the worker traps ("unreachable") on a Parquet import; JSON and XLSX imports (`read_json`) take the same path. Node lanes pass because they fetch the extension from the internet | engine limitation (packaging) + host CSP | DEFECT pinned (`it.fails`) in `test/duckdb-browser.spec.ts`. Fix options: serve the two extension files from the bundle's `bin/` and point `custom_extension_repository` at it, or read these formats outside DuckDB as XLSX already is |
+| The shipped eh build has no parquet or json extension; DuckDB loaded them on first use from extensions.duckdb.org, which the editor's CSP (connect-src 'self') refuses — the worker trapped ("unreachable") on Parquet, JSON and XLSX (`read_json`) imports, while the Node lanes passed by downloading them | engine limitation (packaging) + host CSP | FIXED 2026-10-06: the package ships both (json 696,809 B, parquet 2,803,379 B, DuckDB Labs-signed, MIT, SHA-256 pinned by `scripts/vendor-duckdb.sh`) in `bin/duckdb-ext/v1.1.1/wasm_eh/`; `bootDuckDB` points `custom_extension_repository` there and turns autoinstall off before the configuration lock. The browser lane imports JSON, NDJSON, Parquet and XLSX with no off-origin request; the Node lanes load the same files through a local-only `XMLHttpRequest` and refuse every other URL. The data plugin's wasm is now 40.6 MB of the app's 94.7 MB |

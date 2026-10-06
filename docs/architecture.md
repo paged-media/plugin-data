@@ -172,8 +172,9 @@ binding of the current session, and writes `setFieldValue` only where the value 
 
 The manifest (`packages/data-bundle/manifest.json`) declares: `document` read `broad` and
 write `scoped`; `rendering: ["hitTest"]`; `network: { origins: "consent" }`; `clipboard:
-"none"`; `dataProviders.publish: ["dataset"]`; and two wasm files, `bin/data_js_bg.wasm`
-(purpose `compute`) and `bin/duckdb-engine.wasm` (purpose `engine`). It contributes three
+"none"`; `dataProviders.publish: ["dataset"]`; and four wasm files, `bin/data_js_bg.wasm`
+(purpose `compute`), `bin/duckdb-engine.wasm` and DuckDB's json and parquet extensions in
+`bin/duckdb-ext/v1.1.1/wasm_eh/` (purpose `engine`). It contributes three
 panels, seven commands and one edit context, `dataBinding`.
 
 | Door | What the plugin uses it for |
