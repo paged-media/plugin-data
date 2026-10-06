@@ -1,0 +1,54 @@
+# paged.data expression functions — colour family (ADR 558 §3). A colour is a
+# canonical colour-literal TEXT (rgb(…), cmyk(…), swatch:Name) that a property
+# binding coerces to a swatch reference; ENUM checks a text against members.
+# One row per function; build-consumed (data-core/build.rs + data-expr/build.rs).
+
+- id: data.expr.color.rgb
+  name: RGB
+  family: color
+  arity: { min: 3, max: 3 }
+  rust: color::rgb
+  status: implemented
+  provenance: ["ADR 558 §3; channels 0-255; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::colour_functions_make_canonical_literals__feat__data_bind_property"]
+
+- id: data.expr.color.cmyk
+  name: CMYK
+  family: color
+  arity: { min: 4, max: 4 }
+  rust: color::cmyk
+  status: implemented
+  provenance: ["ADR 558 §3; channels 0-100 percent; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::colour_functions_make_canonical_literals__feat__data_bind_property"]
+
+- id: data.expr.color.hex
+  name: HEX
+  family: color
+  arity: { min: 1, max: 1 }
+  rust: color::hex
+  status: implemented
+  provenance: ["ADR 558 §3; #rgb / #rrggbb; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::colour_functions_make_canonical_literals__feat__data_bind_property"]
+
+- id: data.expr.color.swatch
+  name: SWATCH
+  family: color
+  arity: { min: 1, max: 1 }
+  rust: color::swatch
+  status: implemented
+  provenance: ["ADR 558 §3; a document swatch by name; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::colour_functions_make_canonical_literals__feat__data_bind_property"]
+
+- id: data.expr.color.enum
+  name: ENUM
+  family: color
+  arity: { min: 2 }
+  rust: color::enum_
+  status: implemented
+  provenance: ["ADR 558 §3 enum check (lives with colour: both are target-typed values); own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::enum_checks_members__feat__data_bind_property"]

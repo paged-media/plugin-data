@@ -222,6 +222,13 @@ pub fn resolved_fingerprint(resolved: &Resolved) -> String {
                 None => "leave",
             });
         }
+        Resolved::Property(p) => {
+            s.push_str("prop\u{1f}");
+            s.push_str(&p.path);
+            s.push('\u{1f}');
+            // write / keep / fail and the coerced value are all distinct.
+            s.push_str(&format!("{:?}", p.outcome));
+        }
         Resolved::Barcode(bc) => {
             s.push_str("bc\u{1f}");
             s.push_str(&format!("{:?}", bc.symbology));

@@ -40,7 +40,10 @@ pub mod merge;
 
 use serde::{Deserialize, Serialize};
 
-use data_core::{FrameRef, ImageReference, ImageStatus, ImgFit, PlaceholderRef};
+use data_core::{
+    FrameRef, ImageReference, ImageStatus, ImgFit, PlaceholderRef, PropValue, PropertyOutcome,
+    TargetRef,
+};
 
 /// Layout knobs for table lowering (point units). Defaults are conservative
 /// monospace-ish estimates until the font-metrics door lands (D-13/S-13).
@@ -98,6 +101,81 @@ pub struct LoweredVisibility {
 /// Lower a resolved visibility decision (§9.8).
 pub fn lower_visibility(target: FrameRef, visible: Option<bool>) -> LoweredVisibility {
     LoweredVisibility { target, visible }
+}
+
+/// ADR 558 — a lowered property write: the durable target (resolved by the
+/// host at apply time), the ADR 132 path, and the decision — write a coerced
+/// value (a colour carries the swatch to find or mint), keep the document's
+/// value, or fail with a reason. The host turns every `write` of one apply
+/// into ONE `host.objects.batch`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoweredProperty {
+    pub target: TargetRef,
+    pub path: String,
+    /// Nested, not flattened: a flattened struct crosses wasm as a JS `Map`.
+    pub outcome: PropertyOutcome,
+}
+
+/// Lower a resolved property binding (ADR 558).
+pub fn lower_property(target: TargetRef, path: &str, outcome: PropertyOutcome) -> LoweredProperty {
+    LoweredProperty {
+        target,
+        path: path.to_string(),
+        outcome,
+    }
+}
+
+/// A visibility decision re-expressed as the property triple it is (ADR 558
+/// §4): `elementVisible` on the bound page item. `Leave` keeps the document's
+/// value. The old `setElementProperty elementVisible` write and this triple
+/// lower to the same engine op (`binding_kinds_roundtrip` pins it).
+pub fn visibility_as_property(v: &LoweredVisibility) -> LoweredProperty {
+    let outcome = match v.visible {
+        Some(b) => PropertyOutcome::Write {
+            value: PropValue::Bool(b),
+            color: None,
+        },
+        None => PropertyOutcome::Keep {
+            reason: "the visibility missing policy is Leave".into(),
+        },
+    };
+    lower_property(
+        TargetRef::Selector(format!("frame:{}", v.target)),
+        "elementVisible",
+        outcome,
+    )
+}
+
+/// The swatch a barcode's dark modules are filled with. `Color/Black` is in
+/// every IDML document's swatch list — never `Color/Registration`, which
+/// prints on every plate and would smear the bars in a CMYK job.
+pub const BARCODE_FILL_SWATCH: &str = "Color/Black";
+/// The modules' stroke: none, because a fresh path takes core's default 1 pt
+/// black stroke, which widens every bar and breaks the bar/space ratios.
+pub const BARCODE_STROKE_SWATCH: &str = "Swatch/None";
+
+/// One constant property a lowering writes on the content it creates — a
+/// barcode module's paint, re-expressed as property triples (ADR 558 §4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaintProperty {
+    pub path: String,
+    pub value: PropValue,
+}
+
+/// The paint triples every barcode module carries.
+pub fn barcode_paint() -> Vec<PaintProperty> {
+    vec![
+        PaintProperty {
+            path: "frameFillColor".into(),
+            value: PropValue::Text(BARCODE_FILL_SWATCH.into()),
+        },
+        PaintProperty {
+            path: "frameStrokeColor".into(),
+            value: PropValue::Text(BARCODE_STROKE_SWATCH.into()),
+        },
+    ]
 }
 
 /// A lowered image placeholder (spec §9.2): the classified reference + fit +
@@ -171,6 +249,11 @@ pub struct LoweredBarcode {
     pub bounds: ContentBox,
     /// The human-readable line (1D digits/text; empty for QR).
     pub text: String,
+    /// The paint every module carries, as property triples (ADR 558 §4).
+    /// Absent in an IR written before it: the host then paints the same
+    /// constants itself.
+    #[serde(default)]
+    pub paint: Vec<PaintProperty>,
 }
 
 /// Lower a barcode geometry to content-space filled-rect modules scaled to the
@@ -204,6 +287,7 @@ pub fn lower_barcode(
             height_pt: box_h_pt,
         },
         text: geometry.text.clone(),
+        paint: barcode_paint(),
     }
 }
 

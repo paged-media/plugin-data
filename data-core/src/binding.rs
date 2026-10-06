@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{
     BindingId, FrameChainRef, FrameRef, PlaceholderRef, QueryId, ScopeRef, TemplateRef,
 };
+use crate::property::{CoercePolicy, PropertyMissing, TargetRef, TargetSchema};
 
 /// A binding definition with its document-scoped id (spec §5.1). The id is the
 /// payload key; the inner [`Binding`] is the recipe.
@@ -125,6 +126,43 @@ pub enum Binding {
         #[serde(default)]
         options: VisibilityOpts,
     },
+    /// ADR 558 — the universal binding: a field value drives ANY addressable
+    /// property (`host.objects`, ADR 323) of the objects `target` selects.
+    /// The expression result is coerced against the target's ADR 132 schema
+    /// row (`schema`, captured by the host when the binding is defined); the
+    /// host writes every resolved property binding of one apply as ONE
+    /// `host.objects.batch` — one undo step. Additive variant: a payload
+    /// written before it still deserializes, and Visibility / Rule / Barcode
+    /// paint are re-expressed as property triples ([`Binding::property_view`],
+    /// [`StyleAction::property`]).
+    Property {
+        /// Where it lands: a durable selector, or the element carrying the
+        /// binding in its label (ADR 559).
+        target: TargetRef,
+        /// The ADR 132 path on the target's address kind (`frameFillColor`).
+        path: String,
+        query: QueryId,
+        /// The binding expression (source).
+        expr: String,
+        /// The target schema row the value is coerced to; `None` = untyped
+        /// (the value is written as the expression produced it, and the
+        /// host's schema gate decides).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<TargetSchema>,
+        #[serde(default)]
+        coerce: CoercePolicy,
+        #[serde(default)]
+        missing: PropertyMissing,
+    },
+}
+
+/// A binding seen as a property triple (ADR 558 §4): the path it writes and
+/// the value type it writes there. Visibility is `elementVisible: bool`; a
+/// property binding is itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyView {
+    pub path: String,
+    pub value_type: crate::property::TargetType,
 }
 
 /// Per-visibility-binding options (§9.8). `invert` flips the resolved decision
@@ -167,8 +205,44 @@ impl Binding {
             | Binding::Table { query, .. }
             | Binding::RecordFlow { query, .. }
             | Binding::Barcode { query, .. }
-            | Binding::Visibility { query, .. } => Some(query),
+            | Binding::Visibility { query, .. }
+            | Binding::Property { query, .. } => Some(query),
             Binding::Rule { .. } => None,
+        }
+    }
+
+    /// The `kind` tag this binding serializes with (`"property"`, …).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Binding::Variable { .. } => "variable",
+            Binding::Image { .. } => "image",
+            Binding::Table { .. } => "table",
+            Binding::RecordFlow { .. } => "recordFlow",
+            Binding::Rule { .. } => "rule",
+            Binding::Barcode { .. } => "barcode",
+            Binding::Visibility { .. } => "visibility",
+            Binding::Property { .. } => "property",
+        }
+    }
+
+    /// The binding as a property triple (ADR 558 §4) — `None` for the
+    /// content kinds (table, record flow, barcode, image, variable) and for a
+    /// rule (whose triples come from [`StyleAction::property`] per fired
+    /// record).
+    pub fn property_view(&self) -> Option<PropertyView> {
+        use crate::property::TargetType;
+        match self {
+            Binding::Visibility { .. } => Some(PropertyView {
+                path: "elementVisible".into(),
+                value_type: TargetType::Bool,
+            }),
+            Binding::Property { path, schema, .. } => Some(PropertyView {
+                path: path.clone(),
+                value_type: schema
+                    .as_ref()
+                    .map_or(TargetType::Unsupported, |s| s.value_type.clone()),
+            }),
+            _ => None,
         }
     }
 }
@@ -395,6 +469,18 @@ pub enum StyleAction {
     ParagraphStyle { name: String },
     /// Apply a named table/cell style.
     TableStyle { name: String },
+}
+
+impl StyleAction {
+    /// The rule's style action as a property triple (ADR 558 §4): the
+    /// applied-style path it writes on each fired target, and the style name.
+    pub fn property(&self) -> (&'static str, &str) {
+        match self {
+            StyleAction::CharacterStyle { name } => ("appliedCharacterStyle", name),
+            StyleAction::ParagraphStyle { name } => ("appliedParagraphStyle", name),
+            StyleAction::TableStyle { name } => ("appliedCellStyle", name),
+        }
+    }
 }
 
 // ── Synchronization state (spec §8) ────────────────────────────────────────

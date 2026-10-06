@@ -81,6 +81,11 @@ pub enum VarTrait {
     /// is the honest half: an imported Illustrator library keeps its graph
     /// variables so re-export does not silently lose the author's work.
     GraphData,
+    /// ADR 558 — any property of any addressable object (`Binding::Property`):
+    /// the Photoshop / Illustrator data set over every schema path. A paged
+    /// trait: it has no Illustrator spelling, so the variable-library XML does
+    /// not carry it (deviation 3, `xml.rs`).
+    Property,
 }
 
 impl VarTrait {
@@ -91,6 +96,7 @@ impl VarTrait {
             VarTrait::FileReference => "filereference",
             VarTrait::Visibility => "visibility",
             VarTrait::GraphData => "graphdata",
+            VarTrait::Property => "property",
         }
     }
 
@@ -103,6 +109,7 @@ impl VarTrait {
             "filereference" => Some(VarTrait::FileReference),
             "visibility" => Some(VarTrait::Visibility),
             "graphdata" => Some(VarTrait::GraphData),
+            "property" => Some(VarTrait::Property),
             _ => None,
         }
     }
@@ -127,7 +134,7 @@ pub struct VariableDecl {
 
 /// One captured value in a data set. The variant matches its variable's trait;
 /// a mismatch is a load-time rejection, never a coercion.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DataSetValue {
     /// A captured display string (`textcontent`). Multi-paragraph values keep
@@ -141,6 +148,13 @@ pub enum DataSetValue {
     /// An opaque captured graph payload (`graphdata`), preserved verbatim for
     /// re-export. Never applied to a document (see [`VarTrait::GraphData`]).
     GraphData { raw: String },
+    /// A captured property value (ADR 558): the coerced value and, for a
+    /// colour, the swatch it resolves to or mints.
+    Property {
+        value: data_core::PropValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<data_core::ColorIntent>,
+    },
 }
 
 impl DataSetValue {
@@ -151,6 +165,7 @@ impl DataSetValue {
             DataSetValue::FileRef { .. } => VarTrait::FileReference,
             DataSetValue::Visible { .. } => VarTrait::Visibility,
             DataSetValue::GraphData { .. } => VarTrait::GraphData,
+            DataSetValue::Property { .. } => VarTrait::Property,
         }
     }
 
@@ -163,6 +178,15 @@ impl DataSetValue {
                 vec![if *visible { "true" } else { "false" }.to_string()]
             }
             DataSetValue::GraphData { raw } => vec![raw.clone()],
+            DataSetValue::Property { value, .. } => vec![match value {
+                data_core::PropValue::Null => String::new(),
+                data_core::PropValue::Bool(b) => b.to_string(),
+                data_core::PropValue::Number(n) => n.to_string(),
+                data_core::PropValue::Text(t) => t.clone(),
+                data_core::PropValue::List(l) => {
+                    l.iter().map(f64::to_string).collect::<Vec<_>>().join(",")
+                }
+            }],
         }
     }
 
@@ -185,6 +209,9 @@ impl DataSetValue {
             VarTrait::GraphData => DataSetValue::GraphData {
                 raw: body.to_string(),
             },
+            // Never written (deviation 3); a hand-made library that names it
+            // is refused rather than guessed.
+            VarTrait::Property => return Err(XmlError::UnknownTrait("property".into())),
         })
     }
 }
@@ -192,7 +219,7 @@ impl DataSetValue {
 /// A named data set: one captured value per variable (§9.9). `BTreeMap` keeps
 /// the serialization order deterministic — two captures of the same state emit
 /// byte-identical XML, which is what makes the round-trip test meaningful.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataSet {
     pub name: String,
@@ -202,7 +229,7 @@ pub struct DataSet {
 /// A variable set: the declarations + every captured data set (§9.9). This is
 /// the unit the variable-library XML carries and the unit the document payload
 /// persists.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VariableSet {
     /// The set name (Illustrator's `varSetName`; `binding1` in its own exports).
@@ -292,6 +319,7 @@ pub fn binding_kind_for(var_trait: VarTrait) -> Option<&'static str> {
         VarTrait::TextContent => Some("variable"),
         VarTrait::FileReference => Some("image"),
         VarTrait::Visibility => Some("visibility"),
+        VarTrait::Property => Some("property"),
         VarTrait::GraphData => None,
     }
 }
@@ -306,6 +334,7 @@ pub fn trait_for_binding_kind(kind: &str) -> Option<VarTrait> {
         "variable" => Some(VarTrait::TextContent),
         "image" => Some(VarTrait::FileReference),
         "visibility" => Some(VarTrait::Visibility),
+        "property" => Some(VarTrait::Property),
         _ => None,
     }
 }

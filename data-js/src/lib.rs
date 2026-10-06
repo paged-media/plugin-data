@@ -447,6 +447,24 @@ mod wasm {
                 .map_err(map_err)
         }
 
+        /// ADR 558 — every property binding's lowering over `record` (and
+        /// the visibility bindings re-expressed, with `with_visibility`),
+        /// for one apply. `bindings` narrows it (`undefined` = all).
+        pub fn resolve_properties_at(
+            &mut self,
+            record: usize,
+            with_visibility: bool,
+            bindings: Option<Vec<String>>,
+        ) -> Result<JsValue, JsValue> {
+            let ids: Option<Vec<BindingId>> =
+                bindings.map(|b| b.iter().map(|s| BindingId::from(s.as_str())).collect());
+            to_js(
+                &self
+                    .session
+                    .resolve_properties_at(record, with_visibility, ids.as_deref()),
+            )
+        }
+
         /// The sync state of a binding.
         pub fn sync_state(&self, binding: &str) -> JsValue {
             to_js(&self.session.sync_state(&BindingId::from(binding))).unwrap_or(JsValue::NULL)

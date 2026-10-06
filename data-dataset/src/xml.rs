@@ -41,7 +41,7 @@
 //! </svg>
 //! ```
 //!
-//! ## The TWO declared deviations (do not discover these later)
+//! ## The THREE declared deviations (do not discover these later)
 //!
 //! 1. **We do not emit Adobe's DTD entity subset.** Illustrator writes its
 //!    namespace declarations as *entity references* — `xmlns:v="&ns_vars;"` —
@@ -57,6 +57,11 @@
 //! 2. **`graphdata` values are opaque.** We round-trip the element body verbatim
 //!    but never interpret it (there is no chart surface in this plugin and the
 //!    isolation contract forbids reaching into the one that has it — RFI D-15).
+//!
+//! 3. **`property` variables are not written** (ADR 558). A binding of any
+//!    schema path has no Illustrator trait; the library omits its declaration
+//!    and its captured values rather than invent a trait Illustrator would
+//!    reject. They live in the document's own data sets.
 //!
 //! Everything else — element names, attribute names, the `<p>`-per-line body,
 //! the `varSetName`/`dataSetName`/`varName`/`trait` attributes — matches.
@@ -323,7 +328,14 @@ pub fn to_xml(set: &VariableSet) -> String {
         escape(&set.name)
     ));
     out.push_str("\t\t<variables>\n");
-    for v in &set.variables {
+    // Deviation 3: property variables (ADR 558) are paged-only; Illustrator
+    // has no trait for them, so the library carries neither the declaration
+    // nor its captured values.
+    for v in set
+        .variables
+        .iter()
+        .filter(|v| v.var_trait != VarTrait::Property)
+    {
         out.push_str(&format!(
             "\t\t\t<variable varName=\"{}\" trait=\"{}\" category=\"{}\"></variable>\n",
             escape(&v.name),
@@ -340,7 +352,11 @@ pub fn to_xml(set: &VariableSet) -> String {
             "\t\t\t<v:sampleDataSet dataSetName=\"{}\">\n",
             escape(&ds.name)
         ));
-        for (name, value) in &ds.values {
+        for (name, value) in ds
+            .values
+            .iter()
+            .filter(|(_, v)| v.var_trait() != VarTrait::Property)
+        {
             let tag = escape(name);
             out.push_str(&format!("\t\t\t\t<{tag}>\n"));
             for line in value.xml_lines() {

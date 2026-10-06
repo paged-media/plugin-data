@@ -33,6 +33,7 @@
 
 pub mod diff;
 pub mod mapping;
+pub mod property;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,10 +50,12 @@ use data_core::{
 use data_expr::{eval, eval_str, parse, EvalCtx, ParseError, RecordCtx, SimpleCtx};
 use data_query::{content_hashes, first_stable_row, stable_order, stamp, Fnv};
 
+pub use data_core::PropertyOutcome;
 pub use diff::{
     diff, diff_resolved, resolved_fingerprint, BindingChange, ChangeKind, ChangeReport, RowDelta,
 };
 pub use mapping::{suggest_mappings, ColumnMapping};
+pub use property::{coerce, decide, Coerced, ResolvedProperty};
 
 /// A row + parameter view for expression evaluation: the field source is one
 /// row of a resolved [`RecordSet`]; params come from the engine's bound set.
@@ -87,6 +90,8 @@ pub enum Resolved {
     Barcode(ResolvedBarcode),
     /// A resolved visibility decision for a bound element (§9.8).
     Visibility(ResolvedVisibility),
+    /// A resolved universal property binding (ADR 558).
+    Property(ResolvedProperty),
 }
 
 /// A resolved visibility binding (spec §9.8 — the Illustrator "visibility
@@ -578,7 +583,17 @@ impl ResolutionEngine {
             .sync
             .entry(id.clone())
             .or_insert_with(SyncState::linked);
-        st.status = Status::Linked;
+        // A property binding whose value failed coercion resolved, but did
+        // not produce a value: it is in `Error` (§8) with its stamp.
+        let failed = matches!(
+            &resolved,
+            Resolved::Property(p) if matches!(p.outcome, PropertyOutcome::Fail { .. })
+        );
+        st.status = if failed {
+            Status::Error
+        } else {
+            Status::Linked
+        };
         st.last_resolved = Some(stamp);
         Ok(resolved)
     }
@@ -706,6 +721,27 @@ impl ResolutionEngine {
                 self.today,
                 locale,
             )),
+            Binding::Property {
+                target,
+                path,
+                expr,
+                schema,
+                coerce,
+                missing,
+                ..
+            } => Resolved::Property(property::resolve_property(
+                target.clone(),
+                path,
+                expr,
+                schema.as_ref(),
+                *coerce,
+                *missing,
+                records,
+                row(),
+                &self.params,
+                self.today,
+                locale,
+            )),
             Binding::Rule { .. } => return Err(ResolveError::Unsupported("rule")),
         };
         Ok(resolved)
@@ -794,7 +830,8 @@ impl ResolutionEngine {
             Binding::Variable { expr, .. }
             | Binding::Image { expr, .. }
             | Binding::Barcode { expr, .. }
-            | Binding::Visibility { expr, .. } => {
+            | Binding::Visibility { expr, .. }
+            | Binding::Property { expr, .. } => {
                 read.extend(data_expr::field_refs(expr));
                 let row = self.record_row(query, 0);
                 h.u64(row.map_or(u64::MAX, |r| r as u64));

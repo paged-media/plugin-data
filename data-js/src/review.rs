@@ -286,15 +286,7 @@ fn display_key(rs: &RecordSet, i: usize, key: &[String]) -> String {
 
 /// The binding kind as the panels name it.
 pub fn kind_name(b: &Binding) -> &'static str {
-    match b {
-        Binding::Variable { .. } => "variable",
-        Binding::Table { .. } => "table",
-        Binding::RecordFlow { .. } => "recordFlow",
-        Binding::Image { .. } => "image",
-        Binding::Barcode { .. } => "barcode",
-        Binding::Visibility { .. } => "visibility",
-        Binding::Rule { .. } => "rule",
-    }
+    b.kind_name()
 }
 
 /// Every field a binding's expressions read (a record flow reads its
@@ -304,7 +296,8 @@ fn binding_reads(b: &Binding, templates: &HashMap<String, Vec<String>>) -> Vec<S
         Binding::Variable { expr, .. }
         | Binding::Image { expr, .. }
         | Binding::Barcode { expr, .. }
-        | Binding::Visibility { expr, .. } => field_refs(expr),
+        | Binding::Visibility { expr, .. }
+        | Binding::Property { expr, .. } => field_refs(expr),
         Binding::Rule { when, .. } => field_refs(when),
         Binding::Table { columns, .. } => {
             columns.iter().flat_map(|c| field_refs(&c.expr)).collect()

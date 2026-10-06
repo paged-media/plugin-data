@@ -23,11 +23,13 @@
 //!
 //! Arity is guaranteed by the dispatch guard, so kernels index `args` directly.
 
+pub mod color;
 pub mod format;
 pub mod logic;
 pub mod math;
 pub mod temporal;
 pub mod text;
+pub mod units;
 
 use data_core::{Value, ValueError};
 

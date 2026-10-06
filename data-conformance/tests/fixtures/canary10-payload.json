@@ -1,0 +1,136 @@
+{
+  "sources": [
+    {
+      "id": "products",
+      "kind": {
+        "kind": "file",
+        "format": "csv",
+        "name": "products.csv"
+      },
+      "capability": "fs.read",
+      "refresh": {
+        "policy": "manual"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "id": "q",
+      "sql": "SELECT * FROM products",
+      "params": [],
+      "shape": {
+        "shape": "recordStream"
+      }
+    }
+  ],
+  "templates": [],
+  "bindings": [
+    {
+      "id": "v_name",
+      "kind": "variable",
+      "target": "v_name",
+      "query": "q",
+      "expr": "name",
+      "missing": {
+        "missing": "blank"
+      }
+    },
+    {
+      "id": "img",
+      "kind": "image",
+      "target": "u1a2",
+      "query": "q",
+      "expr": "photo",
+      "policy": {
+        "fit": "fill",
+        "missing": "skip"
+      }
+    },
+    {
+      "id": "badge",
+      "kind": "visibility",
+      "target": "u1b3",
+      "query": "q",
+      "expr": "in_stock",
+      "options": {
+        "invert": true,
+        "missing": "leave"
+      }
+    },
+    {
+      "id": "sale",
+      "kind": "rule",
+      "scope": "story:u9",
+      "when": "price > 10",
+      "apply": {
+        "action": "paragraphStyle",
+        "name": "Sale"
+      }
+    },
+    {
+      "id": "ean",
+      "kind": "barcode",
+      "target": "u1c4",
+      "query": "q",
+      "symbology": "ean13",
+      "expr": "ean",
+      "options": {
+        "quietZone": 0,
+        "missing": "flag"
+      }
+    },
+    {
+      "id": "tbl",
+      "kind": "table",
+      "region": "u1d5",
+      "query": "q",
+      "columns": [
+        {
+          "header": "Name",
+          "expr": "name",
+          "style": null
+        }
+      ],
+      "options": {
+        "header_row": true,
+        "group_by": []
+      }
+    }
+  ],
+  "variables": {
+    "name": "binding1",
+    "variables": [
+      {
+        "name": "v_name",
+        "trait": "textcontent"
+      },
+      {
+        "name": "img",
+        "trait": "filereference"
+      },
+      {
+        "name": "badge",
+        "trait": "visibility"
+      }
+    ],
+    "dataSets": [
+      {
+        "name": "Set A",
+        "values": {
+          "badge": {
+            "kind": "visible",
+            "visible": false
+          },
+          "img": {
+            "kind": "fileRef",
+            "href": "a.png"
+          },
+          "v_name": {
+            "kind": "text",
+            "text": "Alpha"
+          }
+        }
+      }
+    ]
+  }
+}

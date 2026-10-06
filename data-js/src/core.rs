@@ -43,7 +43,7 @@ use data_dataset::{
 use data_lower::{
     lower_barcode, lower_image, lower_table, lower_variable, lower_visibility, paginate_flow,
     FlowGroup, FlowLayoutOpts, FlowRecord, FrameCapacity, LowerOpts, LoweredBarcode, LoweredImage,
-    LoweredTable, LoweredVariable, LoweredVisibility, PaginatedFlow,
+    LoweredProperty, LoweredTable, LoweredVariable, LoweredVisibility, PaginatedFlow,
 };
 use data_query::{content_hash, stabilize};
 
@@ -72,6 +72,8 @@ pub enum LoweredOutput {
     Image(LoweredImage),
     Barcode(LoweredBarcode),
     Visibility(LoweredVisibility),
+    /// ADR 558 — a property write (or the reason there is none).
+    Property(LoweredProperty),
 }
 
 /// The default square content box (pt) a barcode lowers into when the bound
@@ -112,6 +114,7 @@ fn encode_barcode(
                 height_pt: box_h_pt,
             },
             text: String::new(),
+            paint: data_lower::barcode_paint(),
         });
     }
     let geometry = encode(to_encoder_symbology(rb.symbology), &rb.value)
@@ -623,6 +626,9 @@ impl DataSession {
             Resolved::Visibility(v) => Ok(LoweredOutput::Visibility(lower_visibility(
                 v.target, v.visible,
             ))),
+            Resolved::Property(p) => Ok(LoweredOutput::Property(data_lower::lower_property(
+                p.target, &p.path, p.outcome,
+            ))),
         }
     }
 
@@ -1030,6 +1036,91 @@ impl DataSession {
         out
     }
 
+    /// ADR 558 — resolve every PROPERTY binding (and, with `with_visibility`,
+    /// every visibility binding re-expressed as its `elementVisible` triple)
+    /// over stabilized record `record`, for ONE apply. `ids` narrows it to
+    /// those bindings (`None` = all). A pinned or overridden binding is not
+    /// resolved: it answers `keep` (the non-destructive policy, §8). The
+    /// host turns every `write` into ONE `host.objects.batch`.
+    pub fn resolve_properties_at(
+        &mut self,
+        record: usize,
+        with_visibility: bool,
+        ids: Option<&[BindingId]>,
+    ) -> Vec<PropertyApply> {
+        let wanted: Vec<BindingId> = self
+            .bindings
+            .iter()
+            .filter(|d| match &d.binding {
+                Binding::Property { .. } => true,
+                Binding::Visibility { .. } => with_visibility,
+                _ => false,
+            })
+            .filter(|d| ids.is_none_or(|ids| ids.contains(&d.id)))
+            .map(|d| d.id.clone())
+            .collect();
+        let mut out = Vec::with_capacity(wanted.len());
+        for id in wanted {
+            let binding = id.to_string();
+            let kept = self
+                .engine
+                .sync_state(&id)
+                .filter(|st| !st.accepts_refresh())
+                .map(|st| st.status);
+            let def = self
+                .bindings
+                .iter()
+                .find(|d| d.id == id)
+                .map(|d| d.binding.clone());
+            if let Some(status) = kept {
+                let (target, path) = match &def {
+                    Some(Binding::Property { target, path, .. }) => (target.clone(), path.clone()),
+                    Some(Binding::Visibility { target, .. }) => (
+                        data_core::TargetRef::Selector(format!("frame:{target}")),
+                        "elementVisible".to_string(),
+                    ),
+                    _ => continue,
+                };
+                out.push(PropertyApply {
+                    binding,
+                    property: data_lower::lower_property(
+                        target,
+                        &path,
+                        data_core::PropertyOutcome::Keep {
+                            reason: format!("the binding is {status:?}").to_lowercase(),
+                        },
+                    ),
+                });
+                continue;
+            }
+            let lowered = match self.resolve_lowered_at(&id, record) {
+                Ok(LoweredOutput::Property(p)) => p,
+                Ok(LoweredOutput::Visibility(v)) => data_lower::visibility_as_property(&v),
+                Ok(_) => continue,
+                Err(e) => {
+                    let (target, path) = match &def {
+                        Some(Binding::Property { target, path, .. }) => {
+                            (target.clone(), path.clone())
+                        }
+                        _ => continue,
+                    };
+                    data_lower::lower_property(
+                        target,
+                        &path,
+                        data_core::PropertyOutcome::Fail {
+                            message: e.to_string(),
+                        },
+                    )
+                }
+            };
+            out.push(PropertyApply {
+                binding,
+                property: lowered,
+            });
+        }
+        out
+    }
+
     /// The **remote invalidation key** (§6.2/§8, the M1 remote slice): the
     /// content-addressed key for a defined remote source over caller-supplied
     /// bytes. The bundle fetches the bytes (edit-time, post-consent, D-03) and
@@ -1302,6 +1393,19 @@ impl DataSession {
                 continue;
             };
             let mut apply = DataSetApply::from_value(&decl.name, value);
+            if let DataSetValue::Property { value, color } = value {
+                let def = self.bindings.iter().find(|b| b.id.as_str() == decl.name);
+                if let Some(Binding::Property { target, path, .. }) = def.map(|d| &d.binding) {
+                    apply.property = Some(data_lower::lower_property(
+                        target.clone(),
+                        path,
+                        data_core::PropertyOutcome::Write {
+                            value: value.clone(),
+                            color: color.clone(),
+                        },
+                    ));
+                }
+            }
             if !decl.var_trait.is_bindable() {
                 apply.applicable = false;
                 apply.note = Some(
@@ -1400,15 +1504,7 @@ fn upsert<T>(items: &mut Vec<T>, item: T, same: impl Fn(&T, &T) -> bool) {
 /// §9.9 variable trait. Kept next to the projection so adding a binding kind
 /// without deciding its variable story is a visible omission, not a silent one.
 fn binding_kind_tag(binding: &Binding) -> &'static str {
-    match binding {
-        Binding::Variable { .. } => "variable",
-        Binding::Image { .. } => "image",
-        Binding::Table { .. } => "table",
-        Binding::RecordFlow { .. } => "recordFlow",
-        Binding::Rule { .. } => "rule",
-        Binding::Barcode { .. } => "barcode",
-        Binding::Visibility { .. } => "visibility",
-    }
+    binding.kind_name()
 }
 
 /// Capture one lowered output as a data-set value, when its shape matches the
@@ -1430,6 +1526,15 @@ fn capture_value(var_trait: VarTrait, lowered: &LoweredOutput) -> Option<DataSet
             // no-op into a hidden frame, so it is not captured.
             v.visible.map(|visible| DataSetValue::Visible { visible })
         }
+        // ADR 558: a property binding captures the value it would write. A
+        // `keep` or a failure captures nothing (no value is not a value).
+        (VarTrait::Property, LoweredOutput::Property(p)) => match &p.outcome {
+            data_core::PropertyOutcome::Write { value, color } => Some(DataSetValue::Property {
+                value: value.clone(),
+                color: color.clone(),
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1450,7 +1555,7 @@ fn image_href(reference: &data_core::ImageReference) -> Option<String> {
 
 /// One variable's contribution to applying a data set (§9.9): the typed value
 /// the host writes, or an honest `applicable: false` with the reason.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataSetApply {
     /// The variable name — which is the binding id.
@@ -1466,6 +1571,10 @@ pub struct DataSetApply {
     /// The captured visibility (`visibility` rows).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
+    /// The captured property write (`property` rows, ADR 558): the binding's
+    /// target and path with the captured value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<LoweredProperty>,
     /// Whether the host can write this row.
     pub applicable: bool,
     /// Why it cannot be written, when `applicable` is false.
@@ -1482,11 +1591,13 @@ impl DataSetApply {
                 DataSetValue::FileRef { .. } => "image",
                 DataSetValue::Visible { .. } => "visibility",
                 DataSetValue::GraphData { .. } => "graphData",
+                DataSetValue::Property { .. } => "property",
             }
             .to_string(),
             text: None,
             href: None,
             visible: None,
+            property: None,
             applicable: true,
             note: None,
         };
@@ -1495,9 +1606,19 @@ impl DataSetApply {
             DataSetValue::FileRef { href } => a.href = Some(href.clone()),
             DataSetValue::Visible { visible } => a.visible = Some(*visible),
             DataSetValue::GraphData { .. } => {}
+            // The target and path come from the binding (`apply_data_set`).
+            DataSetValue::Property { .. } => {}
         }
         a
     }
+}
+
+/// One property binding's lowering for an apply (ADR 558).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropertyApply {
+    pub binding: String,
+    pub property: LoweredProperty,
 }
 
 /// What a variable-library import brought in, and what will NOT apply (§9.9).

@@ -38,6 +38,7 @@ pub mod expr;
 pub mod ids;
 pub mod locale;
 pub mod model;
+pub mod property;
 pub mod temporal;
 pub mod value;
 
@@ -50,8 +51,8 @@ pub mod funcs {
 pub use binding::{
     BarcodeMissing, BarcodeOpts, BarcodeSymbology, Binding, BindingDef, ColumnBind, FlowOpts,
     FooterAgg, GroupFooter, ImageReference, ImageStatus, ImgFit, ImgMissing, ImgPolicy,
-    MissingPolicy, Placeholder, PlaceholderKind, ResolveStamp, Status, StyleAction, SyncState,
-    TableOpts, Template, TemplateField, VisibilityMissing, VisibilityOpts,
+    MissingPolicy, Placeholder, PlaceholderKind, PropertyView, ResolveStamp, Status, StyleAction,
+    SyncState, TableOpts, Template, TemplateField, VisibilityMissing, VisibilityOpts,
 };
 pub use expr::{BinOp, Expr, FnId, UnaryOp};
 pub use ids::{
@@ -62,5 +63,9 @@ pub use locale::{Locale, LocaleDef, LOCALES};
 pub use model::{
     DataSource, DbEngine, Field, FieldType, FileFormat, ParamDecl, ParamType, Query, RecordError,
     RecordSet, RefreshPolicy, ResultShape, Schema, SourceKind,
+};
+pub use property::{
+    parse_color, parse_length, points_per, CoercePolicy, ColorIntent, ColorLiteral, ColorSpec,
+    PropValue, PropertyMissing, PropertyOutcome, TargetRange, TargetRef, TargetSchema, TargetType,
 };
 pub use value::{fmt_number_scaled, Value, ValueError};

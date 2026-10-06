@@ -1,0 +1,64 @@
+# paged.data expression functions — units family (ADR 558 §3). A length is a
+# NUMBER in points, so it composes with math and logic. `AS` is the explicit
+# form of the coercion a property binding applies against its target schema.
+# One row per function; build-consumed (data-core/build.rs + data-expr/build.rs).
+
+- id: data.expr.units.mm
+  name: MM
+  family: units
+  arity: { min: 1, max: 1 }
+  rust: units::mm
+  status: implemented
+  provenance: ["ADR 558 §3; 72 pt per inch, 25.4 mm per inch; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::units_convert_to_points__feat__data_bind_property"]
+
+- id: data.expr.units.cm
+  name: CM
+  family: units
+  arity: { min: 1, max: 1 }
+  rust: units::cm
+  status: implemented
+  provenance: ["ADR 558 §3; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::units_convert_to_points__feat__data_bind_property"]
+
+- id: data.expr.units.in
+  name: IN
+  family: units
+  arity: { min: 1, max: 1 }
+  rust: units::inch
+  status: implemented
+  provenance: ["ADR 558 §3; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::units_convert_to_points__feat__data_bind_property"]
+
+- id: data.expr.units.pt
+  name: PT
+  family: units
+  arity: { min: 1, max: 1 }
+  rust: units::pt
+  status: implemented
+  provenance: ["ADR 558 §3; a text with its own unit converts (PT(\"3mm\")); own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::units_convert_to_points__feat__data_bind_property"]
+
+- id: data.expr.units.px
+  name: PX
+  family: units
+  arity: { min: 1, max: 2 }
+  rust: units::px
+  status: implemented
+  provenance: ["ADR 558 §3; CSS pixel = 1/96 in unless a dpi is given; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::units_convert_to_points__feat__data_bind_property"]
+
+- id: data.expr.units.as
+  name: AS
+  family: units
+  arity: { min: 2, max: 2 }
+  rust: units::as_
+  status: implemented
+  provenance: ["ADR 558 §3 explicit coercion: number, length, bool, text, color; own code"]
+  tests:
+    rust: ["data-conformance/tests/property.rs::as_coerces_explicitly__feat__data_bind_property"]
