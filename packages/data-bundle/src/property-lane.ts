@@ -7,11 +7,12 @@
 // Host calls per apply (the count budget, `property-real-core.spec.ts`):
 // one `objects.query` per DISTINCT target selector, one `swatches` read when
 // a value is a colour, and one `objects.batch`. A literal colour that no
-// swatch has yet adds one `createSwatch` batch BEFORE the apply (a second
-// undo step, first use only): `host.objects` has no core `create` until
-// core's `Set` lands (ADR 132).
+// swatch has yet is created IN that batch (`create` op, engine protocol 71):
+// swatch and apply are one undo step. Before 71 `host.objects` cannot create
+// a core object, so the swatch goes in one `createSwatch` mutate before the
+// apply (a second undo step, first use only, one more call).
 
-import type { BundleHost, Mutation, ObjectsSurface } from "@paged-media/plugin-api";
+import type { BundleHost, Mutation, ObjectOp, ObjectsSurface } from "@paged-media/plugin-api";
 
 import {
   planProperties,
@@ -19,6 +20,7 @@ import {
   type PropertyApply,
   type SwatchRow,
 } from "../../data-host-model/src";
+import { textVariablesOn } from "./text-variables";
 
 export interface PropertyLaneResult {
   /** Objects written. */
@@ -88,8 +90,12 @@ export async function commitProperties(
   }
   const plan = planProperties(applies, targets, swatches, hostOids);
   Object.assign(result.skipped, plan.skipped);
-  // 3. Swatches first (a separate step until host.objects can create them).
-  if (plan.mint.length > 0) {
+  // 3. New swatches: in the batch from protocol 71 (the `textVariable` kind
+  // is the protocol's mark, see text-variables.ts), else a step before it.
+  let creates: ObjectOp[] = [];
+  if (plan.mint.length > 0 && (await textVariablesOn(host))) {
+    creates = plan.mint.map(createSwatchOp);
+  } else if (plan.mint.length > 0) {
     result.calls++;
     const minted = await host.document.mutate(
       plan.mint.length === 1 ? plan.mint[0]! : ({ op: "batch", args: { ops: plan.mint } } as Mutation),
@@ -103,22 +109,33 @@ export async function commitProperties(
   let bindings = plan.bindings;
   while (ops.length > 0) {
     result.calls++;
-    const out = await objects.batch(ops, { label });
+    const out = await objects.batch([...creates, ...ops], { label });
     if (out.applied) {
       result.undoSteps += out.undoSteps;
       result.applied = ops.length;
       for (const b of bindings) result.written[b] = (result.written[b] ?? 0) + 1;
       break;
     }
-    const failed = out.index !== undefined ? bindings[out.index] : undefined;
+    const at = out.index !== undefined ? out.index - creates.length : undefined;
+    const failed = at !== undefined && at >= 0 ? bindings[at] : undefined;
     if (failed === undefined) {
       for (const b of new Set(bindings)) result.skipped[b] = `the host refused the apply: ${out.reason ?? out.code ?? "unknown"}`;
       break;
     }
-    result.skipped[failed] = `the host refused ${ops[out.index!]!.op === "set" ? (ops[out.index!] as { path: string }).path : "the write"}: ${out.reason ?? out.code}`;
+    result.skipped[failed] = `the host refused ${ops[at!]!.op === "set" ? (ops[at!] as { path: string }).path : "the write"}: ${out.reason ?? out.code}`;
     const keep = bindings.map((b) => b !== failed);
     ops = ops.filter((_, i) => keep[i]);
     bindings = bindings.filter((_, i) => keep[i]);
   }
   return result;
+}
+
+/** A `createSwatch` mutation as a `host.objects` create op (protocol 71). */
+function createSwatchOp(m: Mutation): ObjectOp {
+  const spec = (m.args as { spec: { name: string; space: string; value: number[]; model?: string | null } }).spec;
+  return {
+    op: "create",
+    kind: "swatch",
+    props: { name: spec.name, color: { space: spec.space, value: spec.value, model: spec.model ?? "Process" } },
+  };
 }

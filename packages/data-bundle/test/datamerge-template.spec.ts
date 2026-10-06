@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { dataMergeTemplate, readZip, utf16Csv, writeZip, type ZipEntry } from "../src/datamerge-export";
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { dataFields, ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 
 const fixture = (name: string) =>
@@ -112,7 +112,8 @@ describe.skipIf(!ready && !(REQUIRE_REAL_CORE || REQUIRE_REAL_DUCKDB))("Export a
       s.addVariableBinding("v_name", "v_name", "q", "name");
       s.addImageBinding("photo", "urect", "q", "photo");
       await s.lowerAll();
-      expect((await host.document.placeholders()).map((p) => p.value)).toEqual(["Grüne Äpfel"]);
+      // A placeholder field, or (protocol 71) the text variable `paged:v_name`.
+      expect((await dataFields(host as never)).map((p) => p.value)).toEqual(["Grüne Äpfel"]);
 
       const out = await s.exportDataMergeTemplate();
       expect(out.ok, out.reason).toBe(true);

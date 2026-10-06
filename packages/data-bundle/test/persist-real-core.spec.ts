@@ -15,11 +15,10 @@ import { existsSync } from "node:fs";
 import type { BundleHost } from "@paged-media/plugin-api";
 import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { dataFields, ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 import { minimalIdml } from "./fixtures/minimal-idml";
 
-const PLUGIN = "media.paged.data";
 const CSV = "sku,price\nA-1,9.99\nB-2,19.99\nC-3,29.99\n";
 
 const probe = await bootRealDuckDB();
@@ -54,9 +53,9 @@ async function exportPaged(host: BundleHost): Promise<Uint8Array> {
   return Uint8Array.from(reply.payload.bytes!);
 }
 
+/** Our fields, placeholder or text variable (protocol 71). */
 async function ours(host: BundleHost) {
-  const all = await host.document.placeholders();
-  return all.filter((p) => p.plugin === PLUGIN);
+  return dataFields(host as never);
 }
 
 describe.skipIf(!ready && !required)(

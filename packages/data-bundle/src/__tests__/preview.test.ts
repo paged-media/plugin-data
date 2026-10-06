@@ -72,7 +72,7 @@ function fakeHost() {
         if (m.op === "insertTextFrame") {
           return { applied: true, createdId: { kind: "textFrame", id: "frame-new" }, pageIds: [] };
         }
-        if (m.op === "insertField" && typeof m.args.field === "object") {
+        if (m.op === "insertField" && typeof m.args.field === "object" && "placeholder" in m.args.field) {
           const p = m.args.field.placeholder;
           fields.push({ storyId: m.args.storyId, offset: m.args.offset, plugin: p.plugin, key: p.key, value: p.value ?? null });
         }

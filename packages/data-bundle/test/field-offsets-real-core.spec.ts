@@ -30,7 +30,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
 import type { DataEngineLike } from "../src/engine";
-import { ENGINE_ANCHOR, fixedFrom, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { dataFields, ENGINE_ANCHOR, fixedFrom, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { undoMark, undoSteps } from "./perf/harness";
 
 const run = ENGINE_ANCHOR !== null || REQUIRE_REAL_CORE;
@@ -104,6 +104,21 @@ async function ours(h: HeadlessHost) {
   return all.filter((p) => p.plugin === PLUGIN);
 }
 
+/** A placeholder field `key` (value `value`) in a fresh story — the field as
+ *  a variable was placed before engine protocol 71. From 71 a NEW variable is
+ *  a text variable (ADR 559); a document with a placeholder field keeps
+ *  being read and written through it, which is what these address tests
+ *  exercise. */
+async function placeField(h: HeadlessHost, key: string, value: string): Promise<string> {
+  const story = await newStory(h);
+  const ins = await h.host.document.mutate({
+    op: "insertField",
+    args: { storyId: story, offset: 0, field: { placeholder: { plugin: PLUGIN, key, value } } },
+  });
+  expect(ins.applied).toBe(true);
+  return story;
+}
+
 describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers]", () => {
   let h: HeadlessHost | null = null;
   afterEach(() => {
@@ -158,10 +173,11 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
           ? { kind: "variable", target: "anchor", text: records[record], hidden: false }
           : null,
     });
+    await placeField(h, "v_name", "x");
     const s = await sessionOver(h, engine);
     s.addVariableBinding("v_name", "anchor", "q", "name");
 
-    // Record 0 places the field (no selection → a fresh frame, offset 0).
+    // Record 0 writes the field (a fresh frame, offset 0).
     await s.previewRecord("v_name", 0);
     const placed = await ours(h);
     expect(placed.map((p) => [p.key, p.offset, p.value])).toEqual([["v_name", 0, "ALPHA"]]);
@@ -199,7 +215,8 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
     for (const r of [0, 1, 2, 1]) await s.previewRecord("v_name", r);
     const stories = await h.host.document.collection<{ selfId: string }>("stories" as never);
     expect(stories.length).toBe(1);
-    expect((await ours(h)).map((p) => p.value)).toEqual(["BETA"]);
+    // A placeholder field, or (protocol 71) the text variable.
+    expect((await dataFields(h.host as never)).map((p) => p.value)).toEqual(["BETA"]);
   });
   it("refreshFields is ONE undo step, and one undo takes every field back [data.lower.v43-consumers]", async () => {
     h = await openRealHost();
@@ -243,12 +260,12 @@ describe.skipIf(!run)("field offsets against real core [data.lower.v43-consumers
       resolve_lowered_at: (id: string, record: number) =>
         id === "v_name" ? { kind: "variable", target: "anchor", text: records[record], hidden: false } : null,
     });
+    await placeField(h, "v_name", "x");
     const s = await sessionOver(h, engine);
     s.addVariableBinding("v_name", "anchor", "q", "name");
-    await s.previewRecord("v_name", 0); // places the field
     reads = 0;
     // Steps with nothing else happening: one read, then the cached address.
-    for (const r of [1, 2, 1]) await s.previewRecord("v_name", r);
+    for (const r of [0, 1, 2, 1]) await s.previewRecord("v_name", r);
     expect(reads).toBe(1);
     expect((await ours(h)).map((p) => p.value)).toEqual(["B"]);
 

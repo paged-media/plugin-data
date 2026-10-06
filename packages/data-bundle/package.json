@@ -27,8 +27,8 @@
   "devDependencies": {
     "@paged-media/canvas-wasm": "0.70.0",
     "@paged-media/data-host-model": "workspace:*",
-    "@paged-media/plugin-api": "0.2.43-canary.0",
-    "@paged-media/plugin-sdk": "0.2.43-canary.0",
+    "@paged-media/plugin-api": "0.2.44-canary.0",
+    "@paged-media/plugin-sdk": "0.2.44-canary.0",
     "@types/node": "20.19.39",
     "@types/react": "^18.3.31",
     "apache-arrow": "^17.0.0",

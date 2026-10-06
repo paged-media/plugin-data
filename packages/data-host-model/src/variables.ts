@@ -12,7 +12,7 @@
 
 import type { ElementId, Mutation, Value } from "@paged-media/plugin-api";
 
-import { setFieldValueMutation } from "./fields";
+import { fieldWriteMutation } from "./text-variables";
 import type { LoweredVisibility } from "./lowered";
 
 // ── §9.8 — the visibility variable ──────────────────────────────────────────
@@ -82,8 +82,9 @@ export interface DataSetApply {
  *  these addresses (placeholder offsets from `placeholders()`, element ids from
  *  the scene tree) and hands them in. Keyed by variable name (= binding id). */
 export interface DataSetTargets {
-  /** `variable → {storyId, offset}` of its placeholder field (text variables). */
-  fields?: Record<string, { storyId: string; offset: number }>;
+  /** `variable → {storyId, offset}` of its placeholder field (text variables),
+   *  or, from protocol 71, its custom text variable (`variable` = its `Self`). */
+  fields?: Record<string, { storyId: string; offset: number; variable?: string }>;
   /** `variable → the bound rectangle's raw Self id` (image variables). */
   frames?: Record<string, string>;
   /** `variable → the bound element` (visibility variables). */
@@ -105,7 +106,9 @@ export interface DataSetPlan {
  *  variable with a resolved target:
  *
  *  - `text`       → `setFieldValue` at the variable's placeholder field (the
- *                   D-01 lane — the anchor survives, only content changes);
+ *                   D-01 lane — the anchor survives, only content changes),
+ *                   or a `Set` on its custom text variable's contents (ADR
+ *                   559, protocol 71: every instance re-bakes);
  *  - `image`      → `placeImage` on the bound rectangle (the D-14 lane, through
  *                   the core asset mechanism — never `plugin-image`, §2.1);
  *  - `visibility` → `setElementProperty elementVisible` (§9.8).
@@ -136,7 +139,7 @@ export function dataSetPlan(
             "(place the variable once, then data sets drive it)";
           continue;
         }
-        ops.push(setFieldValueMutation(field.storyId, field.offset, a.text ?? null));
+        ops.push(fieldWriteMutation({ ...field, key: a.variable }, a.text ?? null));
         break;
       }
       case "image": {

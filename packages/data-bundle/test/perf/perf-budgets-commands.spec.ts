@@ -38,6 +38,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
 
+import { dataFields } from "../real-core";
 import { countingHost, type WorkLog } from "./counting-host";
 import {
   BUDGET_TIMEOUT_MS,
@@ -47,6 +48,7 @@ import {
   expectBudget,
   LABELLED,
   onLabelled,
+  onTextVariables,
   measure,
   printTable,
   productCsv,
@@ -83,8 +85,9 @@ async function newStory(h: HeadlessHost, bounds: [number, number, number, number
   return hit!.storyId as string;
 }
 
+/** Our fields: placeholder fields, and (protocol 71) our text variables. */
 async function ourFields(h: HeadlessHost) {
-  return (await h.host.document.placeholders()).filter((p) => p.plugin === PLUGIN);
+  return dataFields(h.host as never);
 }
 
 // Protocol 69 (LABELLED, harness.ts): the session version is named in the
@@ -220,7 +223,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // call. hostCalls 102 → 3, mutates 100 → 1, undo 89 (unreachable) → 1,
   // wasm calls 200 → 1.
   // Wave 7 (row diff): +1 wasmCalls — mark_rows_applied, the row diff's "before" snapshot, once per command that writes the document from data.
-  const W2: Measured = onLabelled({
+  // Protocol 71 (measured on the local 0.71 engine): +1 hostCalls — the
+  // field read also lists the document's text variables (`objects.query`),
+  // which carry variables placed from 71 on (ADR 559); these 100 placeholder
+  // fields are a document made before, refreshed through them as before.
+  const W2: Measured = onTextVariables(onLabelled({
     hostCalls: 3,
     hostReads: 1,
     mutates: 1,
@@ -234,7 +241,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { mutationOps: 101 });
+  }, { mutationOps: 101 }), { hostCalls: 4 });
   it("W2 refreshes 100 fields in one story [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -302,7 +309,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // write moved no address): one read for the 20 steps. hostCalls 40 → 21,
   // reads and fields read 20 → 1. One write per step stays — each step is
   // its own preview state, one undo step each.
-  const W3: Measured = onLabelled({
+  // Protocol 71 (measured): the field is a text variable (ADR 559). The one
+  // read is placeholders() (0 fields) + objects.query + one objects.get of
+  // its contents: hostCalls 21 → 23, placeholdersRead 1 → 0; each step is
+  // still one write (a `Set` on the contents), one undo step.
+  const W3: Measured = onTextVariables(onLabelled({
     hostCalls: 21,
     hostReads: 1,
     mutates: 20,
@@ -321,7 +332,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { mutationOps: 21 });
+  }, { mutationOps: 21 }), { hostCalls: 23, placeholdersRead: 0 });
   it("W3 steps the preview through 20 records [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);
@@ -437,7 +448,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
   // frame's story as `$h:v<i>`): 2 reads, one supports, one caret probe,
   // selection.get, one mutate, one log. hostCalls 102 → 7, mutates 20 → 1,
   // undo steps 20 → 1.
-  const W5: Measured = onLabelled({
+  // Protocol 71 (measured): each variable is a custom text variable — its
+  // createTextVariable rides the same batch before its instance: +20
+  // mutationOps (41 → 61), still ONE mutate and ONE undo step; +1 hostCalls,
+  // the text-variable query that tells a new definition from an existing one.
+  const W5: Measured = onTextVariables(onLabelled({
     hostCalls: 7,
     hostReads: 2,
     mutates: 1,
@@ -451,7 +466,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 1,
-  }, { mutationOps: 41 });
+  }, { mutationOps: 41 }), { hostCalls: 8, mutationOps: 61 });
   it("W5 lowers 20 variable bindings at once [data.perf.gates]", async () => {
     h = await openDataHost();
     const { host, work } = countingHost(h.host);

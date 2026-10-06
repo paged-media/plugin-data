@@ -110,8 +110,9 @@ const BATCH_CHILD = /Batch child (\d+)/;
 
 /** Single ops the rider may wrap in a batch with the label: field writes,
  *  whose callers read nothing but `applied` (a one-field refresh, a field
- *  placed at the caret). Any other single op is sent as it is. */
-const WRAPPABLE = new Set(["setFieldValue", "insertField"]);
+ *  placed at the caret, a text variable's contents `set` — protocol 71). Any
+ *  other single op is sent as it is. */
+const WRAPPABLE = new Set(["setFieldValue", "insertField", "set"]);
 
 /**
  * The host the session uses: `host` with `document.mutate` carrying the

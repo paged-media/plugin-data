@@ -27,19 +27,25 @@ import type { BundleHost, ElementId, Mutation, PageId } from "@paged-media/plugi
 import {
   barcodeToMutations,
   bindingMetadata,
+  cellStyleSelf,
   createRuleCellStyle,
+  createTextVariableMutation,
   dataSetBatch,
   defaultPlacement,
   idmlFit,
   insertFieldMutation,
+  insertTextVariableMutation,
   makeEnvelope,
   placeImageMutation,
   paragraphRanges,
   placeableUri,
+  ruleCellOps,
   ruleMutations,
+  setTextVariableMutation,
   tableCellInserts,
   tableInsertMutation,
   tableInsertSpec,
+  textVariableId,
   toRuleApplication,
   visibilityToMutations,
   type BarcodePlacement,
@@ -54,6 +60,8 @@ import {
   type RuleResult,
   type RuleTarget,
 } from "../../data-host-model/src";
+import { objectsOf } from "./property-lane";
+import { ownTextVariableIds, textVariablesOn } from "./text-variables";
 
 /** What one command's lowerings share: the active page, read once. */
 export interface LowerContext {
@@ -375,6 +383,45 @@ async function frameStory(host: BundleHost, frameId: string): Promise<string | n
   return hit?.storyId ?? null;
 }
 
+/** What a variable is placed as (ADR 559): from engine protocol 71 a custom
+ *  TEXT VARIABLE `paged:<key>` (InDesign keeps it), before that a placeholder
+ *  field. `existing` holds the ids of our text variables already defined, so
+ *  a second instance re-uses the definition instead of creating it twice. */
+interface VariableCarrier {
+  textVariables: boolean;
+  existing: Set<string>;
+}
+
+/** Read the carrier once per placement command: no host call before
+ *  protocol 71 (the detection answers from the object model's probe); one
+ *  text-variable query from it on. */
+async function variableCarrier(host: BundleHost): Promise<VariableCarrier> {
+  if (!(await textVariablesOn(host))) return { textVariables: false, existing: new Set() };
+  try {
+    return { textVariables: true, existing: new Set(await ownTextVariableIds(host)) };
+  } catch {
+    return { textVariables: true, existing: new Set() };
+  }
+}
+
+/** The ops that place variable `key` at a point: the placeholder field, or
+ *  (protocol 71) the text variable's definition — created, or its contents
+ *  set when it exists — followed by an instance of it. */
+function placeVariableOps(
+  carrier: VariableCarrier,
+  storyId: string,
+  offset: number,
+  key: string,
+  value: string | null,
+  contentOffset?: number,
+): Mutation[] {
+  if (!carrier.textVariables) return [insertFieldMutation(storyId, offset, key, value, contentOffset)];
+  const id = textVariableId(key);
+  const head = carrier.existing.has(id) ? setTextVariableMutation(id, key, value) : createTextVariableMutation(key, value);
+  carrier.existing.add(id);
+  return [head, insertTextVariableMutation(storyId, offset, key, contentOffset)];
+}
+
 /** Place a lowered variable as a tagged placeholder FIELD (D-01, protocol v43).
  *  Inserts an `insertField` with the `placeholder` FieldKind keyed by the
  *  BINDING id (so the refresh loop resolves `{plugin, key}` back to the binding)
@@ -419,6 +466,7 @@ export async function commitLoweredVariable(
   // The HideParagraph missing policy resolves to a null value (the field shows
   // its <key> token).
   const value = variable.hidden ? null : variable.text;
+  const carrier = await variableCarrier(host);
   if ("mint" in point) {
     const placement = defaultPlacement(point.mint, { widthPt: 160, heightPt: 60 });
     const outcome = await host.document.mutate({
@@ -427,7 +475,7 @@ export async function commitLoweredVariable(
         ops: [
           { op: "insertTextFrame", args: { pageId: point.mint, bounds: placement.bounds } },
           { op: "bindCreated", args: { handle: "frame" } } as Mutation,
-          insertFieldMutation("$h:frame", 0, bindingKey, value),
+          ...placeVariableOps(carrier, "$h:frame", 0, bindingKey, value),
         ],
       },
     });
@@ -440,9 +488,8 @@ export async function commitLoweredVariable(
     return { storyId, offset: 0 };
   }
   const { storyId, offset } = point;
-  const outcome = await host.document.mutate(
-    insertFieldMutation(storyId, offset, bindingKey, value, point.caret ? offset : undefined),
-  );
+  const ops = placeVariableOps(carrier, storyId, offset, bindingKey, value, point.caret ? offset : undefined);
+  const outcome = await host.document.mutate(ops.length === 1 ? ops[0]! : { op: "batch", args: { ops } });
   if (!outcome.applied) {
     host.log.warn(`variable "${variable.target}": insertField rejected`);
     return null;
@@ -487,6 +534,7 @@ export async function commitLoweredVariables(
     return placed;
   }
   const ops: Mutation[] = [];
+  const carrier = await variableCarrier(host);
   items.forEach((it, i) => {
     const value = it.variable.hidden ? null : it.variable.text;
     if ("mint" in point) {
@@ -494,10 +542,10 @@ export async function commitLoweredVariables(
       ops.push(
         { op: "insertTextFrame", args: { pageId: point.mint, bounds: placement.bounds } },
         { op: "bindCreated", args: { handle: `v${i}` } } as Mutation,
-        insertFieldMutation(`$h:v${i}`, 0, it.key, value),
+        ...placeVariableOps(carrier, `$h:v${i}`, 0, it.key, value),
       );
     } else {
-      ops.push(insertFieldMutation(point.storyId, point.offset, it.key, value, point.caret ? point.offset : undefined));
+      ops.push(...placeVariableOps(carrier, point.storyId, point.offset, it.key, value, point.caret ? point.offset : undefined));
     }
   });
   const outcome = await host.document.mutate({ op: "batch", args: { ops } });
@@ -800,14 +848,33 @@ export async function commitRule(
   // A table rule needs its named cell style to exist before the per-cell apply.
   // A style picked from the document's own cell styles already does.
   if (application.apply.kind === "table" && target.kind === "tableColumn") {
-    let exists = false;
+    let existing: string | null = null;
+    let exactSelf = false;
     try {
-      const styles = await host.document.collection<{ selfId: string }>("cellStyles");
-      exists = styles.some((st) => st.selfId === application.apply.name);
+      const styles = await host.document.collection<{ selfId: string; name?: string }>("cellStyles");
+      const name = application.apply.name;
+      existing =
+        styles.find((st) => st.selfId === name || st.selfId === cellStyleSelf(name) || st.name === name)?.selfId ?? null;
+      exactSelf = styles.some((st) => st.selfId === name);
     } catch {
       // no collection read: mint it (idempotent at the host)
     }
-    if (!exists) await host.document.mutate(createRuleCellStyle(application.apply.name));
+    // ADR 558, protocol 71: the rule is a property binding over the cells'
+    // `appliedCellStyle` — `cell:` addresses need no story id — and a missing
+    // style is created in the same host.objects batch: ONE undo step.
+    if (await textVariablesOn(host)) {
+      const ops = ruleCellOps(target.tableId, target.col, target.headerRows, result.fires, application.apply.name, existing);
+      if (ops.length === 0) return 0;
+      const out = await objectsOf(host)!.batch(ops, { label: `Rule "${result.scope}"` });
+      if (!out.applied) {
+        host.log.warn(`rule (scope "${result.scope}"): style application batch rejected (${out.reason ?? out.code})`);
+        return 0;
+      }
+      const sets = ops.filter((o) => o.op === "set").length;
+      host.log.info(`rule (scope "${result.scope}") applied cell style "${application.apply.name}" to ${sets} cell(s)`);
+      return sets;
+    }
+    if (!exactSelf) await host.document.mutate(createRuleCellStyle(application.apply.name));
   }
   // A per-record paragraph rule addresses paragraphs by their live ranges.
   let paragraphs: ReturnType<typeof paragraphRanges> = [];

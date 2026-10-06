@@ -187,8 +187,12 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // document.tree read: a document without a session part may carry its
   // bindings in labels (an InDesign save drops parts). The document label the
   // open already read is reused, not read again.
+  // SDK 0.2.44 / protocol 71 (ADR 559): +2 (measured on 0.70 and 0.71) —
+  // the session asks once, as it starts, whether variables are text
+  // variables (supports("objects@1") + objects.kinds()), so no command pays
+  // for it. The pre-69 base moves by the same two calls (not runnable here).
   const W7: Measured = onLabelled({
-    hostCalls: 37,
+    hostCalls: 39,
     hostReads: 2,
     mutates: 0,
     mutationOps: 0,
@@ -201,7 +205,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { hostCalls: 41, hostReads: 4 });
+  }, { hostCalls: 43, hostReads: 4 });
   it("W7 activates without booting either engine [data.perf.gates]", async () => {
     h = await openRealHost();
     let work: WorkLog | null = null;

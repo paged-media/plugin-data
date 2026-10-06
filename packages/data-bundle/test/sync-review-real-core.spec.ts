@@ -20,10 +20,9 @@ import { existsSync } from "node:fs";
 import type { BundleHost } from "@paged-media/plugin-api";
 import type { HeadlessHost } from "@paged-media/plugin-sdk";
 
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { dataFields, ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 
-const PLUGIN = "media.paged.data";
 const CSV = "sku,price\nA-1,9.99\nB-2,19.99\nC-3,29.99\n";
 // The same products after a price change of A-1.
 const CSV2 = "sku,price\nA-1,12.5\nB-2,19.99\nC-3,29.99\n";
@@ -60,8 +59,8 @@ async function exportPaged(host: BundleHost): Promise<Uint8Array> {
 }
 
 async function fieldValue(host: BundleHost, key: string): Promise<string | null | undefined> {
-  const all = await host.document.placeholders();
-  return all.find((p) => p.plugin === PLUGIN && p.key === key)?.value;
+  // A placeholder field, or (protocol 71) the text variable `paged:<key>`.
+  return (await dataFields(host as never)).find((p) => p.key === key)?.value;
 }
 
 describe.skipIf(!ready && !required)(
@@ -157,7 +156,11 @@ describe.skipIf(!ready && !required)(
       // paragraphs go in front of it, one per record.
       s.addVariableBinding("v_sku", "anchor", "q", "sku");
       await s.lowerAll();
-      const storyId = (await h.host.document.placeholders()).find((p) => p.key === "v_sku")!.storyId;
+      // The variable's frame is the only story (its field may be a text
+      // variable, protocol 71, which names no story).
+      const stories = await h.host.document.collection<{ selfId: string }>("stories");
+      expect(stories).toHaveLength(1);
+      const storyId = stories[0]!.selfId;
       const ins = await h.host.document.mutate({
         op: "insertText",
         args: { storyId, offset: 0, text: "A-1\nB-2\nC-3\n" },

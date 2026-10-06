@@ -118,3 +118,23 @@ export {
   type SwatchRow,
   type TargetRef,
 } from "./property";
+
+export {
+  TEXT_VARIABLE_PREFIX,
+  TEXT_VARIABLE_SELF,
+  cellAddress,
+  cellStyleSelf,
+  createTextVariableMutation,
+  encodeAddressPart,
+  fieldWriteMutation,
+  insertTextVariableMutation,
+  keyOfTextVariable,
+  ruleCellOps,
+  setTextVariableMutation,
+  textVariableAddress,
+  textVariableContents,
+  textVariableField,
+  textVariableId,
+  textVariableName,
+  valueOfContents,
+} from "./text-variables";

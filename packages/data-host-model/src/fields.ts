@@ -94,6 +94,10 @@ export interface PlaceholderField {
   plugin: string;
   key: string;
   value: string | null;
+  /** ADR 559 (protocol 71): set when this is one of our custom TEXT
+   *  VARIABLES (its `Self`), seen as a field — `storyId` is then its address
+   *  and a write is a `Set` on its contents (`text-variables.ts`). */
+  variable?: string;
 }
 
 /** The refresh decision for ONE enumerated placeholder: the engine-resolved

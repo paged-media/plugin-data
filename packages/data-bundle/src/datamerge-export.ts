@@ -47,8 +47,17 @@ export interface ImageField {
   field: string;
 }
 
+/** A variable placed as a custom text variable (engine protocol 71): every
+ *  instance of it becomes a Data Merge placeholder. */
+export interface VariableField {
+  /** The text variable's `Self` (`dTextVariablenpaged:<binding>`). */
+  variable: string;
+  field: string;
+}
+
 export interface MergeTemplateSpec {
   texts: readonly TextField[];
+  variables?: readonly VariableField[];
   images: readonly ImageField[];
   /** What `DataSourceFile` names (InDesign wants an absolute path; a bare
    *  name makes the user re-select the source once). */
@@ -102,8 +111,21 @@ function rewriteStory(
   fields: readonly TextField[],
   nextSelf: () => string,
   skipped: string[],
+  variables: readonly VariableField[] = [],
 ): { xml: string; sources: { self: string; field: string }[] } {
   const sources: { self: string; field: string }[] = [];
+  // 0. text variable instances of our variables (protocol 71).
+  if (variables.length > 0) {
+    const fieldOf = new Map(variables.map((v) => [escAttr(v.variable), v.field]));
+    xml = xml.replace(/<TextVariableInstance [^>]*\/>/g, (whole) => {
+      const id = /AssociatedTextVariable="([^"]*)"/.exec(whole)?.[1];
+      const field = id !== undefined ? fieldOf.get(id) : undefined;
+      if (field === undefined) return whole;
+      const self = nextSelf();
+      sources.push({ self, field });
+      return source(self, field);
+    });
+  }
   // 1. literal <<field>> in a Content node (not already a source).
   let out = xml.replace(/<Content>([^<]*)<\/Content>/g, (whole, body: string, at: number) => {
     const before = xml.slice(Math.max(0, at - 200), at);
@@ -175,7 +197,7 @@ export function dataMergeTemplate(entries: readonly ZipEntry[], spec: MergeTempl
   const out: ZipEntry[] = kept.map((e) => {
     if (!e.name.startsWith("Stories/")) return e;
     const xml = dec.decode(e.bytes);
-    const r = rewriteStory(xml, byStory.get(e) ?? [], nextSelf, skipped);
+    const r = rewriteStory(xml, byStory.get(e) ?? [], nextSelf, skipped, spec.variables ?? []);
     sources.push(...r.sources);
     return r.xml === xml ? e : { name: e.name, bytes: enc.encode(r.xml) };
   });

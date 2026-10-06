@@ -81,3 +81,39 @@ export async function openRealHost(extra: { engineShaper?: boolean } = {}): Prom
   await h.load(minimalIdml());
   return h;
 }
+
+/** One of paged.data's variable fields as a test reads it, whatever carries
+ *  it: a placeholder field (every engine) or, from protocol 71, a custom
+ *  text variable `paged:<key>` (ADR 559) — then `storyId` is its address,
+ *  `offset` 0 and `variable` its `Self`. */
+export interface DataField {
+  key: string;
+  storyId: string;
+  offset: number;
+  value: string | null;
+  variable?: string;
+}
+
+type FieldHost = {
+  document: { placeholders(): Promise<readonly { storyId: string; offset: number; plugin: string; key: string; value: string | null }[]> };
+  objects?: { query(s: string): Promise<string[]>; get(a: string, p: string): Promise<unknown> };
+};
+
+/** paged.data's fields in a document: placeholder fields first (story
+ *  order), then text variables (`<key>` contents = unresolved). */
+export async function dataFields(host: FieldHost): Promise<DataField[]> {
+  const out: DataField[] = (await host.document.placeholders())
+    .filter((p) => p.plugin === "media.paged.data")
+    .map((p) => ({ key: p.key, storyId: p.storyId, offset: p.offset, value: p.value }));
+  if (ENGINE_PROTOCOL >= 71 && host.objects) {
+    for (const address of await host.objects.query("textVariable")) {
+      const id = address.slice("textVariable:".length);
+      if (!id.startsWith("dTextVariablenpaged:")) continue;
+      const key = id.slice("dTextVariablenpaged:".length);
+      const v = (await host.objects.get(address, "textVariableContents")) as { value?: unknown };
+      const contents = typeof v.value === "string" ? v.value : null;
+      out.push({ key, storyId: address, offset: 0, value: contents === `<${key}>` ? null : contents, variable: id });
+    }
+  }
+  return out;
+}

@@ -479,6 +479,14 @@ export function onLabelled(base: Measured, v69: Partial<Measured>): Measured {
   return LABELLED ? { ...base, ...v69 } : base;
 }
 
+/** Engine protocol 71: variables are custom text variables (ADR 559). */
+export const TEXT_VARIABLES = ENGINE_PROTOCOL >= 71;
+
+/** A budget with the counts protocol 71 changes (on top of `onLabelled`). */
+export function onTextVariables(budget: Measured, v71: Partial<Measured>): Measured {
+  return TEXT_VARIABLES ? { ...budget, ...v71 } : budget;
+}
+
 export function expectBudget(scenario: string, m: Measured, budget: Measured): void {
   const moved: string[] = [];
   for (const k of Object.keys(budget) as (keyof Measured)[]) {

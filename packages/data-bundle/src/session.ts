@@ -36,7 +36,7 @@ import {
   FIELD_PLUGIN,
   backToFront,
   dataSetPlan,
-  setFieldValueMutation,
+  fieldWriteMutation,
   visibilityTarget,
   type DataSetApply,
   type DataSetTargets,
@@ -72,6 +72,7 @@ import { commitRecordFlow } from "./flow-writer";
 import { fitRecipe, labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
 import { propertyMethods, type PropertyMethods } from "./property-session";
 import { objectsOf } from "./property-lane";
+import { readTextVariableFields, textVariablesOn } from "./text-variables";
 import { contentPatch, type PayloadJson } from "./labels";
 import { documentLabelDoors, documentsDoors, engineHasDocumentLabels } from "./doors";
 import {
@@ -863,6 +864,9 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
    *  session starts and when another document opens, so no command pays for
    *  it; no host call at all when the SDK lacks the doors. */
   let labelProbe: Promise<boolean> = engineHasDocumentLabels(rawHost);
+  // ADR 559: whether variables are placed as text variables (protocol 71),
+  // asked now so no command pays for the first answer.
+  void textVariablesOn(rawHost);
   async function labelOn(): Promise<boolean> {
     if (labelActive === null) labelActive = await labelProbe;
     return labelActive;
@@ -1400,6 +1404,9 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       fields = ((await host.document.placeholders()) as readonly PlaceholderField[]).filter(
         (p) => p.plugin === FIELD_PLUGIN,
       );
+      // ADR 559 (protocol 71): a variable placed as a text variable counts
+      // as placed while its definition exists.
+      fields.push(...(await readTextVariableFields(rawHost)));
     } catch {
       return null;
     }
@@ -1431,7 +1438,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   ): Promise<PlaceholderField[] | null> {
     try {
       const all = (await host.document.placeholders()) as readonly PlaceholderField[];
-      return all.filter((p) => p.plugin === FIELD_PLUGIN && (key === undefined || p.key === key));
+      // ADR 559 (protocol 71): our text variables, as fields; placeholder
+      // fields of documents made before stay in the list (and are refreshed).
+      const variables = await readTextVariableFields(rawHost, key);
+      return [...all.filter((p) => p.plugin === FIELD_PLUGIN && (key === undefined || p.key === key)), ...variables];
     } catch (err) {
       report({
         level: "error",
@@ -1455,7 +1465,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
    *  rejection that names no child is reported against every write in it. */
   async function writeFields(
     source: SessionDiagnostic["source"],
-    writes: readonly { storyId: string; offset: number; key: string; value: string | null }[],
+    writes: readonly { storyId: string; offset: number; key: string; value: string | null; variable?: string }[],
   ): Promise<number> {
     if (writes.length > 0) await settleLabel();
     let pending = backToFront(writes);
@@ -1467,7 +1477,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         message: `the host rejected the field write at ${w.storyId}:${w.offset} (${errText(err)})`,
       });
     while (pending.length > 0) {
-      const ops = pending.map((w) => setFieldValueMutation(w.storyId, w.offset, w.value));
+      const ops = pending.map((w) => fieldWriteMutation(w, w.value));
       const out = await host.document.mutate(
         ops.length === 1 ? ops[0]! : { op: "batch", args: { ops } },
       );
@@ -1519,7 +1529,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   async function resolveDataSetTargets(
     applies: readonly DataSetApply[],
   ): Promise<DataSetTargets> {
-    const fields: Record<string, { storyId: string; offset: number }> = {};
+    const fields: Record<string, { storyId: string; offset: number; variable?: string }> = {};
     const frames: Record<string, string> = {};
     const elements: Record<string, ElementId> = {};
 
@@ -1536,6 +1546,11 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
           // EVERY copy — this apply path drives the first, then refreshFields
           // brings the rest in line on the next resolve.
           if (!(p.key in fields)) fields[p.key] = { storyId: p.storyId, offset: p.offset };
+        }
+        // ADR 559 (protocol 71): a text variable wins over an old field —
+        // one Set re-bakes every instance of it.
+        for (const v of await readTextVariableFields(rawHost)) {
+          fields[v.key] = { storyId: v.storyId, offset: v.offset, variable: v.variable! };
         }
       } catch (err) {
         host.log.warn(`data set: placeholders() read failed — ${String(err)}`);
@@ -1906,6 +1921,9 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       // ADR 559: no session part (an InDesign save drops it) — the recipe
       // comes back from the document's labels; only the data is gone.
       if (!reload && (await props.restoreLabels(openedDocLabel))) {
+        // The variables already in the text (a text variable survives
+        // InDesign) are placed: Lower must not add a second one.
+        await reconcilePlaced();
         state.status = "ready";
         state.message = `Restored ${bindingIds.length} binding(s) from the document's labels — re-link ${relinkSources.length} data source(s).`;
         emit();
@@ -2122,7 +2140,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     }
     const writes = fields
       .filter((f) => f.value !== value)
-      .map((f) => ({ storyId: f.storyId, offset: f.offset, key: id, value }));
+      .map((f) => ({ storyId: f.storyId, offset: f.offset, key: id, value, ...(f.variable ? { variable: f.variable } : {}) }));
     return writeFields("refresh", writes);
   }
 
@@ -3185,7 +3203,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
             const before = docChanges;
             const written = await writeFields(
               "preview",
-              stale.map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value })),
+              stale.map((f) => ({ storyId: f.storyId, offset: f.offset, key: bindingId, value, ...(f.variable ? { variable: f.variable } : {}) })),
             );
             const oneCopyPerStory = new Set(fields.map((f) => f.storyId)).size === fields.length;
             const onlyOurWrite = stale.length === 0 || (written === stale.length && docChanges === before + 1);
@@ -3251,7 +3269,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       const fields = await readOwnFields("refresh");
       if (fields === null) return 0;
 
-      const writes: { storyId: string; offset: number; key: string; value: string | null }[] = [];
+      const writes: { storyId: string; offset: number; key: string; value: string | null; variable?: string }[] = [];
       // Resolve each binding once, however many copies of its field exist —
       // all of them in ONE engine call when the wasm has it.
       const resolved = new Map<string, { value: string | null } | "kept" | "failed" | "same">();
@@ -3308,7 +3326,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         }
         if (r === "kept" || r === "failed" || r === "same") continue;
         if (r.value === f.value) continue; // minimal: only changed → a write
-        writes.push({ storyId: f.storyId, offset: f.offset, key: f.key, value: r.value });
+        writes.push({ storyId: f.storyId, offset: f.offset, key: f.key, value: r.value, ...(f.variable ? { variable: f.variable } : {}) });
       }
 
       const written = await writeFields("refresh", writes);
@@ -3538,10 +3556,16 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       const defs = payload.bindings ?? [];
       // Text: placed variable fields whose expression is a bare column.
       const texts: import("./datamerge-export").TextField[] = [];
+      const variables: import("./datamerge-export").VariableField[] = [];
       const fields = (await readOwnFields("refresh")) ?? [];
       for (const f of fields) {
         const def = defs.find((d) => d.id === f.key && d.kind === "variable");
         if (!def || !bare(def.expr)) continue;
+        // A text variable (protocol 71): each instance of it is a placeholder.
+        if (f.variable) {
+          variables.push({ variable: f.variable, field: String(def.expr).trim() });
+          continue;
+        }
         texts.push({ storyId: f.storyId, offset: f.offset, length: [...(f.value ?? "")].length, field: String(def.expr).trim() });
       }
       // Images: image bindings with a bare column, on their rectangle.
@@ -3558,7 +3582,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         return fail(`the document could not be exported: ${errText(err)}`);
       }
       const csvName = `${queryId ?? "data"}.csv`;
-      const res = dm.dataMergeTemplate(entries, { texts, images, dataSourceFile: opts.dataSourceFile ?? csvName });
+      const res = dm.dataMergeTemplate(entries, { texts, variables, images, dataSourceFile: opts.dataSourceFile ?? csvName });
       if (res.fields.length === 0) return { ...fail("no merge field: place a variable or image binding over a column, or type <<field>> into a frame"), skipped: res.skipped };
       // The data source: the query's rows, the template's columns.
       let rows: (string | null)[][] = [];

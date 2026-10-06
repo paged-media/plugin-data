@@ -115,7 +115,15 @@ describe.skipIf(!ready && !required)("universal property binding, real core + en
       data: { oid: string; bind: { id: string; kind: string; target: unknown; path: string; schema: unknown }[]; queries: { id: string }[]; sources: { id: string }[] };
     };
     expect(label.data.bind).toEqual([
-      expect.objectContaining({ id: "weight", kind: "property", target: "host", path: "frameStrokeWeight", schema: { type: { kind: "length" }, nullable: true } }),
+      // The schema row as the SDK serves it (0.2.44 adds the catalog's
+      // default and range).
+      expect.objectContaining({
+        id: "weight",
+        kind: "property",
+        target: "host",
+        path: "frameStrokeWeight",
+        schema: expect.objectContaining({ type: { kind: "length" }, nullable: true }),
+      }),
     ]);
     expect(label.data.queries.map((q) => q.id)).toEqual(["q"]);
     expect(label.data.sources.map((x) => x.id)).toEqual(["products"]);
