@@ -69,7 +69,7 @@ export function visibilityToMutations(
  *  turned into a mutation — an honest skip beats a fabricated write. */
 export interface DataSetApply {
   variable: string;
-  kind: "text" | "image" | "visibility" | "graphData";
+  kind: "text" | "image" | "visibility" | "graphData" | "property";
   text?: string;
   href?: string;
   visible?: boolean;
@@ -165,6 +165,9 @@ export function dataSetPlan(
         ops.push(visibilityMutation(el, a.visible));
         break;
       }
+      case "property":
+        // ADR 558: written through host.objects by the caller, not here.
+        break;
       case "graphData":
         skipped[a.variable] =
           a.note ?? "graph-data variables are carried through the library, never applied";

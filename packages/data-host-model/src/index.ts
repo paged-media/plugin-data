@@ -95,3 +95,26 @@ export {
 } from "./fields";
 
 export { toRuleApplication, type RuleResult, type RuleApplication } from "./rule";
+
+export {
+  DATA_LABEL_KEY,
+  PERSIST_KEYS,
+  asciiJson,
+  decodeAid,
+  findSwatch,
+  labelData,
+  mergeLabel,
+  mintSwatch,
+  oidOfSelector,
+  oidSelector,
+  planProperties,
+  targetSelector,
+  type ColorIntent,
+  type LoweredProperty,
+  type PropValue,
+  type PropertyApply,
+  type PropertyOutcome,
+  type PropertyPlan,
+  type SwatchRow,
+  type TargetRef,
+} from "./property";

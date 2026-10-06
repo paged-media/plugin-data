@@ -38,6 +38,7 @@ import { makeSourcesPanel } from "./panels/sources-panel";
 import { makeBindingsPanel } from "./panels/bindings-panel";
 import { makeDatasetPanel } from "./panels/dataset-panel";
 import { makeQueryPanel } from "./panels/query-panel";
+import { contributeObjectModel } from "./object-model";
 
 const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
 const BINDINGS_PANEL_ID = "media.paged.data.panel.bindings";
@@ -268,11 +269,38 @@ export function activate(host: BundleHost): BundleHandle {
       // this plugin's namespace and never a foreign one, so this cannot
       // claim another plugin's frame. Matching by KIND would claim every
       // rectangle in the document.
-      matches: (c) => c.metadata !== null,
+      // Since ADR 559 a page item also carries our label when a PROPERTY
+      // binding targets it (`oid` / `bind`); that frame is the designer's
+      // own content, not ours — only lowered content (`binding`) enters the
+      // data context.
+      matches: (c) => isLoweredContent(c.metadata),
       toolIds: [],
       panelIds: [BINDINGS_PANEL_ID],
     });
   }
+
+  // ADR 323 — paged.data's own objects (sources, queries, bindings, data
+  // sets, variables) and typed commands, for scripts, the CLI and the
+  // editor's "Bind to data…". A host without the door skips it.
+  const objectModel = contributeObjectModel(host, session, { bindings: BINDINGS_PANEL_ID });
+  // "Bind to data…" also as a plain command (the editor's command registry
+  // and the Actions recorder call commands by id; the typed twin is the
+  // object model's).
+  host.contribute.command({
+    id: "media.paged.data.bindProperty",
+    title: "Bind to data…",
+    category: "Data",
+    handler: (_paged, payload) => {
+      const p = (payload ?? {}) as { selector?: string; path?: string; schema?: string };
+      if (!p.selector || !p.path) {
+        host.log.warn("bindProperty: the payload needs { selector, path, schema }");
+        return null;
+      }
+      session.setPropertyDraft({ selector: p.selector, path: p.path, schema: p.schema ?? "" });
+      host.shell.openPanel(BINDINGS_PANEL_ID);
+      return { status: "draft", opened: true };
+    },
+  });
 
   host.log.info(`activated (apiVersion ${manifest.apiVersion})`);
 
@@ -286,8 +314,19 @@ export function activate(host: BundleHost): BundleHandle {
       sessions.delete(host);
       session.dispose();
       menuSub.dispose();
+      objectModel?.dispose();
     },
   };
+}
+
+/** Whether a label envelope (or its `data`) marks content this plugin
+ *  lowered — a table, a record flow, a barcode, a merge — rather than a
+ *  page item that only carries a binding (ADR 559). */
+export function isLoweredContent(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  const m = metadata as { data?: unknown };
+  const data = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
+  return "binding" in data || "merge" in data || "kind" in data || !("bind" in data || "oid" in data);
 }
 
 export {

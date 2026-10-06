@@ -108,6 +108,9 @@ export interface LoweredBarcode {
   modulesY: number;
   bounds: ContentBox;
   text: string;
+  /** The paint every module carries, as property triples (ADR 558 §4).
+   *  Absent in an IR written before it. */
+  paint?: { path: string; value: unknown }[];
 }
 
 /** A lowered visibility decision (§9.8 — the Illustrator "visibility variable").

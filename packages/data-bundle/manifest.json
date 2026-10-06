@@ -69,7 +69,8 @@
       "media.paged.data.command.openDataset",
       "media.paged.data.command.captureDataSet",
       "media.paged.data.command.applyDataSet",
-      "media.paged.data.command.editQuery"
+      "media.paged.data.command.editQuery",
+      "media.paged.data.bindProperty"
     ],
     "importers": [
       "media.paged.data.importer.table"
@@ -111,6 +112,409 @@
         "format": "xlsx",
         "linkable": false
       }
-    ]
+    ],
+    "objectModel": {
+      "kinds": [
+        {
+          "kind": "source",
+          "title": "Data source",
+          "schema": [
+            {
+              "path": "name",
+              "type": {
+                "kind": "text"
+              },
+              "access": "readOnly",
+              "summary": "The source name (the table its queries read)."
+            },
+            {
+              "path": "type",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "csv",
+                  "tsv",
+                  "json",
+                  "parquet",
+                  "xlsx",
+                  "remote",
+                  "other"
+                ]
+              },
+              "access": "readOnly",
+              "summary": "What it reads."
+            },
+            {
+              "path": "fileName",
+              "type": {
+                "kind": "text"
+              },
+              "access": "readOnly",
+              "summary": "The imported file, when it is a file."
+            },
+            {
+              "path": "url",
+              "type": {
+                "kind": "text"
+              },
+              "access": "readOnly",
+              "summary": "The URL, when it is remote."
+            },
+            {
+              "path": "refresh",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "manual",
+                  "onOpen",
+                  "interval"
+                ]
+              },
+              "summary": "When it refreshes (interval: every 300 s)."
+            },
+            {
+              "path": "relink",
+              "type": {
+                "kind": "bool"
+              },
+              "access": "derived",
+              "summary": "Its data was not in the file (restored from labels): import it again."
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "title": "Data query",
+          "schema": [
+            {
+              "path": "sql",
+              "type": {
+                "kind": "text",
+                "multiline": true
+              },
+              "summary": "One SELECT over the source tables."
+            },
+            {
+              "path": "shape",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "recordStream",
+                  "singleRecord",
+                  "scalar"
+                ]
+              },
+              "summary": "How bindings read the result."
+            },
+            {
+              "path": "recordCount",
+              "type": {
+                "kind": "number",
+                "integer": true
+              },
+              "access": "derived",
+              "summary": "Records ingested (0 before a refresh)."
+            }
+          ]
+        },
+        {
+          "kind": "binding",
+          "title": "Data binding",
+          "schema": [
+            {
+              "path": "kind",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "variable",
+                  "image",
+                  "table",
+                  "recordFlow",
+                  "rule",
+                  "barcode",
+                  "visibility",
+                  "property"
+                ]
+              },
+              "access": "readOnly",
+              "summary": "The binding kind."
+            },
+            {
+              "path": "query",
+              "type": {
+                "kind": "ref",
+                "to": "plugin:media.paged.data/query"
+              },
+              "summary": "The query it reads."
+            },
+            {
+              "path": "expr",
+              "type": {
+                "kind": "text"
+              },
+              "summary": "The binding expression."
+            },
+            {
+              "path": "target",
+              "type": {
+                "kind": "text"
+              },
+              "summary": "Property bindings: the selector of the objects it writes (ADR 131)."
+            },
+            {
+              "path": "path",
+              "type": {
+                "kind": "text"
+              },
+              "summary": "Property bindings: the property path it writes (ADR 132)."
+            },
+            {
+              "path": "coerce",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "strict",
+                  "lenient"
+                ]
+              },
+              "summary": "Property bindings: a value that does not fit fails (strict) or takes the missing policy (lenient)."
+            },
+            {
+              "path": "missing",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "keepLast",
+                  "clear",
+                  "default",
+                  "error"
+                ]
+              },
+              "summary": "Property bindings: what a missing value writes."
+            },
+            {
+              "path": "status",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "linked",
+                  "pinned",
+                  "overridden",
+                  "stale",
+                  "error"
+                ]
+              },
+              "summary": "The sync state; set pinned to freeze it, linked to follow the data again."
+            },
+            {
+              "path": "definition",
+              "type": {
+                "kind": "text",
+                "multiline": true
+              },
+              "summary": "The whole definition (JSON); set it to redefine the binding."
+            }
+          ]
+        },
+        {
+          "kind": "dataSet",
+          "title": "Data set",
+          "schema": [
+            {
+              "path": "name",
+              "type": {
+                "kind": "text"
+              },
+              "access": "readOnly",
+              "summary": "The data set name."
+            },
+            {
+              "path": "values",
+              "type": {
+                "kind": "map",
+                "of": {
+                  "kind": "text"
+                }
+              },
+              "access": "readOnly",
+              "summary": "The captured value per variable (display form)."
+            }
+          ]
+        },
+        {
+          "kind": "variable",
+          "title": "Variable",
+          "schema": [
+            {
+              "path": "name",
+              "type": {
+                "kind": "text"
+              },
+              "access": "readOnly",
+              "summary": "The variable name (= its binding id)."
+            },
+            {
+              "path": "trait",
+              "type": {
+                "kind": "enum",
+                "members": [
+                  "textcontent",
+                  "filereference",
+                  "visibility",
+                  "graphdata",
+                  "property"
+                ]
+              },
+              "access": "readOnly",
+              "summary": "What it drives."
+            },
+            {
+              "path": "bound",
+              "type": {
+                "kind": "bool"
+              },
+              "access": "derived",
+              "summary": "A binding of that id exists in this document."
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "id": "media.paged.data.bindProperty",
+          "title": "Bind to data…",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "selector": {
+                "kind": "text"
+              },
+              "path": {
+                "kind": "text"
+              },
+              "schema": {
+                "kind": "text"
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.defineProperty",
+          "title": "Define a property binding",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "id": {
+                "kind": "text"
+              },
+              "selector": {
+                "kind": "text"
+              },
+              "path": {
+                "kind": "text"
+              },
+              "query": {
+                "kind": "text"
+              },
+              "expr": {
+                "kind": "text"
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.propertyBindings",
+          "title": "Property bindings of an object",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "address": {
+                "kind": "text"
+              },
+              "path": {
+                "kind": "text"
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.refresh",
+          "title": "Refresh data from sources",
+          "args": {
+            "kind": "struct",
+            "fields": {}
+          }
+        },
+        {
+          "id": "media.paged.data.apply",
+          "title": "Apply every binding (record)",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "record": {
+                "kind": "number",
+                "integer": true
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.defineSource",
+          "title": "Define a CSV source",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "name": {
+                "kind": "text"
+              },
+              "csv": {
+                "kind": "text",
+                "multiline": true
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.captureDataSet",
+          "title": "Capture a data set",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "name": {
+                "kind": "text"
+              },
+              "record": {
+                "kind": "number",
+                "integer": true
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.applyDataSet",
+          "title": "Apply a data set",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "name": {
+                "kind": "text"
+              }
+            }
+          }
+        },
+        {
+          "id": "media.paged.data.exportDataMergeTemplate",
+          "title": "Export as InDesign Data Merge template",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "save": {
+                "kind": "bool"
+              }
+            }
+          }
+        }
+      ]
+    }
   }
 }

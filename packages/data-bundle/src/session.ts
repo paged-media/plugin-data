@@ -69,7 +69,10 @@ import {
 } from "./persist";
 import type { LowerStamp, LoweredTableAt } from "./lower";
 import { commitRecordFlow } from "./flow-writer";
-import { labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
+import { fitRecipe, labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
+import { propertyMethods, type PropertyMethods } from "./property-session";
+import { objectsOf } from "./property-lane";
+import type { PayloadJson } from "./labels";
 import { documentLabelDoors, documentsDoors, engineHasDocumentLabels } from "./doors";
 import {
   mergeRecords as writeMerge,
@@ -220,6 +223,9 @@ export interface SessionState {
   refresh: Record<string, RefreshPolicy>;
   /** Remote sources being polled now (interval policy, consented origin). */
   polling: string[];
+  /** ADR 559: file sources restored from the document's labels whose data
+   *  was not in the file — import them again ("re-link"). */
+  relink?: string[];
 }
 
 /** One imported local file, as the Sources panel lists it. */
@@ -460,11 +466,23 @@ export interface SessionMergeOptions {
 
 /** Why a merge to a new document cannot run on a host without the
  *  documents door (D-26). */
+/** What "Export as InDesign Data Merge template" produced. */
+export interface DataMergeExport {
+  ok: boolean;
+  reason?: string;
+  idml?: Uint8Array;
+  csv?: Uint8Array;
+  /** The merged fields (`@field` = an image field). */
+  fields: string[];
+  skipped: string[];
+  fileName?: string;
+}
+
 export const NO_NEW_DOCUMENT_DOOR =
   "this host cannot open a second document (no documents door, D-26) — merge into the current document instead";
 
 /** The session API the panels + commands drive. */
-export interface DataSourceSession extends ReviewSession {
+export interface DataSourceSession extends ReviewSession, PropertyMethods {
   getState(): SessionState;
   /** Drop every diagnostic (the panel's "clear" action). */
   clearDiagnostics(): void;
@@ -785,6 +803,11 @@ export interface DataSourceSession extends ReviewSession {
   /** Pin a binding (a refresh leaves its content alone) or link it again.
    *  Saved with the session. */
   setPinned(id: string, pinned: boolean): void;
+  /** The engine's sync status of a binding (`"linked"`, `"pinned"`, …). */
+  syncStatusOf(id: string): string | null;
+  /** ADR 559: write this document as an InDesign Data Merge template (IDML
+   *  + a UTF-16 CSV of the merged query); `save` hands both to the user. */
+  exportDataMergeTemplate(opts?: { save?: boolean }): Promise<DataMergeExport>;
   /** Listen for session changes (a restore finishing, a diagnostic, a save). */
   onDidChange(listener: () => void): Disposable;
   /** Restore the document's saved session part (activate calls this once).
@@ -830,7 +853,11 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       labelActive = false;
       pendingLabel = null;
     },
+    recipe: () => labelRecipe,
   });
+  /** ADR 559: the document-scope recipe the document label carries (set
+   *  when the session part is written; fitted to the label budget). */
+  let labelRecipe: unknown = null;
   /** Whether this document's session is labelled (the SDK forwards the label
    *  doors and the engine has them). Probed once per document, as the
    *  session starts and when another document opens, so no command pays for
@@ -848,7 +875,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   // re-places, a table re-lowers).
   const bindingKinds = new Map<
     string,
-    "variable" | "table" | "image" | "rule" | "recordFlow" | "barcode" | "visibility"
+    "variable" | "table" | "image" | "rule" | "recordFlow" | "barcode" | "visibility" | "property"
   >();
   // §9.8: the bound element a visibility binding shows/hides. `kind` is the
   // caller's (the panel binds from the selection, which carries it); absent, it
@@ -920,6 +947,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   let engine: DataEngineLike | null = null;
   let duck: DuckDBHandle | null = null;
   const diagnostics: SessionDiagnostic[] = [];
+  const relinkSources: string[] = [];
   const state: SessionState = {
     status: "idle",
     message: "No data sources yet — import a CSV to begin.",
@@ -932,7 +960,12 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     files: [],
     refresh: {},
     polling: [],
+    relink: relinkSources,
   };
+  // ADR 558/559: property bindings carried by an element (binding → oid,
+  // and the element while this session knows it).
+  const hostOids = new Map<string, string>();
+  const hostElements = new Map<string, ElementId>();
 
   // ── wave 6: local files beyond CSV, refresh policies, the query guard ────
   /** An imported JSON / Parquet / XLSX file: the bytes the session saves. */
@@ -1020,7 +1053,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   } | null = null;
 
   /** Set while `lowerAll` runs: what its lowerings share (the active page). */
-  let lowerCtx: LowerContext | undefined;
+  let lowerCtx: (LowerContext & { properties?: string[] }) | undefined;
 
   /** What a re-lower of `target` must clear (relower.ts): one tree read (and
    *  a pages read for a flow or a merge). A host without the tree read clears only what this
@@ -1130,6 +1163,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       try {
         const built = await buildPersisted();
         if (!built || epoch !== docEpoch) return;
+        labelRecipe = fitRecipe(built.engine);
         const version = encodeSession(built);
         const labels = (await labelOn()) && epoch === docEpoch;
         // Protocol 69: the part records the version the label names (`base`).
@@ -1789,6 +1823,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     poller.stopAll();
     state.polling = [];
     loweredInto.clear();
+    hostOids.clear();
+    hostElements.clear();
+    relinkSources.length = 0;
+    labelRecipe = null;
     pendingDefs.length = 0;
     knownDataParts.clear();
     bootPayload = null;
@@ -1853,7 +1891,16 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       });
       return;
     }
-    if (!bytes) return;
+    if (!bytes) {
+      // ADR 559: no session part (an InDesign save drops it) — the recipe
+      // comes back from the document's labels; only the data is gone.
+      if (!reload && (await props.restoreLabels())) {
+        state.status = "ready";
+        state.message = `Restored ${bindingIds.length} binding(s) from the document's labels — re-link ${relinkSources.length} data source(s).`;
+        emit();
+      }
+      return;
+    }
     const saved = decodeSession(bytes);
     if ("error" in saved) {
       report({ level: "error", source: "restore", message: saved.error });
@@ -2024,6 +2071,9 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       host.document.onWillSave(async () => {
         await flushPersistInternal();
         await collectDataParts();
+        // ADR 559: the recipe also lives in the elements' labels (the first
+        // save of a session written before them adds them).
+        await props.syncLabels().catch(() => ({ written: 0 }));
       }),
     );
   }
@@ -2065,7 +2115,35 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     return writeFields("refresh", writes);
   }
 
+  // ADR 558/559 — property bindings, element labels, restore from labels.
+  const props = propertyMethods({
+    host,
+    ensureEngine,
+    engineIfUp: () => engine,
+    loadRecipe: async (payload: PayloadJson) => {
+      bootPayload = payload;
+      return ensureEngine();
+    },
+    report: (d) => report(d),
+    markDirty,
+    emit,
+    bindingKinds: bindingKinds as never,
+    bindingIds,
+    queries,
+    sourceNames,
+    visibilityTargets: visibilityTargets as never,
+    imageTargets: imageTargets as never,
+    barcodeTargets,
+    loweredInto,
+    ruleTargets: ruleTargets as never,
+    hostOids,
+    hostElements,
+    relink: relinkSources,
+  });
+  const objectsUp = () => objectsOf(host) !== null;
+
   const self: DataSourceSession = {
+    ...props,
     ...reviewMethods({
       host,
       ensureEngine,
@@ -2109,6 +2187,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     },
 
     async registerCsvSource(name, csvText) {
+      const relinked = relinkSources.indexOf(name);
+      if (relinked >= 0) relinkSources.splice(relinked, 1);
       try {
         const d = await ensureDuck();
         await d.registerCsv(name, csvText);
@@ -2613,8 +2693,25 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         // The engine decided WHAT; the host knows WHERE. Resolve each applicable
         // row's address from the live document, then commit the lot as ONE batch.
         const targets = await resolveDataSetTargets(applies);
-        const plan = dataSetPlan(applies, targets);
+        const plan = dataSetPlan(applies.filter((a) => a.kind !== "property"), targets);
         const result = await commitDataSet(host, plan);
+        // ADR 558: the property rows — any property of any object — in ONE
+        // host.objects batch (a data set over both lanes is two steps until
+        // field writes have an object-model address).
+        const propertyRows = applies.filter(
+          (a) => a.kind === "property" && a.applicable && (a as { property?: unknown }).property,
+        ) as unknown as { variable: string; property: import("../../data-host-model/src").LoweredProperty }[];
+        if (propertyRows.length > 0) {
+          const { commitProperties } = await import("./property-lane");
+          const r = await commitProperties(
+            host,
+            propertyRows.map((a) => ({ binding: a.variable, property: a.property })),
+            Object.fromEntries(hostOids),
+            `Apply data set "${name}"`,
+          );
+          result.applied += Object.keys(r.written).length;
+          Object.assign(result.skipped, r.skipped);
+        }
         state.status = "ready";
         const skippedCount = Object.keys(result.skipped).length;
         state.message =
@@ -2771,6 +2868,20 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     async lowerBinding(id) {
       try {
         const e = await ensureEngine();
+        // ADR 558: property bindings (and visibility, re-expressed as its
+        // elementVisible triple, where the host has the object model) write
+        // through host.objects — in lowerAll, all of them in ONE batch.
+        const kind = bindingKinds.get(id);
+        if (kind === "property" || (kind === "visibility" && objectsUp())) {
+          if (lowerCtx?.properties) {
+            lowerCtx.properties.push(id);
+          } else {
+            const r = await props.applyProperties({ ids: [id], withVisibility: true });
+            state.status = "ready";
+            state.message = `Applied "${id}": ${r.applied} write(s) in ${r.undoSteps} undo step(s).`;
+          }
+          return;
+        }
         // A rule is not a resolvable lowering — it applies a style decision over
         // a scope (D-13); route it through applyRule, not resolve_lowered.
         if (bindingKinds.get(id) === "recordFlow") {
@@ -2896,7 +3007,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       // One command: its lowerings share one read of the active page.
       // Variables are planned first and placed together: one batch, one undo
       // step for the whole command (budget W5).
-      const ctx: LowerContext = { variables: [] };
+      const ctx: LowerContext & { properties?: string[] } = { variables: [], properties: [] };
       lowerCtx = ctx;
       try {
         for (const id of [...bindingIds]) {
@@ -2905,6 +3016,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         if (ctx.variables!.length > 0) await settleLabel();
         const placed = await commitLoweredVariables(host, ctx.variables!, ctx);
         for (const key of placed.keys()) placedVariables.add(key);
+        // ADR 558: every property binding of the command in ONE batch.
+        if (ctx.properties!.length > 0) {
+          await props.applyProperties({ ids: ctx.properties!, withVisibility: true });
+        }
       } finally {
         lowerCtx = undefined;
       }
@@ -2978,6 +3093,11 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         const kind = bindingKinds.get(bindingId);
         // Rules and record flows have no per-record value to step through.
         if (kind === "rule" || kind === "recordFlow") return;
+        // ADR 558: a property binding steps through host.objects.
+        if (kind === "property" || (kind === "visibility" && objectsUp())) {
+          await props.applyProperties({ record, ids: [bindingId], withVisibility: true });
+          return;
+        }
 
         // Barcode: re-encode for the previewed record, scaled to its frame box.
         if (kind === "barcode") {
@@ -3385,6 +3505,82 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
 
     listBindings() {
       return bindingIds.map((id) => ({ id, kind: bindingKinds.get(id) ?? "?" }));
+    },
+
+    syncStatusOf(id) {
+      return engine ? syncStatus(engine, id) : null;
+    },
+
+    async exportDataMergeTemplate(opts = {}) {
+      const fail = (reason: string): DataMergeExport => ({ ok: false, reason, fields: [], skipped: [] });
+      const docs = documentsDoors(rawHost);
+      if (!docs) return fail("this host cannot export the document (documents.exportPaged)");
+      let e: DataEngineLike;
+      try {
+        e = await ensureEngine();
+      } catch (err) {
+        return fail(`engine unavailable: ${errText(err)}`);
+      }
+      await flushPersistInternal();
+      const payload = (e.payload() ?? {}) as PayloadJson;
+      const bare = (x: unknown) => typeof x === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(x.trim());
+      const defs = payload.bindings ?? [];
+      // Text: placed variable fields whose expression is a bare column.
+      const texts: import("./datamerge-export").TextField[] = [];
+      const fields = (await readOwnFields("refresh")) ?? [];
+      for (const f of fields) {
+        const def = defs.find((d) => d.id === f.key && d.kind === "variable");
+        if (!def || !bare(def.expr)) continue;
+        texts.push({ storyId: f.storyId, offset: f.offset, length: [...(f.value ?? "")].length, field: String(def.expr).trim() });
+      }
+      // Images: image bindings with a bare column, on their rectangle.
+      const images = defs
+        .filter((d) => d.kind === "image" && bare(d.expr) && imageTargets.has(d.id))
+        .map((d) => ({ frame: imageTargets.get(d.id)!.elementId, field: String(d.expr).trim() }));
+      const used = defs.find((d) => (d.kind === "variable" || d.kind === "image") && bare(d.expr));
+      const queryId = (used?.query as string | undefined) ?? [...queries.keys()][0];
+      const dm = await import("./datamerge-export");
+      let entries: import("./datamerge-export").ZipEntry[];
+      try {
+        entries = await dm.readZip(await docs.exportPaged());
+      } catch (err) {
+        return fail(`the document could not be exported: ${errText(err)}`);
+      }
+      const csvName = `${queryId ?? "data"}.csv`;
+      const res = dm.dataMergeTemplate(entries, { texts, images, dataSourceFile: csvName });
+      if (res.fields.length === 0) return { ...fail("no merge field: place a variable or image binding over a column, or type <<field>> into a frame"), skipped: res.skipped };
+      // The data source: the query's rows, the template's columns.
+      let rows: (string | null)[][] = [];
+      const q = queryId ? queries.get(queryId) : undefined;
+      if (q) {
+        try {
+          const preview = await self.previewQuery(q.sql, 100_000);
+          const ix = res.fields.map((f) => preview.columns.findIndex((c) => c.name === f.replace(/^@/, "")));
+          rows = preview.rows.map((r) => ix.map((i) => (i >= 0 ? (r[i] ?? null) : null)));
+        } catch (err) {
+          res.skipped.push(`the data rows could not be read: ${errText(err)}`);
+        }
+      }
+      const csv = dm.utf16Csv(res.fields, rows);
+      const idml = await dm.writeZip(res.entries);
+      let name = "Document";
+      try {
+        name = ((await host.document.meta()).documentName as string) || name;
+      } catch {
+        // keep the default
+      }
+      const fileName = `${name.replace(/\.(paged|idml|indd)$/i, "")} (Data Merge).idml`;
+      if (opts.save) {
+        try {
+          await host.shell.saveFile({ suggestedName: fileName, bytes: idml, mimeType: "application/vnd.adobe.indesign-idml-package" });
+          await host.shell.saveFile({ suggestedName: csvName, bytes: csv, mimeType: "text/csv" });
+        } catch (err) {
+          res.skipped.push(`the files could not be handed out: ${errText(err)}`);
+        }
+      }
+      state.message = `Data Merge template: ${res.fields.length} field(s)${res.skipped.length ? `, ${res.skipped.length} skipped` : ""}.`;
+      emit();
+      return { ok: true, idml, csv, fields: res.fields, skipped: res.skipped, fileName };
     },
 
     async planBatch(queryId, mode) {

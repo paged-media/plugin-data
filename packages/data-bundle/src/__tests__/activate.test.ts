@@ -137,7 +137,7 @@ describe("data_plugin_bundle_activate", () => {
     expect(fake.panels[2].title).toBe("Dataset preview");
   });
 
-  it("registers the nine commands under their declared ids", () => {
+  it("registers the ten commands under their declared ids", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
     expect(fake.commands.map((c) => c.id)).toEqual([
@@ -150,6 +150,8 @@ describe("data_plugin_bundle_activate", () => {
       "media.paged.data.command.captureDataSet",
       "media.paged.data.command.applyDataSet",
       "media.paged.data.command.editQuery",
+      // ADR 558: "Bind to data…" (its typed twin is the object model's).
+      "media.paged.data.bindProperty",
     ]);
   });
 

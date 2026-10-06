@@ -70,26 +70,25 @@ const CREATED_PATH: ElementId = { kind: "polygon", id: "$created" } as ElementId
 export const BARCODE_FILL_SWATCH = "Color/Black";
 export const BARCODE_STROKE_SWATCH = "Swatch/None";
 
-/** The paint ops for the module path just created. */
-function modulePaint(): Mutation[] {
-  return [
-    {
-      op: "setElementProperty",
-      args: {
-        elementId: CREATED_PATH,
-        path: "frameFillColor",
-        value: { type: "colorRef", value: BARCODE_FILL_SWATCH },
-      },
+/** The paint ops for the module path just created: the IR's paint triples
+ *  (ADR 558 §4 — the engine owns the constants since `paint` exists), else
+ *  the same constants for an IR written before it. */
+function modulePaint(paint?: readonly { path: string; value: unknown }[]): Mutation[] {
+  const triples =
+    paint && paint.length > 0
+      ? paint
+      : [
+          { path: "frameFillColor", value: BARCODE_FILL_SWATCH },
+          { path: "frameStrokeColor", value: BARCODE_STROKE_SWATCH },
+        ];
+  return triples.map((t) => ({
+    op: "setElementProperty",
+    args: {
+      elementId: CREATED_PATH,
+      path: t.path,
+      value: { type: "colorRef", value: t.value },
     },
-    {
-      op: "setElementProperty",
-      args: {
-        elementId: CREATED_PATH,
-        path: "frameStrokeColor",
-        value: { type: "colorRef", value: BARCODE_STROKE_SWATCH },
-      },
-    },
-  ];
+  })) as Mutation[];
 }
 
 /** Where the barcode lands on the page: the bound frame's page-coordinate
@@ -128,7 +127,7 @@ export function barcodeToMutations(
         open: false,
       },
     });
-    ops.push(...modulePaint());
+    ops.push(...modulePaint(barcode.paint));
   }
   // Stamp the binding envelope onto the LAST created path ($created resolves
   // to the most recent creation in the batch) so an undo of the whole batch

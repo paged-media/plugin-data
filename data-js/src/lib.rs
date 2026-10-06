@@ -447,6 +447,11 @@ mod wasm {
                 .map_err(map_err)
         }
 
+        /// Remove a binding from the recipe; `true` when it existed.
+        pub fn remove_binding(&mut self, binding: &str) -> bool {
+            self.session.remove_binding(&BindingId::from(binding))
+        }
+
         /// ADR 558 — every property binding's lowering over `record` (and
         /// the visibility bindings re-expressed, with `with_visibility`),
         /// for one apply. `bindings` narrows it (`undefined` = all).

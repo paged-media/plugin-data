@@ -408,6 +408,17 @@ impl DataSession {
         upsert(&mut self.bindings, def, |a, b| a.id == b.id);
     }
 
+    /// Remove a binding from the recipe (and its locale override); `true`
+    /// when it existed. The data sets keep their captured values — a
+    /// re-defined binding of the same id picks them up again.
+    pub fn remove_binding(&mut self, id: &BindingId) -> bool {
+        self.binding_locales.remove(id.as_str());
+        let before = self.bindings.len();
+        self.bindings.retain(|b| &b.id != id);
+        self.variables.variables.retain(|v| v.name != id.as_str());
+        self.engine.remove_binding(id) | (self.bindings.len() != before)
+    }
+
     /// Register a per-record template (the "catalog cell", §9.4).
     pub fn define_template(&mut self, template: Template) {
         self.engine.add_template(template.clone());

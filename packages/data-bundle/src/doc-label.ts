@@ -17,7 +17,7 @@
 
 import type { BundleHost, Mutation, MutationOutcome } from "@paged-media/plugin-api";
 
-import { BINDING_KEY } from "../../data-host-model/src";
+import { BINDING_KEY, asciiJson } from "../../data-host-model/src";
 
 /** The folder session versions are written to (under `paged/media.paged.data/`). */
 export const SESSION_VERSION_DIR = "sessions/";
@@ -31,17 +31,31 @@ export function sessionVersionPath(hash: string): string {
 }
 
 /** The label that names session version `hash`. */
-export function labelEnvelope(hash: string): { v: number; data: { session: string } } {
-  return { v: LABEL_VERSION, data: { session: hash } };
+export function labelEnvelope(hash: string, recipe?: unknown): { v: number; data: { session: string; recipe?: unknown } } {
+  return { v: LABEL_VERSION, data: { session: hash, ...(recipe ? { recipe } : {}) } };
+}
+
+/** The document label's room for the recipe (ADR 559 point 4): the engine
+ *  caps a label value at 64 KiB. A recipe over it drops its captured data
+ *  sets first, then rides without a recipe (the part still has it). */
+export const RECIPE_BUDGET = 56 * 1024;
+
+/** The recipe the document label carries, fitted to the budget, or null. */
+export function fitRecipe(payload: unknown): unknown | null {
+  if (!payload || typeof payload !== "object") return null;
+  if (asciiJson(payload).length <= RECIPE_BUDGET) return payload;
+  const p = payload as { variables?: { dataSets?: unknown[] } };
+  const lean = p.variables ? { ...p, variables: { ...p.variables, dataSets: [] } } : p;
+  return asciiJson(lean).length <= RECIPE_BUDGET ? lean : null;
 }
 
 /** The raw op that writes the label. The key is the calling plugin's own
  *  (`x-paged:<manifest id>`, the key `getDocumentMetadata` reads); the SDK
  *  refuses any other. */
-export function labelMutation(hash: string, key: string = BINDING_KEY): Mutation {
+export function labelMutation(hash: string, key: string = BINDING_KEY, recipe?: unknown): Mutation {
   return {
     op: "setDocumentMetadata",
-    args: { key, value: JSON.stringify(labelEnvelope(hash)) },
+    args: { key, value: asciiJson(labelEnvelope(hash, recipe)) },
   } as unknown as Mutation;
 }
 
@@ -88,6 +102,8 @@ export interface LabelRiderState {
   written(hash: string): void;
   /** The engine refused the label op itself: stop riding. */
   refused(): void;
+  /** The document-scope recipe to carry with the label (ADR 559), or null. */
+  recipe?(): unknown;
 }
 
 const BATCH_CHILD = /Batch child (\d+)/;
@@ -112,7 +128,7 @@ export function labelRider(host: BundleHost, state: LabelRiderState): BundleHost
     const single = m.op !== "batch";
     if (!hash || (single && !WRAPPABLE.has(m.op))) return doc.mutate(m);
     const ops = single ? [m] : (m.args as { ops: Mutation[] }).ops;
-    const outcome = await doc.mutate({ op: "batch", args: { ops: [...ops, labelMutation(hash, key)] } } as Mutation);
+    const outcome = await doc.mutate({ op: "batch", args: { ops: [...ops, labelMutation(hash, key, state.recipe?.() ?? undefined)] } } as Mutation);
     if (outcome.applied) {
       state.written(hash);
       return outcome;

@@ -57,6 +57,12 @@ export interface DataEngineLike {
    *  equal tokens, equal data. `undefined` before an ingest. */
   result_token?(query: string): string | undefined;
   resolve_lowered(binding: string): unknown;
+  /** ADR 558: every property binding's lowering over `record` (with
+   *  `withVisibility`, visibility bindings re-expressed too), for ONE apply
+   *  (`PropertyApply[]`). Optional: a wasm built before it lacks it. */
+  resolve_properties_at?(record: number, withVisibility: boolean, bindings?: string[]): unknown;
+  /** Remove a binding from the recipe. Optional (a wasm built before it). */
+  remove_binding?(binding: string): boolean;
   /** §9 record-preview stepper: the count of records ingested for a query — the
    *  stepper's "of N" upper bound (0 before a refresh). Optional: a wasm
    *  artifact built before the preview lane lacks it. */

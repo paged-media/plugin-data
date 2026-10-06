@@ -636,3 +636,13 @@ fn a_property_binding_round_trips_through_the_payload__feat__data_bind_property(
         }
     ));
 }
+
+#[test]
+fn a_binding_can_be_removed__feat__data_bind_property() {
+    let mut s = session();
+    assert!(s.remove_binding(&BindingId::from("fill")));
+    assert!(!s.remove_binding(&BindingId::from("fill")));
+    assert!(s.payload().bindings.iter().all(|b| b.id.as_str() != "fill"));
+    assert_eq!(s.resolve_properties_at(0, false, None).len(), 2);
+    assert!(s.sync_state(&BindingId::from("fill")).is_none());
+}

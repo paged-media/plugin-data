@@ -342,6 +342,14 @@ impl ResolutionEngine {
         self.bindings.insert(id, binding);
     }
 
+    /// Remove a binding (the recipe, its sync state and its locale
+    /// override). `true` when it existed.
+    pub fn remove_binding(&mut self, id: &BindingId) -> bool {
+        self.sync.remove(id);
+        self.binding_locales.remove(id);
+        self.bindings.remove(id).is_some()
+    }
+
     /// Register a per-record template (the "catalog cell", §9.4).
     pub fn add_template(&mut self, template: Template) {
         self.templates.insert(template.id.clone(), template);
