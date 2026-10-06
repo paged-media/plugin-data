@@ -61,7 +61,7 @@ import {
   type RuleTarget,
 } from "../../data-host-model/src";
 import { objectsOf } from "./property-lane";
-import { ownTextVariableIds, textVariablesOn } from "./text-variables";
+import { ownTextVariables, textVariablesOn } from "./text-variables";
 
 /** What one command's lowerings share: the active page, read once. */
 export interface LowerContext {
@@ -385,22 +385,23 @@ async function frameStory(host: BundleHost, frameId: string): Promise<string | n
 
 /** What a variable is placed as (ADR 559): from engine protocol 71 a custom
  *  TEXT VARIABLE `paged:<key>` (InDesign keeps it), before that a placeholder
- *  field. `existing` holds the ids of our text variables already defined, so
- *  a second instance re-uses the definition instead of creating it twice. */
+ *  field. `existing` maps the keys of our text variables already defined to
+ *  their `Self`, so a second instance re-uses the definition instead of
+ *  creating it twice (and finds it under the id an InDesign save gave it). */
 interface VariableCarrier {
   textVariables: boolean;
-  existing: Set<string>;
+  existing: Map<string, string>;
 }
 
 /** Read the carrier once per placement command: no host call before
  *  protocol 71 (the detection answers from the object model's probe); one
  *  text-variable query from it on. */
 async function variableCarrier(host: BundleHost): Promise<VariableCarrier> {
-  if (!(await textVariablesOn(host))) return { textVariables: false, existing: new Set() };
+  if (!(await textVariablesOn(host))) return { textVariables: false, existing: new Map() };
   try {
-    return { textVariables: true, existing: new Set(await ownTextVariableIds(host)) };
+    return { textVariables: true, existing: await ownTextVariables(host) };
   } catch {
-    return { textVariables: true, existing: new Set() };
+    return { textVariables: true, existing: new Map() };
   }
 }
 
@@ -416,10 +417,11 @@ function placeVariableOps(
   contentOffset?: number,
 ): Mutation[] {
   if (!carrier.textVariables) return [insertFieldMutation(storyId, offset, key, value, contentOffset)];
-  const id = textVariableId(key);
-  const head = carrier.existing.has(id) ? setTextVariableMutation(id, key, value) : createTextVariableMutation(key, value);
-  carrier.existing.add(id);
-  return [head, insertTextVariableMutation(storyId, offset, key, contentOffset)];
+  const known = carrier.existing.get(key);
+  const id = known ?? textVariableId(key);
+  const head = known ? setTextVariableMutation(id, key, value) : createTextVariableMutation(key, value);
+  carrier.existing.set(key, id);
+  return [head, insertTextVariableMutation(storyId, offset, id, contentOffset)];
 }
 
 /** Place a lowered variable as a tagged placeholder FIELD (D-01, protocol v43).

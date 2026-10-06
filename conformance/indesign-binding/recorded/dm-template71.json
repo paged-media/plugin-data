@@ -1,0 +1,64 @@
+{
+  "fixture": "dm-template71.idml",
+  "indesign_version": "20.0.1.32",
+  "open": "ok",
+  "labels": [
+    {
+      "item": "TextFrame",
+      "name": "x-paged:media.paged.data",
+      "value": "{\"v\":1,\"data\":{\"oid\":\"pd-c563e615\",\"bind\":[{\"id\":\"opacity\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameOpacity\",\"query\":\"q\",\"expr\":\"IF(shown = \\\"yes\\\", 100, 40)\",\"schema\":{\"type\":{\"kind\":\"number\",\"integer\":false,\"unit\":\"percent\"},\"nullable\":true,\"range\":{\"min\":0,\"max\":100},\"default\":100},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"badge\",\"kind\":\"visibility\",\"target\":\"$host\",\"query\":\"q\",\"expr\":\"shown\",\"options\":{\"invert\":false,\"missing\":\"hide\"}}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}],\"extra\":{\"badge\":{\"kind\":\"textFrame\"}}}}"
+    },
+    {
+      "item": "Rectangle",
+      "name": "x-paged:media.paged.data",
+      "value": "{\"v\":1,\"data\":{\"oid\":\"pd-24ee4e07\",\"bind\":[{\"id\":\"weight\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameStrokeWeight\",\"query\":\"q\",\"expr\":\"MM(weight_mm)\",\"schema\":{\"type\":{\"kind\":\"length\"},\"nullable\":true,\"range\":{\"min\":0},\"default\":1},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"fill\",\"kind\":\"property\",\"target\":\"host\",\"path\":\"frameFillColor\",\"query\":\"q\",\"expr\":\"tint\",\"schema\":{\"type\":{\"kind\":\"color\"},\"nullable\":true},\"coerce\":\"strict\",\"missing\":\"keepLast\"}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}]}}"
+    }
+  ],
+  "document_label": "{\"v\":1,\"data\":{\"session\":\"b358cbefa04dd4a3b47983f829ccdc15\",\"recipe\":{\"sources\":[{\"id\":\"products\",\"kind\":{\"kind\":\"inlineSeed\",\"table\":\"products\"},\"capability\":\"inline\",\"refresh\":{\"policy\":\"manual\"}}],\"queries\":[{\"id\":\"q\",\"sql\":\"SELECT * FROM products ORDER BY sku\",\"params\":[],\"shape\":{\"shape\":\"recordStream\"}}],\"templates\":[],\"bindings\":[{\"id\":\"weight\",\"kind\":\"property\",\"target\":{\"selector\":\"frame[label.x-paged:media.paged.data*=\\\"\\\\\\\"oid\\\\\\\":\\\\\\\"pd-24ee4e07\\\\\\\"\\\"]\"},\"path\":\"frameStrokeWeight\",\"query\":\"q\",\"expr\":\"MM(weight_mm)\",\"schema\":{\"type\":{\"kind\":\"length\"},\"nullable\":true,\"range\":{\"min\":0},\"default\":1},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"fill\",\"kind\":\"property\",\"target\":{\"selector\":\"frame[label.x-paged:media.paged.data*=\\\"\\\\\\\"oid\\\\\\\":\\\\\\\"pd-24ee4e07\\\\\\\"\\\"]\"},\"path\":\"frameFillColor\",\"query\":\"q\",\"expr\":\"tint\",\"schema\":{\"type\":{\"kind\":\"color\"},\"nullable\":true},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"opacity\",\"kind\":\"property\",\"target\":{\"selector\":\"frame[label.x-paged:media.paged.data*=\\\"\\\\\\\"oid\\\\\\\":\\\\\\\"pd-c563e615\\\\\\\"\\\"]\"},\"path\":\"frameOpacity\",\"query\":\"q\",\"expr\":\"IF(shown = \\\"yes\\\", 100, 40)\",\"schema\":{\"type\":{\"kind\":\"number\",\"integer\":false,\"unit\":\"percent\"},\"nullable\":true,\"range\":{\"min\":0,\"max\":100},\"default\":100},\"coerce\":\"strict\",\"missing\":\"keepLast\"},{\"id\":\"badge\",\"kind\":\"visibility\",\"target\":\"u1\",\"query\":\"q\",\"expr\":\"shown\",\"options\":{\"invert\":false,\"missing\":\"hide\"}},{\"id\":\"v_name\",\"kind\":\"variable\",\"target\":\"v_name\",\"query\":\"q\",\"expr\":\"name\",\"missing\":{\"missing\":\"blank\"}}],\"variables\":{\"name\":\"binding1\",\"variables\":[],\"dataSets\":[]}}}}",
+  "text_variables": [
+    {
+      "name": "paged:v_name",
+      "type": "CUSTOM_TEXT_TYPE",
+      "contents": "Grüne Äpfel",
+      "instances": []
+    }
+  ],
+  "stories": [
+    "SKU: <<sku>> / ",
+    "<<name>>"
+  ],
+  "data_merge": {
+    "fields": [
+      "sku",
+      "name"
+    ],
+    "text_placeholders": [
+      "sku",
+      "name"
+    ],
+    "image_placeholders": []
+  },
+  "merge": {
+    "page_count": 3,
+    "pages": [
+      {
+        "texts": [
+          "Grüne Äpfel",
+          "SKU: A-1 / "
+        ]
+      },
+      {
+        "texts": [
+          "Blue",
+          "SKU: B-2 / "
+        ]
+      },
+      {
+        "texts": [
+          "Cyan",
+          "SKU: C-3 / "
+        ]
+      }
+    ]
+  }
+}

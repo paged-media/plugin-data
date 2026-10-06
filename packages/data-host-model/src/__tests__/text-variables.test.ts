@@ -37,11 +37,16 @@ describe("custom text variables (ADR 559) [data.bind.text-variables]", () => {
     });
     // An unresolved value shows <key>, as the placeholder field does.
     expect(createTextVariableMutation("v", null)).toEqual({ op: "createTextVariable", args: { name: "paged:v", contents: "<v>" } });
-    expect(insertTextVariableMutation("$h:f", 0, "v")).toEqual({
+    expect(insertTextVariableMutation("$h:f", 0, textVariableId("v"))).toEqual({
       op: "insertField",
       args: { storyId: "$h:f", offset: 0, field: { textVariable: { variableId: "dTextVariablenpaged:v" } } },
     });
-    expect(insertTextVariableMutation("u1", 7, "v", 9).args).toMatchObject({ offset: 7, contentOffset: 9 });
+    // An InDesign save re-spells the Self: the instance names the id read.
+    expect(insertTextVariableMutation("u1", 7, "dTextVariablenpaged-v", 9).args).toMatchObject({
+      offset: 7,
+      contentOffset: 9,
+      field: { textVariable: { variableId: "dTextVariablenpaged-v" } },
+    });
     expect(setTextVariableMutation("dTextVariablenpaged:v", "v", "Beta")).toEqual({
       op: "set",
       args: { address: "textVariable:dTextVariablenpaged:v", path: "textVariableContents", value: { type: "text", value: "Beta" } },
@@ -49,7 +54,7 @@ describe("custom text variables (ADR 559) [data.bind.text-variables]", () => {
   });
 
   it("a text variable is a field to the refresh loops; a write is a Set, a placeholder's a setFieldValue [data.bind.text-variables]", () => {
-    const f = textVariableField("dTextVariablenpaged:v", "<v>")!;
+    const f = textVariableField("dTextVariablenpaged:v", "v", "<v>");
     expect(f).toEqual({
       storyId: "textVariable:dTextVariablenpaged:v",
       offset: 0,
@@ -58,7 +63,9 @@ describe("custom text variables (ADR 559) [data.bind.text-variables]", () => {
       value: null,
       variable: "dTextVariablenpaged:v",
     });
-    expect(textVariableField("dTextVariablenOther", "x")).toBeNull();
+    // InDesign's re-spelled id is carried as read; the key comes from the name.
+    expect(textVariableField("dTextVariablenpaged-v", "v", "B").variable).toBe("dTextVariablenpaged-v");
+    expect(keyOfTextVariable("dTextVariablenpaged-v")).toBeNull();
     expect(fieldWriteMutation(f, "B").op).toBe("set");
     expect(fieldWriteMutation({ storyId: "u1", offset: 3, key: "v" }, "B")).toEqual({
       op: "setFieldValue",

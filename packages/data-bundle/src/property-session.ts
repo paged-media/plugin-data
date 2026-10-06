@@ -19,6 +19,7 @@ import {
   type PayloadJson,
 } from "./labels";
 import { commitProperties, NO_OBJECT_MODEL, objectsOf, type PropertyLaneResult } from "./property-lane";
+import { textVariablesOn } from "./text-variables";
 
 type Diagnostic = {
   level: "error" | "warn" | "info";
@@ -174,9 +175,44 @@ export function propertyMethods(ctx: PropertyContext) {
     }
     for (const [id, t] of ctx.ruleTargets) {
       const frame = await firstFrame(t.target.storyId);
-      if (frame) out.set(id, { frame, extra: { query: t.query, target: { ...t.target, storyId: "$story" } } });
+      if (!frame) continue;
+      // A table rule's cells are addressed `cell:<table>/<r>,<c>`; InDesign
+      // renumbers the table's `Self`, so the label names the table by its
+      // place in the story (protocol 71: `story:<id> > table`). The label
+      // stays on the story's frame — never on a cell.
+      const target: Record<string, unknown> = { ...t.target, storyId: "$story" };
+      if (t.target.kind === "tableColumn" && typeof t.target.tableId === "string") {
+        const index = await tableIndexInStory(t.target.storyId, t.target.tableId);
+        if (index !== null) Object.assign(target, { tableId: "$table", tableIndex: index });
+      }
+      out.set(id, { frame, extra: { query: t.query, target } });
     }
     return out;
+  }
+
+  /** The place of table `tableId` among the tables of story `storyId`
+   *  (protocol 71 query), or null when the host cannot say. */
+  async function tableIndexInStory(storyId: string, tableId: string): Promise<number | null> {
+    const objects = objectsOf(host);
+    if (!objects || !(await textVariablesOn(host))) return null;
+    try {
+      const i = (await objects.query(`story:${storyId} > table`)).indexOf(`table:${tableId}`);
+      return i >= 0 ? i : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The table at `index` in story `storyId` today, or null. */
+  async function tableInStory(storyId: string, index: number): Promise<string | null> {
+    const objects = objectsOf(host);
+    if (!objects) return null;
+    try {
+      const t = (await objects.query(`story:${storyId} > table`))[index];
+      return t ? t.slice("table:".length) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Write the element labels the recipe asks for (one mutate, or none). */
@@ -258,10 +294,21 @@ export function propertyMethods(ctx: PropertyContext) {
     for (const [id, t] of restored.facts.barcode) ctx.barcodeTargets.set(id, t);
     for (const [id, el] of restored.facts.lowered) ctx.loweredInto.set(id, el);
     for (const [id, h] of rules) {
-      const extra = h.extra as { query?: string; target?: { kind: string; storyId: string } } | undefined;
+      const extra = h.extra as { query?: string; target?: { kind: string; storyId: string; tableId?: string; tableIndex?: number } } | undefined;
       const story = frameStory.get(h.frame);
-      if (extra?.query && extra.target && story) {
-        ctx.ruleTargets.set(id, { query: extra.query, target: { ...extra.target, storyId: story } });
+      let target: { kind: string; storyId: string; [k: string]: unknown } | null = extra?.target && story ? { ...extra.target, storyId: story } : null;
+      if (target && extra?.target?.tableId === "$table") {
+        // The table by its place in the story (its `Self` is today's).
+        const tableId = await tableInStory(story!, extra.target.tableIndex ?? 0);
+        if (tableId) {
+          const { tableIndex: _i, ...rest } = target;
+          target = { ...rest, tableId };
+        } else {
+          target = null;
+        }
+      }
+      if (extra?.query && target) {
+        ctx.ruleTargets.set(id, { query: extra.query, target });
       } else {
         ctx.report({ level: "warn", source: "restore", binding: id, message: "the rule's target could not be found again — pick it in the Bindings panel" });
       }

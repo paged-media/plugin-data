@@ -111,8 +111,11 @@ of work, with file and line references, is
 
 ## On branch `om/universal-binding` (2026-10-06, not on `main`)
 
-Built against plugin-api/plugin-sdk 0.2.43-canary.0 (unpublished; local `pnpm.overrides`) and
-canvas-wasm 0.70.0. ADR 558 and 559 are proposals in the thoughts register.
+Built against plugin-api/plugin-sdk 0.2.44-canary.0 (unpublished; local `pnpm.overrides`).
+Tested on canvas-wasm 0.70.0 (published) and on a local engine of protocol 71 (core branch
+`om/protocol-71` with the IDML adapter of plugin-publish `om/object-model`, both untagged).
+Everything protocol 71 adds is feature-detected (the engine's `textVariable` object kind); on
+0.70 the bundle behaves as before. ADR 558 and 559 are proposals in the thoughts register.
 
 - **Property bindings** (ADR 558): any property `host.objects` can set, bound to an
   expression over a query, coerced in Rust against the target's schema row. One apply is
@@ -129,20 +132,38 @@ canvas-wasm 0.70.0. ADR 558 and 559 are proposals in the thoughts register.
   variables) and nine typed commands, including "Bind to data…" (`media.paged.data.bindProperty`,
   which the Bindings panel completes).
 
+With engine protocol 71 (`test/protocol71-real-core.spec.ts`):
+
+- **Variables are custom text variables** (ADR 559). A variable binding `k` is placed as the
+  text variable `paged:k` (created in the batch that inserts its instance); a refresh, a
+  preview step or a data set switches it with one `Set` on `textVariableContents`, which
+  re-bakes every instance (one undo step). The IDML has InDesign's own `<TextVariable>` and
+  `<TextVariableInstance>`. InDesign 2025 kept the variable with its value through a save
+  (`conformance/indesign-binding/recorded/bound71.json`), and paged restored every binding
+  from the re-save and drove the variable again. An InDesign save re-spells the variable's
+  `Self` (`dTextVariablenpaged-v_name`), so our variables are found by name. A document whose
+  variables are placeholder fields keeps being refreshed through them; nothing is converted.
+  The Data Merge template turns each instance into a `<<field>>` placeholder (InDesign merged
+  it, `dm-template71.json`).
+- **A new swatch is created in the apply's batch**: a literal colour no swatch has is a
+  `create` op in the same `host.objects.batch`, so swatch and apply are one undo step.
+- **Table rules write `appliedCellStyle` on `cell:` addresses** through `host.objects`, the
+  cell style created in the same batch (one undo step; the old path took two). The rule's
+  label stays on the table's frame and names the table by its place in the story
+  (`story:<id> > table`), because InDesign renumbers the table's `Self`.
+- With plugin-publish `om/object-model` linked in, the document label is in `designmap.xml`
+  (InDesign kept it, `bound71.json`) and a hidden item is `Visible="false"`; the published
+  0.70 engine does neither (pinned, `property-real-core.spec.ts`).
+
 Not done there:
 
-- Variables are still placeholder fields; core has no op to create or set a custom text
-  variable on the published engines (0.69, 0.70), and a field exports to IDML as plain text.
-- `elementVisible` is not written to IDML by core 0.69/0.70 (`Visible="false"` missing): a
-  hidden item is hidden in paged only (pinned, `property-real-core.spec.ts`).
-- The document label (`setDocumentMetadata`) is kept in the container's model part, not in
-  `designmap.xml`, so the document-scope recipe (data sets, templates, sources and queries
-  no page item uses) does not survive an InDesign save.
-- A new literal colour costs one extra undo step (the `createSwatch` before the batch).
 - Plugin objects as targets bind through their selector and live in the document label:
   `host.objects` has no `hostOf` door.
-- Rule bindings write through their old path (cell styles have no `host.objects` address on
-  the published engines).
+- A variable whose text instance was deleted keeps its definition (core refuses to delete a
+  text variable that still has an instance, and a definition without one draws nothing); it
+  counts as placed, so Lower does not insert it again.
+- Text-variable reads cost one `objects.get` per variable on every field read (core has no
+  text-variable collection).
 
 ## Limits of what is shipped
 

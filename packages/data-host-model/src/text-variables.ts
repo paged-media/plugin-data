@@ -17,8 +17,16 @@ import type { PlaceholderField } from "./fields";
 export const TEXT_VARIABLE_PREFIX = "paged:";
 
 /** InDesign's `Self` for a text variable: this prefix plus its name (core
- *  mints the same, so the address is known before the create lands). */
+ *  mints the same, so the address is known before the create lands). An
+ *  InDesign SAVE re-spells it: `dTextVariablenpaged-v_name` for the variable
+ *  named `paged:v_name` (measured, InDesign 2025, `conformance/indesign-
+ *  binding/recorded/bound71.rt.idml`), so a variable is ours by its NAME, and
+ *  its `Self` is read, never derived, once a document has been through
+ *  InDesign. */
 export const TEXT_VARIABLE_SELF = "dTextVariablen";
+
+/** The selector of every text variable our bindings own (by name). */
+export const OWN_TEXT_VARIABLES = `textVariable[name^="${"paged:"}"]`;
 
 /** The text variable name of variable binding `key`. */
 export function textVariableName(key: string): string {
@@ -37,8 +45,9 @@ export function textVariableAddress(id: string): string {
   return `textVariable:${id}`;
 }
 
-/** The binding key a text variable id, name or address belongs to, or null
- *  when the variable is not one of ours. */
+/** The binding key a text variable name — or the id/address core minted for
+ *  it (`dTextVariablenpaged:<key>`) — belongs to, or null when it is not one
+ *  of ours. An id InDesign re-spelled is not recognised: read its name. */
 export function keyOfTextVariable(idNameOrAddress: string): string | null {
   let s = idNameOrAddress;
   if (s.startsWith("textVariable:")) s = s.slice("textVariable:".length);
@@ -68,12 +77,12 @@ export function createTextVariableMutation(key: string, value: string | null): M
   } as Mutation;
 }
 
-/** Insert an instance of binding `key`'s text variable into a story. The
+/** Insert an instance of text variable `id` (its `Self`) into a story. The
  *  offsets follow `insertFieldMutation` (`contentOffset` is the caret unit). */
 export function insertTextVariableMutation(
   storyId: string,
   offset: number,
-  key: string,
+  id: string,
   contentOffset?: number,
 ): Mutation {
   return {
@@ -81,7 +90,7 @@ export function insertTextVariableMutation(
     args: {
       storyId,
       offset,
-      field: { textVariable: { variableId: textVariableId(key) } },
+      field: { textVariable: { variableId: id } },
       ...(contentOffset !== undefined ? { contentOffset } : {}),
     },
   } as Mutation;
@@ -103,9 +112,7 @@ export function setTextVariableMutation(id: string, key: string, value: string |
 /** One of our text variables as the field loops see it: a pseudo field whose
  *  `storyId` is its address (unique per variable, so `backToFront` leaves it
  *  alone) and whose `variable` names the text variable. */
-export function textVariableField(id: string, contents: string | null): PlaceholderField | null {
-  const key = keyOfTextVariable(id);
-  if (key === null) return null;
+export function textVariableField(id: string, key: string, contents: string | null): PlaceholderField {
   return {
     storyId: textVariableAddress(id),
     offset: 0,

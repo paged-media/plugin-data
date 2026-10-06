@@ -244,5 +244,20 @@ describe.skipIf(!v71 || (!ready && !required))("engine protocol 71: text variabl
     await host.document.undo();
     expect(await h.objects.get(cell, "appliedCellStyle")).toEqual(before);
     expect((await host.document.collection<{ selfId: string }>("cellStyles")).map((c) => c.selfId)).not.toContain("CellStyle/heavy");
+
+    // The rule lives in the label of the table's frame, its table named by
+    // its place in the story (InDesign renumbers the table's Self): the
+    // stripped file restores it and the rule applies again.
+    await h.willSave.fire();
+    const label = JSON.stringify(await host.document.getMetadata((await host.document.tree())
+      .flatMap(function all(n: { id?: unknown; children?: unknown[] }): { id?: unknown; children?: unknown[] }[] { return [n, ...((n.children ?? []) as never[]).flatMap(all)]; })
+      .map((n) => n.id as { kind: string; id: string } | undefined)
+      .find((id) => id?.kind === "textFrame") as never));
+    expect(label).toContain('"tableId":"$table"');
+    expect(label).not.toContain("cell:");
+    const b = await open(mod, stripContainerParts(await exportPaged(host)));
+    await seed(b.s);
+    expect(await b.s.applyRule("r")).toBe(1);
+    expect(((await b.h.objects.get(cell, "appliedCellStyle")) as { value: unknown }).value).toBe("CellStyle/heavy");
   });
 });

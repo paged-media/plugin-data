@@ -4,9 +4,12 @@
 //   PAGED_RECORD_INDESIGN_FIXTURES=1 vitest run test/indesign-binding.spec.ts
 //     writes conformance/indesign-binding/fixtures/ (paged authors them on the
 //     real stack): bound.idml — a document with property, visibility and
-//     table bindings, saved by paged then stripped of its container parts —
+//     variable bindings, saved by paged then stripped of its container parts —
 //     and dm-template.idml + dm.csv (our "Export as InDesign Data Merge
-//     template").
+//     template"). On an engine of protocol 71 or later the fixtures are
+//     bound71.idml / dm-template71.idml: the variable is a custom TEXT
+//     VARIABLE `paged:v_name` (ADR 559), and the document label is in
+//     designmap.xml.
 //   bash conformance/indesign-binding/record.sh
 //     InDesign 2025 opens each fixture, records what it sees
 //     (recorded/<id>.json: labels, Data Merge fields and placeholders, the
@@ -22,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 import type { BundleHost } from "@paged-media/plugin-api";
 
-import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
+import { dataFields, ENGINE_ANCHOR, ENGINE_PROTOCOL, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 import { stripContainerParts } from "./zip";
 
@@ -30,6 +33,8 @@ const LANE = fileURLToPath(new URL("../../../conformance/indesign-binding/", imp
 const STAGE = "/tmp/paged-data-binding-stage";
 const CSV = "sku,name,weight_mm,tint,shown\nA-1,Grüne Äpfel,2,\"cmyk(0,100,100,0)\",yes\nB-2,Blue,4,Black,no\nC-3,Cyan,1,#00ffff,yes\n";
 const RECORD = process.env.PAGED_RECORD_INDESIGN_FIXTURES === "1";
+/** The fixture suffix of this engine: "71" from protocol 71 on (text variables). */
+const ERA = ENGINE_PROTOCOL >= 71 ? "71" : "";
 
 const probe = await bootRealDuckDB();
 const ready = ENGINE_ANCHOR !== null && probe.handle !== undefined && existsSync(DATA_JS_WASM);
@@ -68,7 +73,7 @@ async function definitions(s: { listBindings(): { id: string }[]; bindingDefinit
 }
 
 describe.skipIf(!RECORD || !ready)("record the InDesign binding fixtures (local) [data.persist.labels]", () => {
-  it("writes bound.idml and the Data Merge template [data.persist.labels]", async () => {
+  it(`writes bound${ERA}.idml and the Data Merge template [data.persist.labels]`, async () => {
     const mod = await bundle();
     const { h, host, s } = await open(mod);
     await s.registerCsvSource("products", CSV);
@@ -87,11 +92,11 @@ describe.skipIf(!RECORD || !ready)("record the InDesign binding fixtures (local)
     await h.willSave.fire();
     const reply = (await host.editor.client.send({ kind: "exportPaged", payload: {} } as never)) as { payload: { bytes: number[] } };
     mkdirSync(join(LANE, "fixtures"), { recursive: true });
-    writeFileSync(join(LANE, "fixtures", "bound.idml"), stripContainerParts(Uint8Array.from(reply.payload.bytes)));
-    writeFileSync(join(LANE, "fixtures", "bound.definitions.json"), JSON.stringify(await definitions(s), null, 2) + "\n");
+    writeFileSync(join(LANE, "fixtures", `bound${ERA}.idml`), stripContainerParts(Uint8Array.from(reply.payload.bytes)));
+    writeFileSync(join(LANE, "fixtures", `bound${ERA}.definitions.json`), JSON.stringify(await definitions(s), null, 2) + "\n");
     const dm = await s.exportDataMergeTemplate({ dataSourceFile: `${STAGE}/dm.csv` });
     expect(dm.ok, dm.reason).toBe(true);
-    writeFileSync(join(LANE, "fixtures", "dm-template.idml"), dm.idml!);
+    writeFileSync(join(LANE, "fixtures", `dm-template${ERA}.idml`), dm.idml!);
     writeFileSync(join(LANE, "fixtures", "dm.csv"), dm.csv!);
     h.dispose();
   });
@@ -119,6 +124,61 @@ describe.skipIf(!ready && !(REQUIRE_REAL_CORE || REQUIRE_REAL_DUCKDB))("replay t
     expect(r.applied).toBe(4);
     expect(r.undoSteps).toBe(1);
     h.dispose();
+  });
+
+  it.skipIf(ENGINE_PROTOCOL < 71 || !existsSync(recorded("bound71")))("text variables (protocol 71): InDesign keeps paged:v_name with its value and the document label; paged restores every binding and drives the variable again [data.bind.text-variables] [data.persist.labels]", async () => {
+    const rec = JSON.parse(readFileSync(recorded("bound71"), "utf8")) as {
+      open: string;
+      labels: { item: string }[];
+      document_label: string | null;
+      text_variables: { name: string; type: string; contents: string | null; instances: string[] }[];
+      stories: string[];
+    };
+    expect(rec.open).toBe("ok");
+    // The variable is InDesign's own custom text variable, showing the value.
+    const tv = rec.text_variables.find((v) => v.name === "paged:v_name");
+    expect(tv).toEqual({ name: "paged:v_name", type: "CUSTOM_TEXT_TYPE", contents: "Grüne Äpfel", instances: ["Grüne Äpfel"] });
+    // InDesign's story contents show an instance as its marker character.
+    expect(rec.stories.some((t) => t.includes("\u0018"))).toBe(true);
+    // The page-item labels, and the document label (the whole recipe).
+    expect(rec.labels.map((l) => l.item).sort()).toEqual(["Rectangle", "TextFrame"]);
+    expect(rec.document_label).toContain('"recipe"');
+    const mod = await bundle();
+    const rt = new Uint8Array(readFileSync(join(LANE, "recorded", "bound71.rt.idml")));
+    const { s, h, host } = await open(mod, rt);
+    const want = JSON.parse(readFileSync(join(LANE, "fixtures", "bound71.definitions.json"), "utf8"));
+    expect(await definitions(s)).toEqual(want);
+    expect(s.getState().relink).toEqual(["products"]);
+    await s.registerCsvSource("products", CSV);
+    await s.refreshData();
+    // The variable InDesign kept is the field: one Set re-bakes it.
+    expect((await dataFields(host as never)).map((f) => [f.key, f.value])).toEqual([["v_name", "Grüne Äpfel"]]);
+    await s.previewRecord("v_name", 1);
+    expect((await dataFields(host as never)).map((f) => [f.key, f.value])).toEqual([["v_name", "Blue"]]);
+    await s.lowerAll();
+    expect((await dataFields(host as never)).filter((f) => f.key === "v_name")).toHaveLength(1);
+    const r = await s.applyProperties({ record: 1, withVisibility: true });
+    expect(r.applied).toBe(4);
+    expect(r.undoSteps).toBe(1);
+    h.dispose();
+  });
+
+  it.skipIf(ENGINE_PROTOCOL < 71 || !existsSync(recorded("dm-template71")))("InDesign merges the Data Merge template of a text-variable document [data.export.datamerge]", () => {
+    const rec = JSON.parse(readFileSync(recorded("dm-template71"), "utf8")) as {
+      open: string;
+      data_merge: { fields: string[]; text_placeholders: string[] };
+      merge: { page_count: number; pages: { texts: string[] }[] } | string;
+    };
+    expect(rec.open).toBe("ok");
+    expect(rec.data_merge.fields).toEqual(["sku", "name"]);
+    expect([...rec.data_merge.text_placeholders].sort()).toEqual(["name", "sku"]);
+    expect(typeof rec.merge, String(rec.merge)).toBe("object");
+    const merge = rec.merge as { page_count: number; pages: { texts: string[] }[] };
+    expect(merge.page_count).toBe(3);
+    const texts = merge.pages.map((p) => p.texts.join(" | "));
+    expect(texts[0]).toContain("SKU: A-1 / ");
+    expect(texts[0]).toContain("Grüne Äpfel");
+    expect(texts[2]).toContain("SKU: C-3 / ");
   });
 
   it.skipIf(!existsSync(recorded("dm-template")))("InDesign merges our Data Merge template [data.export.datamerge]", () => {

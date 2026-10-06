@@ -106,10 +106,11 @@ export async function dataFields(host: FieldHost): Promise<DataField[]> {
     .filter((p) => p.plugin === "media.paged.data")
     .map((p) => ({ key: p.key, storyId: p.storyId, offset: p.offset, value: p.value }));
   if (ENGINE_PROTOCOL >= 71 && host.objects) {
-    for (const address of await host.objects.query("textVariable")) {
+    // Ours by NAME: an InDesign save re-spells the Self (`paged-v_name`).
+    for (const address of await host.objects.query('textVariable[name^="paged:"]')) {
       const id = address.slice("textVariable:".length);
-      if (!id.startsWith("dTextVariablenpaged:")) continue;
-      const key = id.slice("dTextVariablenpaged:".length);
+      const name = (await host.objects.get(address, "textVariableName")) as { value?: unknown };
+      const key = String(name.value).slice("paged:".length);
       const v = (await host.objects.get(address, "textVariableContents")) as { value?: unknown };
       const contents = typeof v.value === "string" ? v.value : null;
       out.push({ key, storyId: address, offset: 0, value: contents === `<${key}>` ? null : contents, variable: id });

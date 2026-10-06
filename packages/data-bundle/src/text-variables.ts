@@ -18,6 +18,8 @@ import type { BundleHost, ObjectsSurface } from "@paged-media/plugin-api";
 
 import {
   keyOfTextVariable,
+  OWN_TEXT_VARIABLES,
+  TEXT_VARIABLE_SELF,
   textVariableField,
   type PlaceholderField,
 } from "../../data-host-model/src";
@@ -49,14 +51,23 @@ export function textVariablesOn(host: BundleHost): Promise<boolean> {
   return p;
 }
 
-/** The ids (`Self`) of the text variables our bindings own. One query. */
-export async function ownTextVariableIds(host: BundleHost): Promise<string[]> {
+/** Our text variables: binding key → its `Self`. One query (by name); a
+ *  variable whose `Self` is not the one core mints (InDesign re-spelled it on
+ *  save) costs one name read. */
+export async function ownTextVariables(host: BundleHost): Promise<Map<string, string>> {
   const objects = objectsProp(host);
-  if (!objects) return [];
-  const addresses = await objects.query("textVariable");
-  return addresses
-    .map((a) => a.slice("textVariable:".length))
-    .filter((id) => keyOfTextVariable(id) !== null);
+  const out = new Map<string, string>();
+  if (!objects) return out;
+  for (const address of await objects.query(OWN_TEXT_VARIABLES)) {
+    const id = address.slice("textVariable:".length);
+    let key = id.startsWith(`${TEXT_VARIABLE_SELF}paged:`) ? keyOfTextVariable(id) : null;
+    if (key === null) {
+      const name = (await objects.get(address, "textVariableName")) as { kind?: string; value?: unknown };
+      key = name.kind === "value" && typeof name.value === "string" ? keyOfTextVariable(name.value) : null;
+    }
+    if (key !== null && !out.has(key)) out.set(key, id);
+  }
+  return out;
 }
 
 /** Our text variables as fields (`PlaceholderField` with `variable` set),
@@ -66,12 +77,11 @@ export async function readTextVariableFields(host: BundleHost, key?: string): Pr
   if (!(await textVariablesOn(host))) return [];
   const objects = objectsProp(host)!;
   const out: PlaceholderField[] = [];
-  for (const id of await ownTextVariableIds(host)) {
-    if (key !== undefined && keyOfTextVariable(id) !== key) continue;
+  for (const [k, id] of await ownTextVariables(host)) {
+    if (key !== undefined && k !== key) continue;
     const v = (await objects.get(`textVariable:${id}`, "textVariableContents")) as { kind?: string; value?: unknown };
     const contents = v.kind === "value" && typeof v.value === "string" ? v.value : null;
-    const f = textVariableField(id, contents);
-    if (f) out.push(f);
+    out.push(textVariableField(id, k, contents));
   }
   return out;
 }

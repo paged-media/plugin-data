@@ -120,6 +120,7 @@ export {
 } from "./property";
 
 export {
+  OWN_TEXT_VARIABLES,
   TEXT_VARIABLE_PREFIX,
   TEXT_VARIABLE_SELF,
   cellAddress,

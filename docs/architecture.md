@@ -161,7 +161,7 @@ binding of the current session, and writes `setFieldValue` only where the value 
 | Imported and fetched rows | DuckDB's memory, in the worker. Gone on reload. |
 | Sources, queries, binding definitions, sync states, data sets | The wasm session and maps in `src/session.ts`. Gone on reload. |
 | Resolved values | The document, as ordinary content: fields, tables, images, paths, element visibility, applied styles. |
-| The link from a text field to its binding | The field's own tag `{ plugin: "media.paged.data", key: <binding id> }`. |
+| The link from a text field to its binding | The field's own tag `{ plugin: "media.paged.data", key: <binding id> }`. From engine protocol 71: the custom text variable named `paged:<binding id>` (ADR 559), whose contents is the value; found by name, because an InDesign save re-spells its `Self`. |
 | A mark on the table frames and barcode paths the plugin created | Plugin metadata under the key `x-paged:media.paged.data`, an envelope `{ v, data }`. For a table `data` is `{ kind, region }`; for a barcode `{ kind, target, symbology }`. |
 | The definition of every binding that targets one page item (ADR 559, proposed) | That item's label, same key: `data.oid`, `data.bind`, `data.queries`, `data.sources`, `data.extra`. InDesign keeps it; the `session` part is a cache. |
 
@@ -172,7 +172,7 @@ binding of the current session, and writes `setFieldValue` only where the value 
 ## Property bindings and the object model (ADR 558, 559 — proposed)
 
 On branch `om/universal-binding` (2026-10-06), against plugin-api/plugin-sdk
-0.2.43-canary.0 (unpublished) and canvas-wasm 0.70.0.
+0.2.44-canary.0 (unpublished), on canvas-wasm 0.70.0 and on a local protocol-71 engine.
 
 - **`Binding::Property`** (`data-core/src/binding.rs`, types in `property.rs`):
   `{ target: "host" | { selector }, path, query, expr, schema?, coerce, missing }`. The
@@ -189,8 +189,16 @@ On branch `om/universal-binding` (2026-10-06), against plugin-api/plugin-sdk
   decides every value (pinned and overridden bindings answer `keep`), `data-host-model`
   `planProperties` turns them into `set` ops, the lane resolves each distinct selector once
   and the swatches once, and commits one batch (one undo step). A literal colour that no
-  swatch has is minted as `createSwatch` (`Color/R=255 G=0 B=0`, InDesign's unnamed-colour
-  name) in a batch of its own first — `host.objects` cannot create core objects yet.
+  swatch has is created as `Color/R=255 G=0 B=0` (InDesign's unnamed-colour name): from
+  protocol 71 by a `create` op in that same batch (one undo step); before 71 by a
+  `createSwatch` mutate first (a second undo step).
+- **Protocol 71 is detected, not assumed** (`src/text-variables.ts`): the engine's
+  `textVariable` object kind, asked once as the session starts. With it, variables are
+  custom text variables (`data-host-model/src/text-variables.ts`: create + instance in one
+  batch, one `Set` on `textVariableContents` per refresh), and a table rule writes
+  `appliedCellStyle` on `cell:<table>/<r>,<c>` addresses through `host.objects` with its cell
+  style created in the same batch. Without it, the placeholder field and the
+  `setElementProperty` cell path stay.
 - **Old kinds re-expressed**: a visibility binding writes its `elementVisible` triple through
   the same lane when the host has `host.objects` (the raw `setElementProperty` path stays as
   the fallback); `StyleAction::property()` names a rule's applied-style path; a barcode's

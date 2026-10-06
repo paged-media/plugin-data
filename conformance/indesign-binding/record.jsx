@@ -1,8 +1,11 @@
 // ADR 559's InDesign lane (driven by record.sh): open every fixtures/*.idml
 // paged wrote, record what InDesign sees, save it again.
 //   recorded/<id>.json   — open ok?, every x-paged:media.paged.data label on a
-//                          page item (extractLabel), Data Merge fields and
-//                          placeholders, and for dm-* the merged records
+//                          page item (extractLabel) and on the document,
+//                          every text variable (name, type, custom contents)
+//                          with the text each instance shows, Data Merge
+//                          fields and placeholders, and for dm-* the merged
+//                          records
 //   recorded/<id>.rt.idml — InDesign's re-save (File ▸ Export ▸ IDML)
 // Globals from record.sh: PAGED_IB_DIR, PAGED_IB_STAGE, PAGED_IB_ONLY.
 
@@ -13,7 +16,6 @@
     var KEY = "x-paged:media.paged.data";
     var LOG = [];
     function log(s) { LOG.push(s); }
-    var ONLY = String($.global.PAGED_DM_ONLY || "");
 
     // ── tiny ES3 JSON writer (ExtendScript has no JSON object) ──────────────
     function str(s) {
@@ -83,6 +85,25 @@
         return out;
     }
 
+    // ADR 559: a variable binding is a custom text variable `paged:<id>`.
+    function textVariables(doc) {
+        var out = [];
+        for (var i = 0; i < doc.textVariables.length; i++) {
+            var tv = doc.textVariables[i], type = String(tv.variableType), contents = null;
+            try { if (tv.variableType === VariableTypes.CUSTOM_TEXT_TYPE) contents = String(tv.variableOptions.contents); } catch (e) { contents = "ERROR " + e; }
+            var shown = [];
+            for (var k = 0; k < tv.associatedInstances.length; k++) shown.push(String(tv.associatedInstances[k].resultText));
+            out.push({ name: String(tv.name), type: type, contents: contents, instances: shown });
+        }
+        return out;
+    }
+
+    function storyTexts(doc) {
+        var out = [];
+        for (var i = 0; i < doc.stories.length; i++) out.push(String(doc.stories[i].contents));
+        return out;
+    }
+
     function dataMerge(doc) {
         var dmp = doc.dataMergeProperties, out = { fields: [], text_placeholders: [], image_placeholders: [] };
         for (var a = 0; a < dmp.dataMergeFields.length; a++) out.fields.push(String(dmp.dataMergeFields[a].fieldName));
@@ -119,6 +140,11 @@
                 doc = app.open(file, false);
                 out.open = "ok";
                 out.labels = labels(doc);
+                var docLabel = "";
+                try { docLabel = String(doc.extractLabel(KEY)); } catch (e) { docLabel = ""; }
+                out.document_label = docLabel ? docLabel : null;
+                out.text_variables = textVariables(doc);
+                out.stories = storyTexts(doc);
                 out.data_merge = dataMerge(doc);
                 doc.exportFile(ExportFormat.INDESIGN_MARKUP, File(DIR + "/recorded/" + id + ".rt.idml"));
                 if (/^dm-/.test(id)) out.merge = merge(doc);
