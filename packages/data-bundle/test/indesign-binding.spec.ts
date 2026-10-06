@@ -77,7 +77,7 @@ describe.skipIf(!RECORD || !ready)("record the InDesign binding fixtures (local)
     await s.addPropertyBinding("weight", { target: "rectangle:urect", path: "frameStrokeWeight", query: "q", expr: "MM(weight_mm)" });
     await s.addPropertyBinding("fill", { target: "rectangle:urect", path: "frameFillColor", query: "q", expr: "tint" });
     const tf = await host.document.mutate({ op: "insertTextFrame", args: { pageId: "usp", bounds: [40, 40, 90, 400] } } as never);
-    const frame = (tf.createdId as { id: string }).id;
+    const frame = ((tf as { createdId?: { id: string } }).createdId as { id: string }).id;
     await s.addPropertyBinding("opacity", { target: `textFrame:${frame}`, path: "frameOpacity", query: "q", expr: 'IF(shown = "yes", 100, 40)' });
     s.addVisibilityBinding("badge", frame, "q", "shown", { kind: "textFrame" });
     const story = (await host.document.collection<{ selfId: string }>("stories"))[0]!.selfId;
