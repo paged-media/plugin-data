@@ -30,7 +30,7 @@
 
 import type { BundleHandle, BundleHost } from "@paged-media/plugin-api";
 import { contributeMenu } from "./menu";
-import { contributePanel } from "@paged-media/plugin-sdk";
+import { contributePanel, contributeSchemaPanel } from "@paged-media/plugin-sdk";
 
 import manifest from "../manifest.json";
 import { createSession, type DataSourceSession } from "./session";
@@ -39,6 +39,7 @@ import { makeBindingsPanel } from "./panels/bindings-panel";
 import { makeDatasetPanel } from "./panels/dataset-panel";
 import { makeQueryPanel } from "./panels/query-panel";
 import { contributeObjectModel } from "./object-model";
+import { DATA_OBJECTS_PANEL, OBJECTS_PANEL_ID, publishObjectLists } from "./panels/objects-panel";
 
 const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
 const BINDINGS_PANEL_ID = "media.paged.data.panel.bindings";
@@ -283,6 +284,20 @@ export function activate(host: BundleHost): BundleHandle {
   // sets, variables) and typed commands, for scripts, the CLI and the
   // editor's "Bind to data…". A host without the door skips it.
   const objectModel = contributeObjectModel(host, session, { bindings: BINDINGS_PANEL_ID });
+  // ADR 323 §4 — the same objects as host-rendered PropertyFields: a schema
+  // panel of property rows ("Data objects"; needs the object model and the
+  // schema-panel door). The React panels above keep their features.
+  const objectLists =
+    objectModel && host.supports("contribute.schemaPanel@1")
+      ? (contributeSchemaPanel(host, {
+          id: OBJECTS_PANEL_ID,
+          title: DATA_OBJECTS_PANEL.title,
+          icon: DATA_OBJECTS_PANEL.icon,
+          defaultDock: "right",
+          schema: DATA_OBJECTS_PANEL,
+        }),
+        publishObjectLists(host, session))
+      : null;
   // "Bind to data…" also as a plain command (the editor's command registry
   // and the Actions recorder call commands by id; the typed twin is the
   // object model's).
@@ -314,6 +329,7 @@ export function activate(host: BundleHost): BundleHandle {
       sessions.delete(host);
       session.dispose();
       menuSub.dispose();
+      objectLists?.dispose();
       objectModel?.dispose();
     },
   };

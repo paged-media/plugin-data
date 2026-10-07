@@ -13,6 +13,9 @@
 // use) and returns no mutations: zero undo steps, like defining a binding
 // in the panel. What a binding then WRITES into the document is undoable
 // as always (`apply`, one step).
+// Known gap: redefining a binding re-syncs its element label, a separate
+// engine write host.objects does not count and the session does not follow
+// on undo (pinned in test/objects-panel-real-core.spec.ts).
 
 import type {
   BundleHost,
@@ -33,7 +36,43 @@ import type { DataSourceSession } from "./session";
 
 export const PLUGIN_ID = "media.paged.data";
 
-type KindName = "source" | "query" | "binding" | "dataSet" | "variable";
+export type KindName = "source" | "query" | "binding" | "dataSet" | "variable";
+
+/** The schema-driven panel fields (ADR 323 §4): the rows the "Data objects"
+ *  panel shows for the picked item of each kind, in panel order, rendered by
+ *  the host's shared `PropertyField` over `host.objects`. Every schema row of
+ *  every kind is here (a spec holds it to that); read-only and derived rows
+ *  render read-only from the schema. */
+export const PANEL_FIELDS: ReadonlyArray<{ kind: KindName; path: string; group: string }> = [
+  { kind: "source", path: "name", group: "Sources" },
+  { kind: "source", path: "type", group: "Sources" },
+  { kind: "source", path: "fileName", group: "Sources" },
+  { kind: "source", path: "url", group: "Sources" },
+  { kind: "source", path: "refresh", group: "Sources" },
+  { kind: "source", path: "relink", group: "Sources" },
+  { kind: "query", path: "sql", group: "Queries" },
+  { kind: "query", path: "shape", group: "Queries" },
+  { kind: "query", path: "recordCount", group: "Queries" },
+  { kind: "binding", path: "kind", group: "Bindings" },
+  { kind: "binding", path: "query", group: "Bindings" },
+  { kind: "binding", path: "target", group: "Bindings" },
+  { kind: "binding", path: "path", group: "Bindings" },
+  { kind: "binding", path: "expr", group: "Bindings" },
+  { kind: "binding", path: "coerce", group: "Bindings" },
+  { kind: "binding", path: "missing", group: "Bindings" },
+  { kind: "binding", path: "status", group: "Bindings" },
+  { kind: "binding", path: "definition", group: "Bindings" },
+  { kind: "dataSet", path: "name", group: "Data sets" },
+  { kind: "dataSet", path: "values", group: "Data sets" },
+  { kind: "variable", path: "name", group: "Variables" },
+  { kind: "variable", path: "trait", group: "Variables" },
+  { kind: "variable", path: "bound", group: "Variables" },
+];
+
+/** The manifest schema rows of one kind (for validatePanelSchema). */
+export function schemaOf(kind: KindName): PropertySchema[] | undefined {
+  return declared.kinds.find((x) => x.kind === kind)?.schema;
+}
 
 const declared = (manifest.contributes as unknown as {
   objectModel: {

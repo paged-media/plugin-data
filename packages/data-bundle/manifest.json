@@ -58,7 +58,8 @@
       "media.paged.data.panel.sources",
       "media.paged.data.panel.bindings",
       "media.paged.data.panel.dataset",
-      "media.paged.data.panel.query"
+      "media.paged.data.panel.query",
+      "media.paged.data.panel.objects"
     ],
     "commands": [
       "media.paged.data.command.importData",

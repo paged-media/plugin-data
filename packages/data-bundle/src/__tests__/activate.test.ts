@@ -174,7 +174,11 @@ describe("data_plugin_bundle_activate", () => {
   it("registered ids match the manifest's contributes declaration", () => {
     const fake = fakeHost();
     dataBundle.activate(fake.host);
-    expect(fake.panels.map((p) => p.id)).toEqual(dataBundle.manifest.contributes?.panels);
+    // The "Data objects" schema panel needs the object-model + schema-panel
+    // doors this fake does not offer (test/objects-panel.spec.ts covers it).
+    expect(fake.panels.map((p) => p.id)).toEqual(
+      dataBundle.manifest.contributes?.panels?.filter((id) => id !== "media.paged.data.panel.objects"),
+    );
     expect(fake.commands.map((c) => c.id)).toEqual(dataBundle.manifest.contributes?.commands);
   });
 

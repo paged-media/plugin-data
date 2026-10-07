@@ -191,8 +191,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // the session asks once, as it starts, whether variables are text
   // variables (supports("objects@1") + objects.kinds()), so no command pays
   // for it. The pre-69 base moves by the same two calls (not runnable here).
+  // ADR 323 §4 ("Data objects" schema panel): +2 — supports("contribute.
+  // schemaPanel@1") and contribute.schemaPanel; its lists start with the
+  // first READY session, so activation pays nothing else for them.
   const W7: Measured = onLabelled({
-    hostCalls: 39,
+    hostCalls: 41,
     hostReads: 2,
     mutates: 0,
     mutationOps: 0,
@@ -205,7 +208,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { hostCalls: 43, hostReads: 4 });
+  }, { hostCalls: 45, hostReads: 4 });
   it("W7 activates without booting either engine [data.perf.gates]", async () => {
     h = await openRealHost();
     let work: WorkLog | null = null;
@@ -239,9 +242,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     await settle();
     const snap = work!.snapshot();
     const m = measure(snap, null, null, null);
-    // Behaviour: four panels, eight commands and the importer registered, no
-    // engine booted.
-    expect(h.panelsContributed().length).toBe(4);
+    // Behaviour: four React panels and the "Data objects" schema panel, the
+    // commands and the importer registered, no engine booted.
+    expect(h.panelsContributed().length).toBe(5);
+    expect(h.schemaPanelsContributed().map((p) => p.id)).toEqual(["media.paged.data.panel.objects"]);
     expect(h.importersContributed().map((c) => c.id)).toEqual(["media.paged.data.importer.table"]);
     expect(h.contributions.filter((c) => c.kind === "command").length).toBeGreaterThanOrEqual(7);
     expect(boots).toEqual({ engine: 0, duck: 0 });
