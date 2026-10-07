@@ -130,7 +130,10 @@ Everything protocol 71 adds is feature-detected (the engine's `textVariable` obj
   recorded template with fields `sku, name` and merged its three records.
 - **paged.data's own objects** in `host.objects` (sources, queries, bindings, data sets,
   variables) and nine typed commands, including "Bind to data…" (`media.paged.data.bindProperty`,
-  which the Bindings panel completes).
+  which the Bindings panel completes). A binding write (create, set, delete; the Bindings
+  panel's "Bind" goes the same way) is one undo step: its element label and the document
+  label naming the new session version land in one `host.objects` batch, and undo and redo
+  move the session with the labels.
 
 With engine protocol 71 (`test/protocol71-real-core.spec.ts`):
 

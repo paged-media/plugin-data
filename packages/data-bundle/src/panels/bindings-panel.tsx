@@ -46,6 +46,7 @@ import type {
   SyncStatus,
 } from "../review";
 import { documentsDoors } from "../doors";
+import { defineBinding } from "../object-model";
 import { NO_NEW_DOCUMENT_DOOR } from "../session";
 import { DiagnosticsList } from "./diagnostics";
 import { useSessionSnapshot } from "./use-session";
@@ -194,11 +195,12 @@ const row: CSSProperties = { display: "flex", gap: "var(--space-2, 8px)", flexWr
 /** "Bind to data…" (ADR 558): the editor names the object and the property;
  *  this asks for the query and the expression, then defines the binding. */
 function PropertyDraftRow(props: {
+  host: BundleHost;
   session: DataSourceSession;
   queries: readonly string[];
   onDone: () => void;
 }): ReactElement | null {
-  const { session, queries, onDone } = props;
+  const { host, session, queries, onDone } = props;
   const draft = session.getPropertyDraft?.() ?? null;
   const [query, setQuery] = useState("");
   const [expr, setExpr] = useState("");
@@ -211,7 +213,9 @@ function PropertyDraftRow(props: {
       return;
     }
     const id = `${draft.path}-${Date.now().toString(36)}`;
-    const r = await session.addPropertyBinding(id, {
+    // The same path as host.objects (the Data objects panel, Boa, the CLI):
+    // the definition and its labels are ONE undo step the session follows.
+    const r = await defineBinding(host, session, id, {
       target: draft.selector,
       path: draft.path,
       query: q,
@@ -698,7 +702,7 @@ export function makeBindingsPanel(
 
     return (
       <div style={wrap}>
-        <PropertyDraftRow session={session} queries={snapshot.queries} onDone={refresh} />
+        <PropertyDraftRow host={host} session={session} queries={snapshot.queries} onDone={refresh} />
         {(snapshot.relink ?? []).length > 0 && (
           <div style={note} data-data-relink>
             Re-link data: {(snapshot.relink ?? []).join(", ")} — the bindings came back from the

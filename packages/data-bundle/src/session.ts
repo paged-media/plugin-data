@@ -29,6 +29,7 @@ import type {
   DataProviderRegistration,
   ElementId,
   Disposable,
+  Mutation,
   ProviderSchema,
 } from "@paged-media/plugin-api";
 
@@ -69,7 +70,7 @@ import {
 } from "./persist";
 import type { LowerStamp, LoweredTableAt } from "./lower";
 import { commitRecordFlow } from "./flow-writer";
-import { fitRecipe, labelledVersion, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
+import { fitRecipe, labelKey, labelledVersion, labelMutation, labelRider, sessionVersionPath, splitBase, withBase } from "./doc-label";
 import { propertyMethods, type PropertyMethods } from "./property-session";
 import { objectsOf } from "./property-lane";
 import { readTextVariableFields, textVariablesOn } from "./text-variables";
@@ -485,6 +486,17 @@ export const NO_NEW_DOCUMENT_DOOR =
 /** The session API the panels + commands drive. */
 export interface DataSourceSession extends ReviewSession, PropertyMethods {
   getState(): SessionState;
+  /** host.objects (ADR 323): the document ops of a definition change made
+   *  with `{ labels: "defer" }` — the element labels the recipe asks for,
+   *  plus the document label naming the new session version — for the
+   *  binding kind to return as its ObjectWrite: ONE undo step that
+   *  host.objects counts, and undoing it takes the session back with the
+   *  labels (followLabel). Empty when the labels already agree. */
+  labelOpsForObjects(): Promise<Mutation[]>;
+  /** Before a host.objects write changes the session: write the version it
+   *  changes from, so an undo can come back to it even when the document's
+   *  label named no version yet. */
+  beforeObjectWrite(): Promise<void>;
   /** Drop every diagnostic (the panel's "clear" action). */
   clearDiagnostics(): void;
   registerCsvSource(name: string, csvText: string): Promise<void>;
@@ -841,6 +853,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   let labelActive: boolean | null = null;
   let labelHash: string | null = null;
   let pendingLabel: string | null = null;
+  /** The session version that was live while the document's label named
+   *  none, when a host.objects write labelled the document from there: an
+   *  undo that takes the label away again reloads it. */
+  let unlabelledBase: string | null = null;
   const knownVersions = new Set<string>();
   // Every document write goes through the rider, which carries a pending
   // label in the write's own batch (one undo step for both).
@@ -1313,15 +1329,17 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     if (named === labelHash) return;
     labelHash = named;
     pendingLabel = null;
-    if (!named || named === persistence.hash) return;
+    // No label any more: the version that was live before the first label.
+    const version = named ?? unlabelledBase;
+    if (!version || version === persistence.hash) return;
     let bytes: Uint8Array | null = null;
     try {
-      bytes = await host.parts.read(sessionVersionPath(named));
+      bytes = await host.parts.read(sessionVersionPath(version));
     } catch {
       bytes = null;
     }
     if (!bytes) {
-      report({ level: "warn", source: "restore", message: `the session version ${named} the document names is missing; the session stays as it is` });
+      report({ level: "warn", source: "restore", message: `the session version ${version} the document names is missing; the session stays as it is` });
       return;
     }
     // Reload the version without rebooting either engine: an undo must stay
@@ -2155,6 +2173,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     },
     report: (d) => report(d),
     markDirty,
+    settleLabel,
     emit,
     bindingKinds: bindingKinds as never,
     bindingIds,
@@ -2171,8 +2190,32 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   });
   const objectsUp = () => objectsOf(host) !== null;
 
+  let preObjectWrite: string | null = null;
   const self: DataSourceSession = {
     ...props,
+    async beforeObjectWrite() {
+      preObjectWrite = null;
+      if (labelHash !== null || !(await labelOn())) return;
+      await flushPersistInternal();
+      preObjectWrite = persistence.hash;
+    },
+    async labelOpsForObjects() {
+      const base = preObjectWrite;
+      preObjectWrite = null;
+      const ops = await props.planLabelOps();
+      if (ops.length === 0) return [];
+      if (!(await labelOn())) return ops;
+      await flushPersistInternal();
+      const hash = pendingLabel;
+      if (!hash) return ops;
+      if (labelHash === null && base && base !== hash) unlabelledBase = base;
+      // The ObjectWrite is committed by host.objects, not through the rider:
+      // the label is taken as written (the batch is the binding's own label
+      // ops plus this one; an engine refusing it refuses the labels too).
+      labelHash = hash;
+      pendingLabel = null;
+      return [...ops, labelMutation(hash, labelKey(rawHost), labelRecipe ?? undefined)];
+    },
     ...reviewMethods({
       host,
       ensureEngine,
@@ -3818,6 +3861,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       labelActive = null;
       labelProbe = engineHasDocumentLabels(rawHost);
       labelHash = null;
+      unlabelledBase = null;
       knownVersions.clear();
       restorePromise = restoreInternal();
       await restorePromise;

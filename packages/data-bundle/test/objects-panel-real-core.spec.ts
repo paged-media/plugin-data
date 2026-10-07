@@ -22,8 +22,8 @@
 // session's objects, and a binding's expression edited the way the panel's
 // PropertyField commits it (host.objects.set on the picked binding's
 // address) leaves the document's property untouched; the re-apply it drives
-// is ONE host.objects batch, ONE undo step. The edit's own label write is a
-// pinned defect below.
+// is ONE host.objects batch, ONE undo step. The edit itself is one undo step
+// too (its labels), which the session follows on undo and redo.
 //
 // Gate: skips without canvas-wasm, DuckDB or the built data-js wasm, EXCEPT
 // under REQUIRE_REAL_CORE=1 / REQUIRE_REAL_DUCKDB=1.
@@ -37,6 +37,8 @@ import type { HeadlessHost } from "@paged-media/plugin-sdk";
 import { ENGINE_ANCHOR, openRealHost, REQUIRE_REAL_CORE } from "./real-core";
 import { bootRealDuckDB, bootRealEngine, DATA_JS_WASM, REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 import { BIND, OBJECTS_PANEL_ID } from "../src/panels/objects-panel";
+import { labelledElements } from "../src/labels";
+import { undoMark, undoSteps } from "./perf/harness";
 
 const CSV = "sku,weight_mm\nA-1,2\nB-2,4\n";
 const BINDING = "plugin:media.paged.data/binding/weight";
@@ -63,6 +65,14 @@ async function loadBundleModule() {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
+
+/** The expr binding `binding` carries in element `id`'s data label, or null. */
+async function labelExpr(host: BundleHost, id: string, binding: string): Promise<string | null> {
+  const el = labelledElements((await host.document.tree()) as never).find((e) => e.element.id === id);
+  const bind = (el?.data?.bind ?? []) as { id?: string; expr?: unknown }[];
+  const b = bind.find((x) => x.id === binding);
+  return typeof b?.expr === "string" ? b.expr : null;
+}
 
 describe.skipIf(!ready && !required)("Data objects panel, real core + engine + DuckDB [data.object-model]", () => {
   const hosts: HeadlessHost[] = [];
@@ -113,9 +123,11 @@ describe.skipIf(!ready && !required)("Data objects panel, real core + engine + D
     const mutate = vi.spyOn(host.document, "mutate");
     const set = await h.objects.set(picked, "expr", "MM(weight_mm + 1)");
     expect(set.applied, set.reason).toBe(true);
-    // The only document write is the binding's own label (ADR 559: the
-    // definition rides the target's script label), never the property.
-    for (const [m] of mutate.mock.calls) expect((m as { op: string }).op).toBe("setPluginMetadata");
+    // The edit's only document write is the binding's own label (ADR 559:
+    // the definition rides the target's script label), committed by
+    // host.objects as one step: no separate write, never the property.
+    expect(set.undoSteps).toBe(1);
+    expect(mutate).not.toHaveBeenCalled();
     mutate.mockRestore();
     expect(await h.objects.get(picked, "expr")).toEqual({ kind: "value", value: "MM(weight_mm + 1)" });
     // The document is untouched until the binding applies again.
@@ -135,16 +147,13 @@ describe.skipIf(!ready && !required)("Data objects panel, real core + engine + D
     expect(await h.objects.get(picked, "expr")).toEqual({ kind: "value", value: "MM(weight_mm + 1)" });
   }, 120_000);
 
-  // A defect, pinned (found building this lane): the edit's only engine write
-  // is the binding's element label (syncLabels, a separate host.document
-  // .mutate), so host.objects.set reports undoSteps 0 while the engine took a
-  // step; undoing that step reverts the label but NOT the session (followLabel
-  // follows the document label's session version, not element labels), so the
-  // user sees an undo that changes nothing and the label disagrees with the
-  // session until the next save re-syncs it. The fix: the binding kind returns
-  // the label ops as its ObjectWrite mutations (one step host.objects reports)
-  // and the session follows element labels on undo. Then this flips to a pass.
-  it.fails("an expr edit through host.objects is one honest undo step the session follows [data.object-model]", async () => {
+  // Found building this lane: the edit's label write used to be a separate
+  // host.document.mutate, so host.objects.set reported 0 undo steps while the
+  // engine took one, and undoing it reverted the label but not the session.
+  // Now the binding kind returns the element label AND the document label
+  // naming the new session version as its ObjectWrite: one step, counted,
+  // and undo/redo move the session with the labels.
+  it("an expr edit through host.objects is one honest undo step the session follows, undo and redo [data.object-model] [data.persist.labels]", async () => {
     const mod = await loadBundleModule();
     const h = await openRealHost();
     hosts.push(h);
@@ -156,12 +165,60 @@ describe.skipIf(!ready && !required)("Data objects panel, real core + engine + D
     s.addQuery("q", "SELECT * FROM products ORDER BY sku", "recordStream");
     await s.refreshData();
     expect((await s.addPropertyBinding("weight", { target: "rectangle:urect", path: "frameStrokeWeight", query: "q", expr: "MM(weight_mm)" })).ok).toBe(true);
+    expect(await labelExpr(host, "urect", "weight")).toBe("MM(weight_mm)");
+
+    const mark = await undoMark(h);
+    const mutate = vi.spyOn(host.document, "mutate");
     const set = await h.objects.set(BINDING, "expr", "MM(weight_mm + 1)");
-    expect(set.applied).toBe(true);
+    expect(set.applied, set.reason).toBe(true);
     expect(set.undoSteps).toBe(1);
+    // No write of its own beside the host.objects batch.
+    expect(mutate).not.toHaveBeenCalled();
+    mutate.mockRestore();
+    expect(await h.objects.get(BINDING, "expr")).toEqual({ kind: "value", value: "MM(weight_mm + 1)" });
+    expect(await labelExpr(host, "urect", "weight")).toBe("MM(weight_mm + 1)");
+
+    // Undo: the label AND the session go back.
     await host.document.undo();
-    await settle();
-    expect(await h.objects.get(BINDING, "expr")).toEqual({ kind: "value", value: "MM(weight_mm)" });
+    await vi.waitFor(async () => expect(await h.objects.get(BINDING, "expr")).toEqual({ kind: "value", value: "MM(weight_mm)" }), { timeout: 10_000 });
+    expect(await labelExpr(host, "urect", "weight")).toBe("MM(weight_mm)");
+
+    // Redo: both come forward again.
+    await host.document.redo();
+    await vi.waitFor(async () => expect(await h.objects.get(BINDING, "expr")).toEqual({ kind: "value", value: "MM(weight_mm + 1)" }), { timeout: 10_000 });
+    expect(await labelExpr(host, "urect", "weight")).toBe("MM(weight_mm + 1)");
+
+    // The engine took exactly the one step host.objects reported.
+    expect(await undoSteps(h, mark)).toBe(1);
+  }, 60_000);
+
+  it("the Bindings panel's Bind defines through host.objects: one undo step, and undo takes the binding out of the session [data.object-model] [data.bind.property]", async () => {
+    const mod = await loadBundleModule();
+    const om = await import("../src/object-model");
+    const h = await openRealHost();
+    hosts.push(h);
+    let host!: BundleHost;
+    h.loadBundle({ ...mod.dataBundle, activate: (bh: BundleHost) => ((host = bh), mod.dataBundle.activate(bh)) } as typeof mod.dataBundle);
+    const s = mod.sessionFor(host)!;
+    await s.whenRestored();
+    await s.registerCsvSource("products", CSV);
+    s.addQuery("q", "SELECT * FROM products ORDER BY sku", "recordStream");
+    await s.refreshData();
+
+    const mark = await undoMark(h);
+    const batch = vi.spyOn(host.objects, "batch");
+    const r = await om.defineBinding(host, s, "weight", { target: "rectangle:urect", path: "frameStrokeWeight", query: "q", expr: "MM(weight_mm)" });
+    expect(r.ok, r.reason).toBe(true);
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(s.listBindings().map((b) => b.id)).toEqual(["weight"]);
+    expect(await labelExpr(host, "urect", "weight")).toBe("MM(weight_mm)");
+
+    await host.document.undo();
+    await vi.waitFor(() => expect(s.listBindings().map((b) => b.id)).toEqual([]), { timeout: 10_000 });
+    expect(await labelExpr(host, "urect", "weight")).toBeNull();
+    await host.document.redo();
+    await vi.waitFor(() => expect(s.listBindings().map((b) => b.id)).toEqual(["weight"]), { timeout: 10_000 });
+    expect(await undoSteps(h, mark)).toBe(1);
   }, 60_000);
 
   it("a read-only row refuses a write (the PropertyField renders it read-only) [data.object-model]", async () => {

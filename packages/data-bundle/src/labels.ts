@@ -130,11 +130,25 @@ function relative(b: BindingJson, oid: string | null): BindingJson {
 }
 
 /** The element a binding is carried by (its raw `Self`), or null (document scope). */
-function hostElementOf(b: BindingJson, facts: HostFacts, byOid: ReadonlyMap<string, LabelledElement>): ElementId | null {
+function hostElementOf(
+  b: BindingJson,
+  facts: HostFacts,
+  byOid: ReadonlyMap<string, LabelledElement>,
+  elements: readonly LabelledElement[],
+): ElementId | null {
   switch (b.kind) {
     case "property": {
-      const oid = facts.hostOids.get(b.id);
-      return (oid ? byOid.get(oid)?.element : undefined) ?? facts.hostElements?.get(b.id) ?? null;
+      // The session's facts first; a session reloaded from a version (an
+      // undo, a reopen) has none, so then the oid its selector names, then
+      // the element whose label already carries it (it stays there).
+      const sel = (b.target as { selector?: string } | null)?.selector;
+      const oid = facts.hostOids.get(b.id) ?? (typeof sel === "string" ? oidOfSelector(sel) : null);
+      return (
+        (oid ? byOid.get(oid)?.element : undefined) ??
+        facts.hostElements?.get(b.id) ??
+        elements.find((e) => Array.isArray(e.data?.bind) && (e.data!.bind as { id?: unknown }[]).some((x) => x?.id === b.id))?.element ??
+        null
+      );
     }
     case "visibility": {
       const t = facts.visibility.get(b.id);
@@ -241,7 +255,7 @@ export function planLabels(
   // element raw id → its patch
   const patches = new Map<string, { element: ElementId; patch: Record<string, unknown> }>();
   for (const b of payload.bindings ?? []) {
-    const el = hostElementOf(b, facts, byOid);
+    const el = hostElementOf(b, facts, byOid, elements);
     if (!el || typeof el.id !== "string") {
       plan.documentOnly[b.id] = "its target is not a page item";
       continue;

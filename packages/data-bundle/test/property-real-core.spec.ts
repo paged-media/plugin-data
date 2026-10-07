@@ -236,6 +236,35 @@ describe.skipIf(!ready && !required)("universal property binding, real core + en
     expect(def).toMatchObject({ kind: "property", path: "frameFillColor", missing: "default", schema: { type: { kind: "color" } } });
   });
 
+  it("an expr edit through host.objects, undone, then saved and stripped like InDesign: the labels restore the undone definition [data.persist.labels] [data.object-model]", async () => {
+    const mod = await loadBundleModule();
+    const a = await open(mod);
+    await seed(a.s);
+    await a.s.addPropertyBinding("weight", { target: "rectangle:urect", path: "frameStrokeWeight", query: "q", expr: "MM(weight_mm)" });
+    const binding = "plugin:media.paged.data/binding/weight";
+    const set = await a.h.objects.set(binding, "expr", "MM(weight_mm + 1)");
+    expect(set.applied, set.reason).toBe(true);
+    expect(set.undoSteps).toBe(1);
+    await a.host.document.undo();
+    await vi.waitFor(async () => expect((await a.s.bindingDefinition("weight"))?.expr).toBe("MM(weight_mm)"), { timeout: 10_000 });
+    // The save writes no label: the undone session and the labels agree
+    // (and a write here would cost the redo below).
+    const mutate = vi.spyOn(a.host.document, "mutate");
+    await a.h.willSave.fire();
+    expect(mutate).not.toHaveBeenCalled();
+    mutate.mockRestore();
+    const stripped = stripContainerParts(await exportPaged(a.host));
+    const c = await open(mod, stripped);
+    expect(c.s.listBindings().map((x) => x.id)).toEqual(["weight"]);
+    expect((await c.s.bindingDefinition("weight"))?.expr).toBe("MM(weight_mm)");
+    // …and redone instead: the edit comes back from the labels.
+    await a.host.document.redo();
+    await vi.waitFor(async () => expect((await a.s.bindingDefinition("weight"))?.expr).toBe("MM(weight_mm + 1)"), { timeout: 10_000 });
+    await a.h.willSave.fire();
+    const d = await open(mod, stripContainerParts(await exportPaged(a.host)));
+    expect((await d.s.bindingDefinition("weight"))?.expr).toBe("MM(weight_mm + 1)");
+  }, 60_000);
+
   it("InDesign's <?AID?> re-encoding of a label still restores [data.persist.labels]", async () => {
     const mod = await loadBundleModule();
     const a = await open(mod);

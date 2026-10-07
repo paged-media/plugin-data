@@ -10,12 +10,14 @@
 //
 // What a write is: session state, not document content. A `set` changes the
 // session (define / redefine via the session — the same paths the panels
-// use) and returns no mutations: zero undo steps, like defining a binding
-// in the panel. What a binding then WRITES into the document is undoable
-// as always (`apply`, one step).
-// Known gap: redefining a binding re-syncs its element label, a separate
-// engine write host.objects does not count and the session does not follow
-// on undo (pinned in test/objects-panel-real-core.spec.ts).
+// use) and returns no mutations: zero undo steps. What a binding then
+// WRITES into the document is undoable as always (`apply`, one step).
+// One exception, by design: a binding's definition rides its target's
+// element label (ADR 559), so a binding write (create / set / delete)
+// returns that label change, plus the document label naming the new session
+// version, as its ObjectWrite: ONE undo step host.objects reports, and
+// undoing it takes the session back with the labels (the session follows
+// the document label, whose version holds the old definition).
 
 import type {
   BundleHost,
@@ -32,6 +34,7 @@ import type {
 
 import manifest from "../manifest.json";
 import { objectsOf } from "./property-lane";
+import type { PropertyBindingSpec } from "./property-session";
 import type { DataSourceSession } from "./session";
 
 export const PLUGIN_ID = "media.paged.data";
@@ -237,10 +240,13 @@ function kinds(host: BundleHost, session: DataSourceSession): ObjectKindContribu
       }
     },
     async batch(ops: readonly ObjectOp[]) {
+      // The labels are planned once, after every op: one write for the batch.
+      const defer = { labels: "defer" as const };
+      await session.beforeObjectWrite();
       for (const op of ops) {
         if (op.op === "delete") {
           const id = idOf(op.address, "binding");
-          if (!id || !(await session.removeBinding(id))) return no(`no binding ${op.address}`);
+          if (!id || !(await session.removeBinding(id, defer))) return no(`no binding ${op.address}`);
           continue;
         }
         if (op.op === "create") {
@@ -249,15 +255,19 @@ function kinds(host: BundleHost, session: DataSourceSession): ObjectKindContribu
           const id = op.handle ?? (def?.id as string | undefined);
           if (!id) return no("create binding: a handle (the binding id) or a definition with an id");
           const r = def
-            ? await session.redefineBinding({ ...def, id })
-            : await session.addPropertyBinding(id, {
-                target: String(p.target ?? ""),
-                path: String(p.path ?? ""),
-                query: String(p.query ?? "").replace(`plugin:${PLUGIN_ID}/query/`, ""),
-                expr: String(p.expr ?? ""),
-                ...(p.coerce ? { coerce: p.coerce as "strict" } : {}),
-                ...(p.missing ? { missing: p.missing as "keepLast" } : {}),
-              });
+            ? await session.redefineBinding({ ...def, id }, defer)
+            : await session.addPropertyBinding(
+                id,
+                {
+                  target: String(p.target ?? ""),
+                  path: String(p.path ?? ""),
+                  query: String(p.query ?? "").replace(`plugin:${PLUGIN_ID}/query/`, ""),
+                  expr: String(p.expr ?? ""),
+                  ...(p.coerce ? { coerce: p.coerce as "strict" } : {}),
+                  ...(p.missing ? { missing: p.missing as "keepLast" } : {}),
+                },
+                defer,
+              );
           if (!r.ok) return no(r.reason ?? "refused");
           continue;
         }
@@ -292,10 +302,11 @@ function kinds(host: BundleHost, session: DataSourceSession): ObjectKindContribu
         } else {
           return no(`${op.path} is read-only`);
         }
-        const r = await session.redefineBinding(next);
+        const r = await session.redefineBinding(next, defer);
         if (!r.ok) return no(r.reason ?? "refused");
       }
-      return none;
+      const mutations = await session.labelOpsForObjects();
+      return mutations.length > 0 ? { kind: "mutations", mutations } : none;
     },
   };
 
@@ -351,6 +362,48 @@ function kinds(host: BundleHost, session: DataSourceSession): ObjectKindContribu
 
   void host;
   return [source, query, binding, dataSet, variable];
+}
+
+/** Define (or redefine) a property binding the way host.objects does: a
+ *  `create` op on the binding kind, so the definition's labels and the
+ *  session version land as ONE undo step the session follows. The Bindings
+ *  panel's "Bind" uses it. Without host.objects (or the data kinds), the
+ *  session defines it directly (its labels then ride their own write, which
+ *  carries the session label too). */
+export async function defineBinding(
+  host: BundleHost,
+  session: DataSourceSession,
+  id: string,
+  spec: PropertyBindingSpec,
+): Promise<{ ok: boolean; reason?: string }> {
+  const objects = objectsOf(host);
+  const kind = `plugin:${PLUGIN_ID}/binding`;
+  let registered = false;
+  try {
+    registered = !!objects && typeof objects.batch === "function" && (await objects.kinds()).some((k) => k.kind === kind);
+  } catch {
+    registered = false;
+  }
+  if (!objects || !registered) return session.addPropertyBinding(id, spec);
+  let schema: unknown;
+  try {
+    schema = typeof spec.schema === "string" ? JSON.parse(spec.schema) : spec.schema;
+  } catch {
+    return { ok: false, reason: "the schema row is not JSON" };
+  }
+  const definition = {
+    id,
+    kind: "property",
+    target: { selector: spec.target },
+    path: spec.path,
+    query: spec.query,
+    expr: spec.expr,
+    ...(spec.coerce ? { coerce: spec.coerce } : {}),
+    ...(spec.missing ? { missing: spec.missing } : {}),
+    ...(schema && typeof schema === "object" ? { schema } : {}),
+  };
+  const out = await objects.batch([{ op: "create", kind, handle: id, props: { definition: JSON.stringify(definition) } }]);
+  return out.applied ? { ok: true } : { ok: false, reason: out.reason ?? "refused" };
 }
 
 function commands(host: BundleHost, session: DataSourceSession, panels: { bindings: string }): TypedCommandContribution[] {

@@ -5,7 +5,7 @@
 // spreads these methods into the session (like `reviewMethods`); the state
 // they touch is the session's own, passed in by reference.
 
-import type { BundleHost, ElementId, PropertySchema } from "@paged-media/plugin-api";
+import type { BundleHost, ElementId, Mutation, PropertySchema } from "@paged-media/plugin-api";
 
 import { DATA_LABEL_KEY, labelData, oidOfSelector, oidSelector, type PropertyApply } from "../../data-host-model/src";
 import type { DataEngineLike } from "./engine";
@@ -37,6 +37,9 @@ export interface PropertyContext {
   loadRecipe(payload: PayloadJson): Promise<DataEngineLike>;
   report(d: Diagnostic): void;
   markDirty(): void;
+  /** Write a pending session change now, so the next document write
+   *  carries the document label naming it (doc-label.ts). */
+  settleLabel(): Promise<void>;
   emit(): void;
   bindingKinds: Map<string, string>;
   bindingIds: string[];
@@ -68,6 +71,16 @@ export interface PropertyBindingSpec {
   missing?: "keepLast" | "clear" | "default" | "error";
   /** The ADR 132 schema row (JSON or object); read from the target when absent. */
   schema?: PropertySchema | string;
+}
+
+/** How a definition change reaches the element labels (ADR 559).
+ *  `write` (the default): one document write of its own, which also carries
+ *  the document label naming the new session version, so undoing it takes
+ *  the session back too. `defer`: nothing is written; the caller plans the
+ *  labels (`planLabelOps`) and commits them in its own write (host.objects:
+ *  the binding kind returns them as its ObjectWrite, one undo step). */
+export interface LabelMode {
+  labels?: "write" | "defer";
 }
 
 export interface DefineResult {
@@ -215,10 +228,10 @@ export function propertyMethods(ctx: PropertyContext) {
     }
   }
 
-  /** Write the element labels the recipe asks for (one mutate, or none). */
-  async function syncLabels(): Promise<{ written: number }> {
+  /** The element-label ops the recipe asks for now (none when they agree). */
+  async function planLabelOps(): Promise<Mutation[]> {
     const e = ctx.engineIfUp();
-    if (!e) return { written: 0 };
+    if (!e) return [];
     const payload = (e.payload() ?? {}) as PayloadJson;
     const facts: HostFacts = {
       hostOids: ctx.hostOids,
@@ -229,16 +242,31 @@ export function propertyMethods(ctx: PropertyContext) {
       lowered: ctx.loweredInto,
       storyHosted: await storyHosted(payload),
     };
-    const plan = planLabels(payload, facts, labelledElements(await tree()));
-    if (plan.ops.length === 0) return { written: 0 };
-    const out = await host.document.mutate(
-      plan.ops.length === 1 ? plan.ops[0]! : ({ op: "batch", args: { ops: plan.ops } } as never),
-    );
+    return planLabels(payload, facts, labelledElements(await tree())).ops as Mutation[];
+  }
+
+  /** Write the element labels the recipe asks for (one mutate, or none).
+   *  Always a batch, so the session's label rider adds the document label
+   *  naming the pending session version: the write and the session change
+   *  are one undo step, and undo takes the session back (followLabel). */
+  async function syncLabels(): Promise<{ written: number }> {
+    const ops = await planLabelOps();
+    if (ops.length === 0) return { written: 0 };
+    const out = await host.document.mutate({ op: "batch", args: { ops } } as never);
     if (!out.applied) {
       ctx.report({ level: "warn", source: "persist", message: `the binding labels were not written: ${errText(out.error)}` });
       return { written: 0 };
     }
-    return { written: plan.ops.length };
+    return { written: ops.length };
+  }
+
+  /** A definition changed: write its labels now (with the session label
+   *  riding along), unless the caller commits them itself. */
+  async function definitionChanged(mode: LabelMode | undefined): Promise<void> {
+    ctx.markDirty();
+    if (mode?.labels === "defer") return;
+    await ctx.settleLabel();
+    await syncLabels();
   }
 
   /** Rebuild the session from the labels (the part is gone). `true` when
@@ -337,9 +365,10 @@ export function propertyMethods(ctx: PropertyContext) {
 
   return {
     syncLabels,
+    planLabelOps,
     restoreLabels,
 
-    async addPropertyBinding(id: string, spec: PropertyBindingSpec): Promise<DefineResult> {
+    async addPropertyBinding(id: string, spec: PropertyBindingSpec, mode?: LabelMode): Promise<DefineResult> {
       const objects = objectsOf(host);
       if (!objects) return { ok: false, reason: NO_OBJECT_MODEL };
       let addresses: string[];
@@ -412,13 +441,12 @@ export function propertyMethods(ctx: PropertyContext) {
       }
       ctx.bindingKinds.set(id, "property");
       if (!ctx.bindingIds.includes(id)) ctx.bindingIds.push(id);
-      ctx.markDirty();
-      await syncLabels();
+      await definitionChanged(mode);
       ctx.emit();
       return { ok: true, selector };
     },
 
-    async removeBinding(id: string): Promise<boolean> {
+    async removeBinding(id: string, mode?: LabelMode): Promise<boolean> {
       const e = ctx.engineIfUp();
       const removed = e && typeof e.remove_binding === "function" ? e.remove_binding(id) : false;
       const i = ctx.bindingIds.indexOf(id);
@@ -427,8 +455,7 @@ export function propertyMethods(ctx: PropertyContext) {
       for (const m of [ctx.visibilityTargets, ctx.imageTargets, ctx.barcodeTargets, ctx.loweredInto, ctx.ruleTargets, ctx.hostOids, ctx.hostElements]) {
         (m as Map<string, unknown>).delete(id);
       }
-      ctx.markDirty();
-      await syncLabels();
+      await definitionChanged(mode);
       ctx.emit();
       return removed || i >= 0;
     },
@@ -489,7 +516,7 @@ export function propertyMethods(ctx: PropertyContext) {
      *  A property binding goes through `addPropertyBinding` (its target is
      *  resolved and its schema read again); any other kind replaces its
      *  engine definition and keeps its host-side target. */
-    async redefineBinding(def: Record<string, unknown>): Promise<DefineResult> {
+    async redefineBinding(def: Record<string, unknown>, mode?: LabelMode): Promise<DefineResult> {
       const id = typeof def.id === "string" ? def.id : "";
       if (!id || typeof def.kind !== "string") return { ok: false, reason: "a definition needs an id and a kind" };
       if (def.kind === "property") {
@@ -503,7 +530,7 @@ export function propertyMethods(ctx: PropertyContext) {
           ...(def.coerce ? { coerce: def.coerce as "strict" } : {}),
           ...(def.missing ? { missing: def.missing as "keepLast" } : {}),
           ...(def.schema ? { schema: { path: String(def.path ?? ""), ...(def.schema as object) } as PropertySchema } : {}),
-        });
+        }, mode);
       }
       if (!ctx.bindingKinds.has(id)) return { ok: false, reason: `no ${def.kind} binding "${id}" to redefine (define it in the Bindings panel)` };
       const e = await ctx.ensureEngine();
@@ -513,8 +540,7 @@ export function propertyMethods(ctx: PropertyContext) {
         return { ok: false, reason: `the engine refused the definition: ${errText(err)}` };
       }
       ctx.bindingKinds.set(id, def.kind);
-      ctx.markDirty();
-      await syncLabels();
+      await definitionChanged(mode);
       ctx.emit();
       return { ok: true };
     },
