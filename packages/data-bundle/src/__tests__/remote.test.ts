@@ -195,7 +195,7 @@ describe("remote descriptors — credentialRef strings only (data.security.crede
   it("rejects URLs with embedded credentials", () => {
     const session = createSession(fakeHost([]), 0);
     const err = session.addRemoteSource("bad", "https://user:secret@api.test/x.csv", "csv");
-    expect(err).toContain("credentialRef");
+    expect(err).toContain("stored credential");
     expect(session.getState().remote).toHaveLength(0);
     expect(validateRemoteUrl("https://user:secret@api.test/x.csv")).toContain("credentials");
   });

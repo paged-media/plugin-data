@@ -581,7 +581,7 @@ fn data_dataset_apply_reports_unapplicable_rows_instead_of_faking_them() {
     let applies = s.apply_data_set("Alpha").unwrap();
     let sales = applies.iter().find(|a| a.variable == "Sales").unwrap();
     assert!(!sales.applicable);
-    assert!(sales.note.as_deref().unwrap().contains("D-15"));
+    assert!(sales.note.as_deref().unwrap().contains("cannot be applied"));
     let orphan = applies.iter().find(|a| a.variable == "Orphan").unwrap();
     assert!(!orphan.applicable);
     assert!(orphan.note.as_deref().unwrap().contains("no binding"));
