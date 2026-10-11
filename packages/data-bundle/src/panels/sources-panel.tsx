@@ -323,7 +323,14 @@ export function makeSourcesPanel(
           it again, or let it refresh on open. Remote sources can poll — only while their origin
           is allowed.
         </p>
-        <div data-status={snapshot.status}>status: {snapshot.status} — {snapshot.message}</div>
+        <div
+          data-status={snapshot.status}
+          // The message, not the engine's state name: "status: idle — …"
+          // read as a debug line. The state stays on `data-status`.
+          style={{ color: /error|missing|fail/i.test(String(snapshot.status)) ? "var(--status-error)" : "var(--pg-muted-fg)" }}
+        >
+          {snapshot.message}
+        </div>
         <DiagnosticsList
           diagnostics={snapshot.diagnostics}
           sources={["import", "persist", "restore"]}
