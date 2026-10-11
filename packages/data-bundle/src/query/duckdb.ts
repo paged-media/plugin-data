@@ -38,15 +38,42 @@
 // WHY NOT `loadBundleWasm`: the plugin-sdk loader instantiates a module with
 // only the imports the caller passes and no worker. DuckDB is an Emscripten
 // module that its own worker instantiates with its own imports, so the bundle
-// resolves the file URL (src/bin-url.ts, the same mechanism as
-// `../bin/data_js.js`) and hands it to DuckDB's worker. The manifest
+// resolves the file URL and hands it to DuckDB's worker. The manifest
 // declaration stays the governance anchor: the plugin-cli size gate and
 // scripts/pubcheck.mjs check the shipped file against its maxBytes.
+//
+// WHERE THE ENGINE COMES FROM (plugin-sdk ADR 326, the module door): the
+// boot first asks the HOST where it serves the declared `duckdb-engine`
+// artifact (src/module-door.ts). A deployed editor answers with the
+// first-party module host — https://modules.paged.media/@paged-media/data/
+// <version>/bin/duckdb-engine.wasm, immutable per published version, brotli,
+// CORS * — and the worker's `instantiate` fetches it from there. A host
+// without the door (or one that does not serve it) answers null and the
+// engine comes from bin/ as before.
+//
+// Before DuckDB sees the host's URL, the boot fetches it once on this side
+// (`preflightHostedWasm`): with the module's Subresource Integrity when the
+// host vouches for it. A 404, a refused CORS read or a digest that differs
+// falls back to bin/ — DuckDB's worker does not reject on a missing module,
+// it hangs — and a successful pre-fetch leaves the verified bytes in the
+// HTTP cache (the module host serves them immutable for a year), where the
+// worker's own fetch of the same URL finds them. If the host's copy still
+// fails to instantiate, the boot retries once from bin/ with a fresh worker.
+//
+// What D-05 still forbids, and what it does not: the WORKER SCRIPT stays in
+// the bundle's own bin/, same-origin — a Worker on a cross-origin URL is a
+// SecurityError — and nothing loads from a CDN or a third-party origin. The
+// module host is first-party (the editor's own CSP connect-src lists it) and
+// serves only the bytes this package published. DuckDB's worker fetches the
+// URL itself, so the module's Subresource Integrity cannot reach THAT fetch;
+// the pre-fetch above verifies the same immutable URL. The json /
+// parquet extensions still load from bin/duckdb-ext/ (DUCKDB_EXTENSIONS).
 //
 // Absent (not staged, or the host does not serve bin/) → DUCKDB_NOT_VENDORED,
 // which the sources panel shows as "duckdb-missing" — never faked.
 
 import { binUrl } from "../bin-url";
+import { WASM_ARTIFACTS, type WasmResolver } from "../module-door";
 import {
   arrowToColumns,
   arrowToRecordSet,
@@ -246,9 +273,39 @@ export function duckdbHandle(
   };
 }
 
-/** Boot DuckDB-WASM from the bundle's `bin/`. Throws [`DUCKDB_NOT_VENDORED`]
- *  when the artifact is absent (the panel renders that honestly). */
-export async function bootDuckDB(): Promise<DuckDBHandle> {
+/** Fetch the host's copy of a module once, with its integrity when known:
+ *  null when it is there (and its bytes match), else why not. The fetch
+ *  also leaves the bytes in the HTTP cache for DuckDB's worker. */
+export async function preflightHostedWasm(
+  url: string,
+  integrity: string | null,
+): Promise<string | null> {
+  try {
+    const res = integrity ? await fetch(url, { integrity }) : await fetch(url);
+    if (!res.ok) return `answered HTTP ${res.status}`;
+    // With an integrity the body is already read and verified; without one,
+    // read it so the cache entry is complete.
+    if (!integrity) await res.arrayBuffer();
+    return null;
+  } catch (err) {
+    return `could not be fetched${integrity ? " with its integrity" : ""} (${err instanceof Error ? err.message : String(err)})`;
+  }
+}
+
+/** Options for [`bootDuckDB`]. */
+export interface BootDuckDBOptions {
+  /** The module door (src/module-door.ts): where the HOST serves the
+   *  `duckdb-engine` artifact. Absent, or answering null: `bin/`. */
+  resolveWasm?: WasmResolver;
+  /** Told when the host's engine failed and `bin/` was used. */
+  onFallback?: (reason: string) => void;
+}
+
+/** Boot DuckDB-WASM: the engine wasm from the host's module door when it
+ *  serves it, else from the bundle's `bin/`; the worker and the JS API always
+ *  from `bin/`. Throws [`DUCKDB_NOT_VENDORED`] when the artifact is absent
+ *  (the panel renders that honestly). */
+export async function bootDuckDB(opts: BootDuckDBOptions = {}): Promise<DuckDBHandle> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let duckdb: any = null;
   try {
@@ -258,24 +315,53 @@ export async function bootDuckDB(): Promise<DuckDBHandle> {
   }
   if (!duckdb) throw new Error(DUCKDB_NOT_VENDORED);
 
-  // Spawn the worker from the bundle's own bin/, same-origin. NOT
-  // getJsDelivrBundles(): a Worker on a cross-origin URL is a SecurityError,
-  // and the plugin never fetches its engine from a CDN (BREAKAGE D-05).
-  const worker = new Worker(binUrl(DUCKDB_ARTIFACTS.worker));
-  const logger = new duckdb.ConsoleLogger();
-  const db = new duckdb.AsyncDuckDB(logger, worker);
-  try {
-    await db.instantiate(binUrl(DUCKDB_ARTIFACTS.module));
-  } catch (err) {
-    worker.terminate();
+  // The engine wasm: the host's copy when the module door serves it, then
+  // the bundle's own. Each attempt gets a fresh worker.
+  const own = binUrl(DUCKDB_ARTIFACTS.module);
+  const hosted = opts.resolveWasm
+    ? await opts.resolveWasm(WASM_ARTIFACTS.duckdb).catch(() => null)
+    : null;
+  const candidates = [own];
+  if (hosted && hosted.url !== own) {
+    const why = await preflightHostedWasm(hosted.url, hosted.integrity);
+    if (why === null) candidates.unshift(hosted.url);
+    else opts.onFallback?.(`the host's DuckDB engine (${hosted.url}) ${why}; using bin/`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null;
+  let worker: Worker | null = null;
+  let lastErr: unknown = null;
+  for (const moduleUrl of candidates) {
+    // Spawn the worker from the bundle's own bin/, same-origin. NOT
+    // getJsDelivrBundles(): a Worker on a cross-origin URL is a SecurityError,
+    // and the plugin never fetches its engine from a CDN (BREAKAGE D-05).
+    const w = new Worker(binUrl(DUCKDB_ARTIFACTS.worker));
+    const candidate = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), w);
+    try {
+      await candidate.instantiate(moduleUrl);
+      db = candidate;
+      worker = w;
+      break;
+    } catch (err) {
+      w.terminate();
+      lastErr = err;
+      if (moduleUrl !== own) {
+        opts.onFallback?.(
+          `the host's DuckDB engine (${moduleUrl}) did not instantiate (${err instanceof Error ? err.message : String(err)}); using bin/`,
+        );
+      }
+    }
+  }
+  if (!db || !worker) {
     throw new Error(
-      `${DUCKDB_NOT_VENDORED} (instantiate failed: ${err instanceof Error ? err.message : String(err)})`,
+      `${DUCKDB_NOT_VENDORED} (instantiate failed: ${lastErr instanceof Error ? lastErr.message : String(lastErr)})`,
     );
   }
+  const liveWorker: Worker = worker;
   const conn = await db.connect();
   for (const sql of bootSql(binUrl(DUCKDB_EXTENSIONS.dir))) await conn.query(sql);
   return duckdbHandle(db, conn, async () => {
     await db.terminate();
-    worker.terminate();
+    liveWorker.terminate();
   });
 }

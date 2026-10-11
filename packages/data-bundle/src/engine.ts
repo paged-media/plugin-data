@@ -24,6 +24,7 @@
 // boundary (CLAUDE.md hard rule) — this file only constructs the handle (and
 // hands a result's typed column buffers across the column door).
 
+import { WASM_ARTIFACTS, type WasmResolver } from "./module-door";
 import { columnToValues, type ColumnBatch } from "./query/recordset";
 
 export const ENGINE_NOT_BUILT =
@@ -187,9 +188,19 @@ export interface DataEngineLike {
 // wasm glue path; it is loaded dynamically in the bundle realm at runtime.
 const ENGINE_GLUE = "../bin/data_js.js";
 
+/** Options for [`bootEngine`]. */
+export interface BootEngineOptions {
+  /** The module door (src/module-door.ts): where the HOST serves the
+   *  `data-engine` artifact. Absent, or answering null, the glue loads the
+   *  `.wasm` next to itself (`bin/data_js_bg.wasm`). */
+  resolveWasm?: WasmResolver;
+  /** Told when the host's copy failed and the bundle's own was used. */
+  onFallback?: (reason: string) => void;
+}
+
 /** Boot a `DataEngine` over the wasm-bindgen glue. Throws [`ENGINE_NOT_BUILT`]
  *  when the artifact is absent (the panel renders that honestly). */
-export async function bootEngine(today: number): Promise<DataEngineLike> {
+export async function bootEngine(today: number, opts: BootEngineOptions = {}): Promise<DataEngineLike> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mod: any = null;
   try {
@@ -202,9 +213,37 @@ export async function bootEngine(today: number): Promise<DataEngineLike> {
   }
   // wasm-bindgen `--target web` exports a default init() that fetches the .wasm.
   if (typeof mod.default === "function") {
-    await mod.default();
+    await initEngineGlue(mod.default, opts);
   }
   return new mod.DataEngine(today) as DataEngineLike;
+}
+
+/** Run the glue's `init`: with the module door, on the host's copy fetched
+ *  with its integrity (a byte that differs fails the fetch); on any failure
+ *  of that, or without the door, on the `.wasm` next to the glue. A failed
+ *  init leaves the glue uninitialised, so the second call starts clean. */
+export async function initEngineGlue(
+  init: (arg?: { module_or_path: unknown }) => Promise<unknown>,
+  opts: BootEngineOptions = {},
+): Promise<void> {
+  const hosted = opts.resolveWasm
+    ? await opts.resolveWasm(WASM_ARTIFACTS.engine).catch(() => null)
+    : null;
+  if (hosted) {
+    try {
+      await init({
+        module_or_path: hosted.integrity
+          ? fetch(hosted.url, { integrity: hosted.integrity })
+          : hosted.url,
+      });
+      return;
+    } catch (err) {
+      opts.onFallback?.(
+        `the host's data engine (${hosted.url}) did not load (${err instanceof Error ? err.message : String(err)}); using the bundle's own`,
+      );
+    }
+  }
+  await init();
 }
 
 /** Deliver a query result to the engine as typed column buffers (the column
