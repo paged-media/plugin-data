@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { REQUIRE_REAL_DUCKDB } from "./real-duckdb";
 import { REQUIRE_REAL_BROWSER, startBrowserLane, type BrowserLane } from "./browser-lane";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ALLOWED, FIXTURE_CSV, REFUSED } from "./guard-matrix";
@@ -217,5 +218,104 @@ describe.skipIf(!REQUIRED && process.env.PAGED_BROWSER_LANE === "0")(
       const ext = lane!.served.filter((p) => p.includes("duckdb_extension"));
       expect(ext.every((p) => p.startsWith("/bin/duckdb-ext/v1.1.1/wasm_eh/")), ext.join(", ")).toBe(true);
     });
+  },
+);
+
+// The module door (plugin-sdk ADR 326) in the real browser: the engine wasm
+// comes from a CROSS-ORIGIN module host (brotli, CORS *, as
+// modules.paged.media serves it) while the DuckDB worker stays in bin/,
+// same-origin (D-05). A host copy that fails falls back to bin/.
+describe.skipIf(!REQUIRED && process.env.PAGED_BROWSER_LANE === "0")(
+  "the engines load through the host's module door [data.query.seam]",
+  () => {
+    const DATA_WASM = join(__dirname, "..", "bin", "data_js_bg.wasm");
+    const sri = (bytes: Buffer) => "sha384-" + createHash("sha384").update(bytes).digest("base64");
+
+    it("DuckDB instantiates from the module host; the worker stays in bin/", async (ctx) => {
+      if (!lane && !REQUIRED) ctx.skip();
+      const before = lane!.served.length;
+      const out = await lane!.page.evaluate(
+        async ({ origin }: { origin: string }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const L = (window as any).lane;
+          const fallbacks: string[] = [];
+          const d = await L.bootDuckDB({
+            resolveWasm: async (name: string) =>
+              name === "duckdb-engine"
+                ? { url: `${origin}/@paged-media/data/0.0.0-test/bin/duckdb-engine.wasm`, integrity: null }
+                : null,
+            onFallback: (r: string) => fallbacks.push(r),
+          });
+          const rows = (await d.rows("SELECT 40 + 2")).rows;
+          await d.close();
+          return { rows, fallbacks };
+        },
+        { origin: lane!.moduleOrigin },
+      );
+      expect(out.fallbacks).toEqual([]);
+      expect(out.rows).toEqual([["42"]]);
+      expect(lane!.moduleServed).toContain("/@paged-media/data/0.0.0-test/bin/duckdb-engine.wasm");
+      const served = lane!.served.slice(before);
+      expect(served).toContain("/bin/duckdb-browser-eh.worker.js");
+      expect(served).not.toContain("/bin/duckdb-engine.wasm");
+    }, 60_000);
+
+    it("a host engine that is not there falls back to bin/", async (ctx) => {
+      if (!lane && !REQUIRED) ctx.skip();
+      const before = lane!.served.length;
+      const out = await lane!.page.evaluate(
+        async ({ origin }: { origin: string }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const L = (window as any).lane;
+          const fallbacks: string[] = [];
+          const d = await L.bootDuckDB({
+            resolveWasm: async () => ({ url: `${origin}/@paged-media/data/0.0.0-test/bin/missing.wasm`, integrity: null }),
+            onFallback: (r: string) => fallbacks.push(r),
+          });
+          const rows = (await d.rows("SELECT 1")).rows;
+          await d.close();
+          return { rows, fallbacks: fallbacks.length };
+        },
+        { origin: lane!.moduleOrigin },
+      );
+      expect(out.rows).toEqual([["1"]]);
+      expect(out.fallbacks).toBe(1);
+      expect(lane!.served.slice(before)).toContain("/bin/duckdb-engine.wasm");
+    }, 60_000);
+
+    it("the data engine loads from the module host with its integrity; a wrong digest is refused by the fetch", async (ctx) => {
+      if (!lane && !REQUIRED) ctx.skip();
+      const good = sri(readFileSync(DATA_WASM));
+      const bad = sri(Buffer.from("not the engine"));
+      const out = await lane!.page.evaluate(
+        async ({ origin, good, bad }: { origin: string; good: string; bad: string }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const L = (window as any).lane;
+          const url = `${origin}/@paged-media/data/0.0.0-test/bin/data_js_bg.wasm`;
+          const fallbacks: string[] = [];
+          const e = await L.bootEngine(Date.UTC(2026, 9, 11) / 86400000, {
+            resolveWasm: async (name: string) => (name === "data-engine" ? { url, integrity: good } : null),
+            onFallback: (r: string) => fallbacks.push(r),
+          });
+          const okType = typeof e.payload;
+          // The glue is initialised once per realm, so a second boot cannot
+          // show the fallback; prove that the browser refuses a wrong digest
+          // for the same response (bootEngine then loads bin/ — the unit
+          // test in src/__tests__/module-door.test.ts drives that branch).
+          let refused = false;
+          try {
+            await fetch(url, { integrity: bad });
+          } catch {
+            refused = true;
+          }
+          return { okType, fallbacks, refused };
+        },
+        { origin: lane!.moduleOrigin, good, bad },
+      );
+      expect(out.fallbacks).toEqual([]);
+      expect(out.okType).toBe("function");
+      expect(out.refused).toBe(true);
+      expect(lane!.moduleServed).toContain("/@paged-media/data/0.0.0-test/bin/data_js_bg.wasm");
+    }, 60_000);
   },
 );

@@ -85,6 +85,7 @@ import {
 } from "./merge";
 import { documentElements, planRelower, type RelowerTarget } from "./relower";
 import { bootDuckDB, DUCKDB_NOT_VENDORED, type DuckDBHandle } from "./query/duckdb";
+import { wasmResolver } from "./module-door";
 import {
   formatOfFile,
   loadIntoDuckDB,
@@ -1616,7 +1617,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     }
     if (engine) return engine;
     try {
-      const e = await bootEngine(today);
+      const e = await bootEngine(today, {
+        resolveWasm: wasmResolver(rawHost),
+        onFallback: (reason) => rawHost.log.warn(reason),
+      });
       try {
         e.set_locale(locale); // apply the chosen locale to the fresh engine
       } catch (err) {
@@ -1654,7 +1658,10 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   async function ensureDuck(): Promise<DuckDBHandle> {
     if (duck) return duck;
     try {
-      const d = await bootDuckDB();
+      const d = await bootDuckDB({
+        resolveWasm: wasmResolver(rawHost),
+        onFallback: (reason) => rawHost.log.warn(reason),
+      });
       duck = d;
       for (const [name, text] of [...pendingCsv]) {
         try {

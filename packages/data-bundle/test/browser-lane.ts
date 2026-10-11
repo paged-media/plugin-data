@@ -11,6 +11,7 @@
 // chromium-headless-shell`). REQUIRE_REAL_BROWSER=1 turns "no browser" into
 // a failure instead of a skip.
 import { createServer, type Server } from "node:http";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir, homedir } from "node:os";
@@ -73,6 +74,12 @@ export interface BrowserLane {
   offOrigin: string[];
   /** Every path the lane's server answered 200, in order (bin/ and lane/). */
   served: string[];
+  /** A second, CROSS-ORIGIN server standing in for the module host
+   *  (modules.paged.media, plugin-sdk ADR 326): `/<package>/<version>/bin/<file>`
+   *  answers the bundle's bin/ file brotli-encoded, `application/wasm`, CORS *. */
+  moduleOrigin: string;
+  /** Every path the module host answered 200, in order. */
+  moduleServed: string[];
   close(): Promise<void>;
 }
 
@@ -108,6 +115,35 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
   });
   writeFileSync(join(out, "index.html"), `<!doctype html><meta charset="utf-8"><script type="module" src="./entry.js"></script>`);
 
+  // The module host: a different port is a different origin.
+  const moduleServed: string[] = [];
+  const compressed = new Map<string, Buffer>();
+  const modules: Server = createServer((rq, rs) => {
+    const url = new URL(rq.url ?? "/", "http://x");
+    const m = /^\/@paged-media\/data\/[^/]+\/bin\/(.+)$/.exec(url.pathname);
+    const file = m ? join(BIN, m[1]!) : "";
+    if (!file || file.includes("..") || !existsSync(file)) {
+      rs.writeHead(404, { "access-control-allow-origin": "*" }).end();
+      return;
+    }
+    rs.writeHead(200, {
+      "content-type": TYPES[extname(file)] ?? "application/octet-stream",
+      "content-encoding": "br",
+      "cache-control": "public, max-age=31536000, immutable",
+      "access-control-allow-origin": "*",
+    });
+    moduleServed.push(url.pathname);
+    // Quality 4: brotli at the default 11 takes a minute on DuckDB's 34 MB.
+    let br = compressed.get(file);
+    if (!br) {
+      br = brotliCompressSync(readFileSync(file), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } });
+      compressed.set(file, br);
+    }
+    rs.end(br);
+  });
+  await new Promise<void>((ok) => modules.listen(0, "127.0.0.1", ok));
+  const moduleOrigin = `http://127.0.0.1:${(modules.address() as { port: number }).port}`;
+
   const served: string[] = [];
   const server: Server = createServer((rq, rs) => {
     const url = new URL(rq.url ?? "/", "http://x");
@@ -131,7 +167,8 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
       "cross-origin-opener-policy": "same-origin",
       "cross-origin-embedder-policy": "credentialless",
       "cross-origin-resource-policy": "same-origin",
-      "content-security-policy": "connect-src 'self' blob: data:",
+      // + the module host, as the editor's connect-src floor lists it.
+      "content-security-policy": `connect-src 'self' blob: data: ${moduleOrigin}`,
       "cache-control": "no-cache",
     });
     served.push(url.pathname);
@@ -161,9 +198,12 @@ export async function startBrowserLane(): Promise<{ lane?: BrowserLane; error?: 
       errors,
       offOrigin,
       served,
+      moduleOrigin,
+      moduleServed,
       async close() {
         await browser.close();
         await new Promise<void>((ok) => server.close(() => ok()));
+        await new Promise<void>((ok) => modules.close(() => ok()));
         rmSync(out, { recursive: true, force: true });
       },
     },

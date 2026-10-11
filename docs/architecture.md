@@ -245,11 +245,18 @@ panels, seven commands and one edit context, `dataBinding`.
 | `host.shell.pickFile`, `saveFile`, `openPanel` | import CSV and XML, export XML, open a panel |
 | `host.supports`, `host.log` | probe optional doors; logging |
 
-Neither wasm file goes through a host loader. The engine is imported from
-`../bin/data_js.js`, the `wasm-bindgen --target web` glue, which fetches its `.wasm`. DuckDB
-is loaded the same way, from the package's own `bin/` (`packages/data-bundle/src/bin-url.ts`):
-`duckdb-browser.mjs` (the DuckDB JS API with apache-arrow bundled in), the eh worker and
-`duckdb-engine.wasm`. The bundle starts DuckDB's worker itself. All of them are in the files
+Neither wasm file goes through a host loader, but both are first asked of the host's module
+door (plugin-sdk ADR 326; `packages/data-bundle/src/module-door.ts`, a feature-detected probe
+of `host.modules` that works on SDKs without it). The engine is imported from
+`../bin/data_js.js`, the `wasm-bindgen --target web` glue; its `.wasm` is the host's copy,
+fetched with its Subresource Integrity, when the host serves one, else the file next to the
+glue. DuckDB is loaded from the package's own `bin/` (`packages/data-bundle/src/bin-url.ts`):
+`duckdb-browser.mjs` (the DuckDB JS API with apache-arrow bundled in) and the eh worker
+always; `duckdb-engine.wasm` from the host when it serves it — pre-fetched once with its
+integrity (a 404 or a mismatch falls back to `bin/`), then handed to the worker as a URL — else
+from `bin/`. The bundle starts DuckDB's worker itself, same-origin. The publish workflow stamps
+each artifact's sha384 into the published manifest and uploads the wasm to the module host
+(`paged-plugin integrity` / `modules-upload`, plugin-cli 0.1.6). All of them are in the files
 the npm package lists, so an application serves the installed package's `bin/`; the editor
 copies it into its build output.
 
