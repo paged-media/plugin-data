@@ -16,10 +16,10 @@
  *  @license    AGPL-3.0-only OR Paged Media Enterprise License (PMEL)
  */
 
-// The Bindings panel — wire a demo binding over an imported source, refresh the
-// data, and lower the result to the document. The full binding-authoring UX is
-// a companion spec (out of scope); this is the honest slice that proves the
-// resolve → lower → mutate pipeline end-to-end. The v43 lanes are live: in-text
+// The Bindings panel — author a binding of any kind over a chosen query (a
+// saved query, or all rows of a source), refresh the data, and place the
+// result in the document. Until a data source exists it shows one sentence and
+// a way to Data sources instead of controls that cannot work. The v43 lanes are live: in-text
 // variable FIELDS (D-01), image placement (D-14), and rule application (D-13)
 // commit real mutations; the table path uses the native insertTable op (D-02
 // retired). The variable CARET position is still coarse (no caret-read door).
@@ -187,8 +187,58 @@ const note: CSSProperties = {
 
 /** Values/ids stay mono; prose is the host's sans. */
 const mono: CSSProperties = {
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontFamily: "var(--font-mono, ui-monospace, monospace)",
 };
+
+/** The panel the empty state sends the user to (activate.ts registers it). */
+const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
+
+/** One entry of the "Records from" picker: a saved query, or all rows of a
+ *  source (`sql` set: the query is defined when a binding first uses it). */
+export interface QueryOption {
+  /** Stable across renders: `s:<source>` or `q:<query id>`. */
+  value: string;
+  label: string;
+  query: string;
+  sql?: string;
+  title: string;
+}
+
+const ALL_ROWS = /^\s*SELECT\s+\*\s+FROM\s+"?([A-Za-z0-9_]+)"?\s*;?\s*$/i;
+
+/** What a binding can read: all rows of each source (reusing a query that
+ *  already selects them), then every other saved query. */
+export function queryOptions(
+  sources: readonly string[],
+  queries: readonly string[],
+  sqlOf: ReadonlyMap<string, string>,
+): QueryOption[] {
+  const allRowsOf = new Map<string, string>();
+  for (const q of queries) {
+    const m = ALL_ROWS.exec(sqlOf.get(q) ?? "");
+    if (m && sources.includes(m[1]) && !allRowsOf.has(m[1])) allRowsOf.set(m[1], q);
+  }
+  const taken = new Set(queries);
+  const out: QueryOption[] = [];
+  for (const source of sources) {
+    const existing = allRowsOf.get(source);
+    if (existing) {
+      out.push({ value: `s:${source}`, label: `All rows of ${source}`, query: existing, title: sqlOf.get(existing) ?? "" });
+      continue;
+    }
+    let id = "q_all";
+    if (taken.has(id)) id = `q_all_${source.replace(/[^A-Za-z0-9_]+/g, "_")}`;
+    taken.add(id);
+    const sql = `SELECT * FROM ${source}`;
+    out.push({ value: `s:${source}`, label: `All rows of ${source}`, query: id, sql, title: sql });
+  }
+  const used = new Set(allRowsOf.values());
+  for (const q of queries) {
+    if (used.has(q)) continue;
+    out.push({ value: `q:${q}`, label: `Query ${q}`, query: q, title: sqlOf.get(q) ?? "" });
+  }
+  return out;
+}
 
 const row: CSSProperties = { display: "flex", gap: "var(--space-2, 8px)", flexWrap: "wrap" };
 
@@ -247,7 +297,7 @@ function PropertyDraftRow(props: {
         value={expr}
         placeholder="expression, e.g. MM(width) or tint"
         onChange={(e) => setExpr(e.target.value)}
-        style={{ width: 200 }}
+        style={{ flex: "1 1 140px", minWidth: 0 }}
       />
       <button type="button" data-data-bind-property-define onClick={() => void bind()}>
         Bind
@@ -268,10 +318,7 @@ export function makeBindingsPanel(
     const [snapshot, refresh] = useSessionSnapshot(session);
     const [fit, setFit] = useState<IdmlFit>("Proportionally");
     const [symbology, setSymbology] = useState<BarcodeSymbology>("ean13");
-    // Binding AUTHORING (editor-ui-coverage M — promoted past the demo
-    // buttons): kind + source + field drive a real addBinding flow; the
-    // demo wirings remain reachable through it (field "anchor" over the
-    // first source is exactly what the old demo did).
+    // Binding AUTHORING: kind + query + field drive a real addBinding flow.
     const [bindKind, setBindKind] = useState<BindKind>("variable");
     const [invert, setInvert] = useState(false);
     const [ruleAction, setRuleAction] = useState<(typeof RULE_ACTIONS)[number]["value"]>(
@@ -285,8 +332,11 @@ export function makeBindingsPanel(
     const [bindField, setBindField] = useState("");
     const [bindSeq, setBindSeq] = useState(1);
     const [bindMsg, setBindMsg] = useState<string | null>(null);
+    // What bindings, the preview, the field mapping and the merge read.
+    const [queryPick, setQueryPick] = useState("");
+    const [wizardQuery, setWizardQuery] = useState("");
+    const [stepMsg, setStepMsg] = useState<string | null>(null);
     // Wave 5 — Data Merge options.
-    const [mergeQuery, setMergeQuery] = useState("");
     const [mergeMode, setMergeMode] = useState<"single" | "multiple">("single");
     const [mergeArrange, setMergeArrange] = useState<"rows" | "columns">("rows");
     const [mergeRowSpacing, setMergeRowSpacing] = useState(12);
@@ -296,20 +346,25 @@ export function makeBindingsPanel(
     const [mergeBlank, setMergeBlank] = useState(true);
     const [mergeMsg, setMergeMsg] = useState<string | null>(null);
 
+    const sqlOf = new Map((session.listQueries?.() ?? []).map((q) => [q.id, q.sql]));
+    const options = queryOptions(snapshot.sources, snapshot.queries, sqlOf);
+    /** The picked "Records from" entry (the first one until the user picks). */
+    const picked = (): QueryOption | null => options.find((o) => o.value === queryPick) ?? options[0] ?? null;
+    /** The picked query's id, defining it first when it is a source's rows. */
+    function ensurePicked(): string | null {
+      const opt = picked();
+      if (!opt) return null;
+      if (opt.sql) session.addQuery(opt.query, opt.sql, "recordStream");
+      return opt.query;
+    }
+
     /** Merge the chosen query's records through the template on the active
      *  page (every text frame with a <<field>>), InDesign Data Merge style. */
     async function runMerge(): Promise<void> {
-      let query = mergeQuery || session.getState().queries[0];
+      const query = ensurePicked();
       if (!query) {
-        // No query yet: merge the first source as it is, like the binding
-        // kinds above do.
-        const source = session.getState().sources[0];
-        if (!source) {
-          setMergeMsg("import a data source first");
-          return;
-        }
-        session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
-        query = "q_all";
+        setMergeMsg("Import a data source first, in Data sources.");
+        return;
       }
       const r = await session.mergeRecords({
         query,
@@ -379,9 +434,11 @@ export function makeBindingsPanel(
     /** Check the condition and list which records it fires on. */
     async function previewRule(): Promise<void> {
       const when = bindField.trim();
-      const check = (await session.checkExpression(when, "q_all")) ?? null;
+      const q = ensurePicked();
+      if (!q) return;
+      const check = (await session.checkExpression(when, q)) ?? null;
       setRuleCheck(check);
-      setRulePreview(check && check.ok ? ((await session.previewCondition("q_all", when)) ?? null) : null);
+      setRulePreview(check && check.ok ? ((await session.previewCondition(q, when)) ?? null) : null);
       refresh();
     }
 
@@ -418,27 +475,28 @@ export function makeBindingsPanel(
       refresh();
     }
 
-    /** First-run import affordance (§9): refresh the demo query, then ask the
-     *  engine for the source's columns → variable-binding suggestions. The
-     *  author picks which to wire (mappable columns default to checked). */
+    /** First-run import affordance (§9): refresh the picked query, then ask
+     *  the engine for its columns → variable-binding suggestions. The author
+     *  picks which to wire (mappable columns default to checked). */
     async function openWizard(): Promise<void> {
-      const source = session.getState().sources[0];
-      if (!source) {
-        host.log.warn("field-mapping wizard: import a CSV source first");
+      const q = ensurePicked();
+      if (!q) {
+        setBindMsg("Import a data source first, in Data sources.");
         return;
       }
-      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
       await session.refreshData();
-      const cols = await session.queryMappings("q_all");
+      const cols = (await session.queryMappings(q)) ?? [];
+      setWizardQuery(q);
       setMappings(cols);
       setChosen(new Set(cols.filter((c) => c.mappable).map((c) => c.column)));
+      if (cols.length === 0) setBindMsg(`No columns to map — "${q}" returned no data. Refresh data and try again.`);
       refresh();
     }
 
     /** Generate variable bindings for the chosen mappable columns (§9). */
     function confirmWizard(): void {
-      const picked = mappings.filter((m) => chosen.has(m.column));
-      session.applyMappings("q_all", picked);
+      const pickedCols = mappings.filter((m) => chosen.has(m.column));
+      session.applyMappings(wizardQuery, pickedCols);
       setMappings([]);
       setChosen(new Set());
       refresh();
@@ -448,66 +506,21 @@ export function makeBindingsPanel(
      *  preview (the SAME lower lanes a batch run uses). Re-reads the record
      *  count so the "of N" bound stays honest after a refresh. */
     async function stepTo(next: number): Promise<void> {
-      const total = await session.recordCount("q_all");
+      const q = ensurePicked();
+      const total = q ? ((await session.recordCount(q)) ?? 0) : 0;
       setRecordTotal(total);
       if (total === 0) {
-        host.log.info("preview: no records ingested — refresh data first");
+        setStepMsg("No records yet — refresh data first.");
+        refresh();
         return;
       }
+      setStepMsg(null);
       const clamped = Math.max(0, Math.min(next, total - 1));
       setPreviewIndex(clamped);
       // Preview every wired binding against the chosen record.
       for (const id of session.getState().bindings) {
         await session.previewRecord(id, clamped);
       }
-      refresh();
-    }
-
-    function wireDemo(): void {
-      const source = session.getState().sources[0];
-      if (!source) {
-        host.log.warn("wireDemo: import a CSV source first");
-        return;
-      }
-      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
-      session.addTableBinding("t_demo", "data-region", "q_all", [
-        { header: "Column 1", expr: "" },
-      ]);
-      // A variable binding — placed as a tagged FIELD into the selected frame
-      // (else a fresh frame; caret position is coarse, D-01).
-      session.addVariableBinding("v_demo", "anchor", "q_all", "");
-      refresh();
-    }
-
-    function wireImageDemo(): void {
-      const source = session.getState().sources[0];
-      const target = host.selection.get().find((e) => e.kind === "rectangle");
-      if (!source || !target) {
-        host.log.warn("wireImageDemo: import a source AND select a rectangle to bind an image");
-        return;
-      }
-      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
-      // The bound rectangle is the selected frame's raw Self id; `fit` is the
-      // chosen IDML FittingOnEmptyFrame value (D-14).
-      session.addImageBinding("img_demo", target.id as string, "q_all", "", { fit });
-      refresh();
-    }
-
-    function wireBarcodeDemo(): void {
-      const source = session.getState().sources[0];
-      const target = host.selection.get().find((e) => e.kind === "rectangle");
-      if (!source || !target) {
-        host.log.warn(
-          "wireBarcodeDemo: import a source AND select a rectangle to render a barcode into",
-        );
-        return;
-      }
-      session.addQuery("q_all", `SELECT * FROM ${source}`, "recordStream");
-      // The bound rectangle is the symbol's frame; `expr` is the field value to
-      // encode (the engine encodes the chosen symbology + draws VECTOR modules).
-      session.addBarcodeBinding("bc_demo", target.id as string, "q_all", symbology, "", {
-        missing: "skip",
-      });
       refresh();
     }
 
@@ -560,13 +573,13 @@ export function makeBindingsPanel(
     }
 
     // The AUTHORING flow: pick a kind and its field(s); the binding reads the
-    // first source's record stream. Image, barcode and show/hide bind to the
+    // query picked under "Records from". Image, barcode and show/hide bind to the
     // selected element; a style rule to the selected table cell or the story
     // the caret is in. Every refusal says what is missing.
     async function addBinding(): Promise<void> {
-      const source = session.getState().sources[0];
-      if (!source) {
-        setBindMsg("import a CSV source first (Sources panel)");
+      const opt = picked();
+      if (!opt) {
+        setBindMsg("Import a data source first, in Data sources.");
         return;
       }
       const field = bindField.trim();
@@ -574,14 +587,18 @@ export function makeBindingsPanel(
         setBindMsg(`enter the ${KIND_OPTIONS.find((k) => k.value === bindKind)!.field}`);
         return;
       }
-      const q = "q_all";
+      const q = opt.query;
+      /** Define the picked query when it is a source's rows (on commit only). */
+      const ensure = (): void => {
+        if (opt.sql) session.addQuery(q, opt.sql, "recordStream");
+      };
       const id = `${bindKind}_${field.replace(/[^A-Za-z0-9_]+/g, "_")}_${bindSeq}`;
       const selection = host.selection.get();
       const rect = selection.find((e) => e.kind === "rectangle");
 
       switch (bindKind) {
         case "variable":
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           // The chosen field IS the expression: a bare field reference, which
           // the engine resolves per record (a column the DSL cannot reference
           // bare shows up as a resolve diagnostic, never a silent blank).
@@ -594,7 +611,7 @@ export function makeBindingsPanel(
             setBindMsg(`select a rectangle to bind the ${bindKind} into`);
             return;
           }
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           if (bindKind === "image") {
             session.addImageBinding(id, rect.id as string, q, field, { fit });
             setBindMsg(`image binding ${id} → the selected rectangle (${fit})`);
@@ -607,7 +624,7 @@ export function makeBindingsPanel(
           break;
         case "table": {
           const cols = splitList(field);
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           session.addTableBinding(
             id,
             "data-region",
@@ -625,7 +642,7 @@ export function makeBindingsPanel(
             setBindMsg("select the frame, shape or group to show or hide");
             return;
           }
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           session.addVisibilityBinding(id, el.id, q, field, {
             invert,
             kind: el.kind as VisibilityTargetKind,
@@ -654,7 +671,7 @@ export function makeBindingsPanel(
             );
             return;
           }
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           // The condition must parse and read only fields the data has.
           const check = (await session.checkExpression(field, q)) ?? null;
           if (check && !check.ok) {
@@ -677,7 +694,7 @@ export function makeBindingsPanel(
         }
         case "recordFlow": {
           const fields = splitList(field);
-          session.addQuery(q, `SELECT * FROM ${source}`, "recordStream");
+          ensure();
           session.defineRecordFlow(
             id,
             q,
@@ -702,393 +719,417 @@ export function makeBindingsPanel(
 
     return (
       <div style={wrap}>
-        <PropertyDraftRow host={host} session={session} queries={snapshot.queries} onDone={refresh} />
         {(snapshot.relink ?? []).length > 0 && (
           <div style={note} data-data-relink>
             Re-link data: {(snapshot.relink ?? []).join(", ")} — the bindings came back from the
             document&apos;s labels, the data did not (import the file again in Data sources).
           </div>
         )}
-        <div style={row} data-data-bind-author>
-          <select
-            data-data-bind-kind
-            value={bindKind}
-            onChange={(e) => setBindKind(e.target.value as BindKind)}
-          >
-            {KIND_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <input
-            data-data-bind-field
-            type="text"
-            value={bindField}
-            onChange={(e) => setBindField(e.target.value)}
-            placeholder={KIND_OPTIONS.find((k) => k.value === bindKind)!.field}
-            style={{ width: 160 }}
-          />
-          {bindKind === "visibility" && (
-            <label style={note}>
-              <input
-                data-data-bind-invert
-                type="checkbox"
-                checked={invert}
-                onChange={(e) => setInvert(e.target.checked)}
-              />{" "}
-              hide when true
-            </label>
-          )}
-          {bindKind === "rule" && (
-            <>
+        {options.length === 0 ? (
+          <div style={{ ...row, alignItems: "center" }} data-data-bind-empty>
+            <p style={{ ...note, margin: 0, flexBasis: "100%" }}>
+              Import a data source to start binding.
+            </p>
+            <button
+              type="button"
+              data-data-bind-open-sources
+              onClick={() => {
+                try {
+                  host.shell.openPanel(SOURCES_PANEL_ID);
+                } catch {
+                  // a headless host has no panels
+                }
+              }}
+            >
+              Open Data sources
+            </button>
+          </div>
+        ) : (
+          <>
+            <PropertyDraftRow host={host} session={session} queries={snapshot.queries} onDone={refresh} />
+            <label style={{ ...row, alignItems: "center" }} data-data-bind-query>
+              Records from{" "}
               <select
-                data-data-bind-rule-action
-                value={ruleAction}
+                data-data-bind-query-pick
+                value={picked()?.value ?? ""}
+                title={picked()?.title ?? ""}
                 onChange={(e) => {
-                  const next = e.target.value as typeof ruleAction;
-                  setRuleAction(next);
-                  void loadRuleStyles(next);
+                  setQueryPick(e.target.value);
+                  refresh();
                 }}
+                style={{ maxWidth: "100%" }}
               >
-                {RULE_ACTIONS.map((o) => (
+                {options.map((o) => (
+                  <option key={o.value} value={o.value} title={o.title}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={row} data-data-bind-author>
+              <select
+                data-data-bind-kind
+                value={bindKind}
+                onChange={(e) => setBindKind(e.target.value as BindKind)}
+              >
+                {KIND_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
                 ))}
               </select>
-              {ruleStyles.length > 0 ? (
-                <select
-                  data-data-bind-rule-style
-                  value={ruleStyle}
-                  onChange={(e) => setRuleStyle(e.target.value)}
-                  title="A style defined in this document"
-                >
-                  {ruleStyles.map((st) => (
-                    <option key={st.selfId} value={st.selfId}>
-                      {st.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
+              <input
+                data-data-bind-field
+                type="text"
+                value={bindField}
+                onChange={(e) => setBindField(e.target.value)}
+                placeholder={KIND_OPTIONS.find((k) => k.value === bindKind)!.field}
+                style={{ flex: "1 1 120px", minWidth: 0 }}
+              />
+              {bindKind === "visibility" && (
+                <label style={note}>
+                  <input
+                    data-data-bind-invert
+                    type="checkbox"
+                    checked={invert}
+                    onChange={(e) => setInvert(e.target.checked)}
+                  />{" "}
+                  hide when true
+                </label>
+              )}
+              {bindKind === "rule" && (
+                <>
+                  <select
+                    data-data-bind-rule-action
+                    value={ruleAction}
+                    onChange={(e) => {
+                      const next = e.target.value as typeof ruleAction;
+                      setRuleAction(next);
+                      void loadRuleStyles(next);
+                    }}
+                  >
+                    {RULE_ACTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {ruleStyles.length > 0 ? (
+                    <select
+                      data-data-bind-rule-style
+                      value={ruleStyle}
+                      onChange={(e) => setRuleStyle(e.target.value)}
+                      title="A style defined in this document"
+                    >
+                      {ruleStyles.map((st) => (
+                        <option key={st.selfId} value={st.selfId}>
+                          {st.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      data-data-bind-rule-style
+                      type="text"
+                      value={ruleStyle}
+                      onChange={(e) => setRuleStyle(e.target.value)}
+                      placeholder="style name"
+                      title="No styles of this kind were read from the document — type a style id"
+                      style={{ width: 110 }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    data-data-rule-styles
+                    title="Read this document's styles for the chosen action"
+                    onClick={() => {
+                      void loadRuleStyles(ruleAction);
+                    }}
+                  >
+                    styles
+                  </button>
+                  {ruleAction !== "tableStyle" && (
+                    <select
+                      data-data-bind-rule-scope
+                      value={ruleScope}
+                      onChange={(e) => setRuleScope(e.target.value as "story" | "paragraphs")}
+                      title="Where in the story the style lands"
+                    >
+                      <option value="story">whole story, when any record fires</option>
+                      <option value="paragraphs">one paragraph per record, from the cursor</option>
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    data-data-rule-preview
+                    title="Check the condition and list the records it fires on"
+                    onClick={() => {
+                      void previewRule();
+                    }}
+                  >
+                    Preview
+                  </button>
+                </>
+              )}
+              {bindKind === "recordFlow" && (
                 <input
-                  data-data-bind-rule-style
+                  data-data-bind-group-by
                   type="text"
-                  value={ruleStyle}
-                  onChange={(e) => setRuleStyle(e.target.value)}
-                  placeholder="style name"
-                  title="No styles of this kind were read from the document — type a style id"
-                  style={{ width: 110 }}
+                  value={groupBy}
+                  onChange={(e) => setGroupBy(e.target.value)}
+                  placeholder="group by (optional)"
+                  style={{ width: 120 }}
                 />
               )}
-              <button
-                type="button"
-                data-data-rule-styles
-                title="Read this document's styles for the chosen action"
-                onClick={() => {
-                  void loadRuleStyles(ruleAction);
-                }}
-              >
-                styles
-              </button>
-              {ruleAction !== "tableStyle" && (
-                <select
-                  data-data-bind-rule-scope
-                  value={ruleScope}
-                  onChange={(e) => setRuleScope(e.target.value as "story" | "paragraphs")}
-                  title="Where in the story the style lands"
-                >
-                  <option value="story">whole story, when any record fires</option>
-                  <option value="paragraphs">one paragraph per record, from the cursor</option>
-                </select>
+              {bindKind === "image" && (
+                <label style={note}>
+                  fit:{" "}
+                  <select value={fit} onChange={(e) => setFit(e.target.value as IdmlFit)}>
+                    {FIT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {bindKind === "barcode" && (
+                <label style={note}>
+                  symbology:{" "}
+                  <select
+                    value={symbology}
+                    onChange={(e) => setSymbology(e.target.value as BarcodeSymbology)}
+                  >
+                    {SYMBOLOGY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
               <button
                 type="button"
-                data-data-rule-preview
-                title="Check the condition and list the records it fires on"
+                data-data-bind-add
                 onClick={() => {
-                  void previewRule();
+                  void addBinding();
                 }}
               >
-                Preview
+                Add binding
               </button>
-            </>
-          )}
-          {bindKind === "recordFlow" && (
-            <input
-              data-data-bind-group-by
-              type="text"
-              value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value)}
-              placeholder="group by (optional)"
-              style={{ width: 120 }}
-            />
-          )}
-          {bindKind === "image" && (
-            <label style={note}>
-              fit:{" "}
-              <select value={fit} onChange={(e) => setFit(e.target.value as IdmlFit)}>
-                {FIT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {bindKind === "barcode" && (
-            <label style={note}>
-              symbology:{" "}
+            </div>
+            {bindMsg && <p style={note} data-data-bind-msg>{bindMsg}</p>}
+            {bindKind === "rule" && (ruleCheck || rulePreview) && (
+              <p style={note} data-data-rule-preview-out>
+                {ruleCheck && !ruleCheck.ok ? (
+                  <span style={{ color: "var(--status-error, #c33)" }}>
+                    {ruleCheck.error ?? "the condition does not parse"}
+                  </span>
+                ) : rulePreview ? (
+                  rulePreview.error ? (
+                    <span style={{ color: "var(--status-error, #c33)" }}>{rulePreview.error}</span>
+                  ) : (
+                    <>
+                      fires on {rulePreview.fires.length} of {rulePreview.total} record
+                      {rulePreview.total === 1 ? "" : "s"}
+                      {rulePreview.fires.length > 0 &&
+                        `: ${rulePreview.fires
+                          .slice(0, 20)
+                          .map((i) => `#${i + 1}`)
+                          .join(", ")}${rulePreview.fires.length > 20 ? " …" : ""}`}
+                    </>
+                  )
+                ) : null}
+              </p>
+            )}
+            <div style={row} data-data-merge>
+              <strong title="Merges the records picked under Records from">Data Merge</strong>
               <select
-                value={symbology}
-                onChange={(e) => setSymbology(e.target.value as BarcodeSymbology)}
+                data-data-merge-mode
+                value={mergeMode}
+                onChange={(e) => setMergeMode(e.target.value as "single" | "multiple")}
               >
-                {SYMBOLOGY_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
+                <option value="single">Single record per page</option>
+                <option value="multiple">Multiple records per page</option>
               </select>
-            </label>
-          )}
-          <button
-            type="button"
-            data-data-bind-add
-            onClick={() => {
-              void addBinding();
-            }}
-          >
-            Add binding
-          </button>
-        </div>
-        {bindMsg && <p style={note} data-data-bind-msg>{bindMsg}</p>}
-        {bindKind === "rule" && (ruleCheck || rulePreview) && (
-          <p style={note} data-data-rule-preview-out>
-            {ruleCheck && !ruleCheck.ok ? (
-              <span style={{ color: "var(--status-error, #c33)" }}>
-                {ruleCheck.error ?? "the condition does not parse"}
-              </span>
-            ) : rulePreview ? (
-              rulePreview.error ? (
-                <span style={{ color: "var(--status-error, #c33)" }}>{rulePreview.error}</span>
-              ) : (
+              {mergeMode === "multiple" && (
                 <>
-                  fires on {rulePreview.fires.length} of {rulePreview.total} record
-                  {rulePreview.total === 1 ? "" : "s"}
-                  {rulePreview.fires.length > 0 &&
-                    `: ${rulePreview.fires
-                      .slice(0, 20)
-                      .map((i) => `#${i + 1}`)
-                      .join(", ")}${rulePreview.fires.length > 20 ? " …" : ""}`}
+                  <select data-data-merge-arrange value={mergeArrange} onChange={(e) => setMergeArrange(e.target.value as "rows" | "columns")}>
+                    <option value="rows">Rows first</option>
+                    <option value="columns">Columns first</option>
+                  </select>
+                  <label>
+                    row spacing{" "}
+                    <input type="number" value={mergeRowSpacing} onChange={(e) => setMergeRowSpacing(Number(e.target.value))} style={{ width: 48 }} />
+                  </label>
+                  <label>
+                    column spacing{" "}
+                    <input type="number" value={mergeColSpacing} onChange={(e) => setMergeColSpacing(Number(e.target.value))} style={{ width: 48 }} />
+                  </label>
                 </>
-              )
-            ) : null}
-          </p>
-        )}
-        <div style={row} data-data-merge>
-          <strong>Data Merge</strong>
-          <select data-data-merge-query value={mergeQuery} onChange={(e) => setMergeQuery(e.target.value)}>
-            <option value="">(first query)</option>
-            {session.getState().queries.map((q) => (
-              <option key={q} value={q}>
-                {q}
-              </option>
-            ))}
-          </select>
-          <select
-            data-data-merge-mode
-            value={mergeMode}
-            onChange={(e) => setMergeMode(e.target.value as "single" | "multiple")}
-          >
-            <option value="single">Single record per page</option>
-            <option value="multiple">Multiple records per page</option>
-          </select>
-          {mergeMode === "multiple" && (
-            <>
-              <select value={mergeArrange} onChange={(e) => setMergeArrange(e.target.value as "rows" | "columns")}>
-                <option value="rows">Rows first</option>
-                <option value="columns">Columns first</option>
-              </select>
+              )}
               <label>
-                row spacing{" "}
-                <input type="number" value={mergeRowSpacing} onChange={(e) => setMergeRowSpacing(Number(e.target.value))} style={{ width: 48 }} />
+                <input type="checkbox" checked={mergeBlank} onChange={(e) => setMergeBlank(e.target.checked)} /> remove
+                blank lines
               </label>
-              <label>
-                column spacing{" "}
-                <input type="number" value={mergeColSpacing} onChange={(e) => setMergeColSpacing(Number(e.target.value))} style={{ width: 48 }} />
+              <label title="Keep the template page and put the merged records on new pages after it">
+                <input type="checkbox" checked={mergeKeep} onChange={(e) => setMergeKeep(e.target.checked)} /> keep template
               </label>
-            </>
-          )}
-          <label>
-            <input type="checkbox" checked={mergeBlank} onChange={(e) => setMergeBlank(e.target.checked)} /> remove
-            blank lines
-          </label>
-          <label title="Keep the template page and put the merged records on new pages after it">
-            <input type="checkbox" checked={mergeKeep} onChange={(e) => setMergeKeep(e.target.checked)} /> keep template
-          </label>
-          <label
-            title={
-              documentsDoors(host)
-                ? "Copy this document, open the copy and merge into it, consuming the template (the current document is kept as it is)"
-                : NO_NEW_DOCUMENT_DOOR
-            }
-          >
-            <input
-              type="checkbox"
-              data-data-merge-new-doc
-              disabled={!documentsDoors(host)}
-              checked={mergeNewDoc}
-              onChange={(e) => setMergeNewDoc(e.target.checked)}
-            />{" "}
-            into a new document
-          </label>
-          <button
-            type="button"
-            data-data-merge-run
-            title="Merge every record through the <<field>> frames on this page (one document; a second merge replaces the first)"
-            onClick={() => {
-              void runMerge();
-            }}
-          >
-            Merge records
-          </button>
-        </div>
-        {mergeMsg && <p style={note} data-data-merge-msg>{mergeMsg}</p>}
-        <div style={row}>
-          <button type="button" onClick={wireDemo} title="The one-click table+variable demo wiring">
-            Wire demo binding
-          </button>
-          <button type="button" onClick={wireImageDemo} title="Bind an image to the selected rectangle (demo)">
-            Bind image →
-          </button>
-          <button
-            type="button"
-            onClick={wireBarcodeDemo}
-            title="Render a barcode/QR from the field value into the selected rectangle (demo)"
-          >
-            Bind barcode →
-          </button>
-        </div>
-        <div style={row}>
-          <button
-            type="button"
-            onClick={() => {
-              void session.refreshData().then(refresh);
-            }}
-          >
-            Refresh data
-          </button>
-          <button
-            type="button"
-            title="Refresh, then show what changed since the last sync"
-            onClick={() => {
-              void refreshAndReport();
-            }}
-          >
-            What changed?
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void session.lowerAll().then(refresh);
-            }}
-          >
-            Lower to document
-          </button>
-          <button
-            type="button"
-            // Technical detail (kept for developers): re-resolves every
-            // placed variable FIELD from the live data — the D-01 lane.
-            title="Bindings re-resolve when you refresh data."
-            onClick={() => {
-              void session.refreshFields().then(refresh);
-            }}
-          >
-            Refresh fields
-          </button>
-        </div>
-        <div style={row} data-testid="preview-stepper">
-          <span style={note}>preview record:</span>
-          <button
-            type="button"
-            title="Show the document resolved against the previous record"
-            disabled={recordTotal === 0 || previewIndex <= 0}
-            onClick={() => {
-              void stepTo(previewIndex - 1);
-            }}
-          >
-            ‹ prev
-          </button>
-          <span data-testid="preview-position">
-            {recordTotal === 0 ? "— / —" : `${previewIndex + 1} / ${recordTotal}`}
-          </span>
-          <button
-            type="button"
-            title="Show the document resolved against the next record"
-            disabled={recordTotal === 0 || previewIndex >= recordTotal - 1}
-            onClick={() => {
-              void stepTo(previewIndex + 1);
-            }}
-          >
-            next ›
-          </button>
-          <label style={note}>
-            jump to:{" "}
-            <input
-              type="number"
-              min={1}
-              max={Math.max(1, recordTotal)}
-              value={recordTotal === 0 ? "" : previewIndex + 1}
-              style={{ width: "4em" }}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (Number.isFinite(n)) void stepTo(n - 1);
-              }}
-            />
-          </label>
-        </div>
-        <div style={row} data-testid="field-mapping-wizard">
-          <button
-            type="button"
-            title="Map the source's columns to variable bindings"
-            onClick={() => {
-              void openWizard();
-            }}
-          >
-            Map fields…
-          </button>
-          {mappings.length > 0 && (
-            <button type="button" onClick={confirmWizard} data-testid="wizard-confirm">
-              Create {chosen.size} binding{chosen.size === 1 ? "" : "s"}
-            </button>
-          )}
-        </div>
-        {mappings.length > 0 && (
-          <div data-testid="wizard-columns" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            {mappings.map((m) => (
-              <label key={m.column} style={note} title={m.mappable ? m.expr : "needs a manual expression"}>
+              <label
+                title={
+                  documentsDoors(host)
+                    ? "Copy this document, open the copy and merge into it, consuming the template (the current document is kept as it is)"
+                    : NO_NEW_DOCUMENT_DOOR
+                }
+              >
                 <input
                   type="checkbox"
-                  disabled={!m.mappable}
-                  checked={chosen.has(m.column)}
-                  onChange={(e) => {
-                    setChosen((prev) => {
-                      const nextSet = new Set(prev);
-                      if (e.target.checked) nextSet.add(m.column);
-                      else nextSet.delete(m.column);
-                      return nextSet;
-                    });
-                  }}
+                  data-data-merge-new-doc
+                  disabled={!documentsDoors(host)}
+                  checked={mergeNewDoc}
+                  onChange={(e) => setMergeNewDoc(e.target.checked)}
                 />{" "}
-                {m.header} <span style={{ opacity: 0.6 }}>({m.fieldType})</span> →{" "}
-                {m.mappable ? (
-                  <code>{m.expr}</code>
-                ) : (
-                  <span style={{ color: "var(--status-warn, #c80)" }}>manual expr needed</span>
-                )}
+                into a new document
               </label>
-            ))}
-          </div>
+              <button
+                type="button"
+                data-data-merge-run
+                title="Merge every record through the <<field>> frames on this page (one document; a second merge replaces the first)"
+                onClick={() => {
+                  void runMerge();
+                }}
+              >
+                Merge records
+              </button>
+            </div>
+            {mergeMsg && <p style={note} data-data-merge-msg>{mergeMsg}</p>}
+            <div style={row}>
+              <button
+                type="button"
+                onClick={() => {
+                  void session.refreshData().then(refresh);
+                }}
+              >
+                Refresh data
+              </button>
+              <button
+                type="button"
+                title="Refresh, then show what changed since the last sync"
+                onClick={() => {
+                  void refreshAndReport();
+                }}
+              >
+                What changed?
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void session.lowerAll().then(refresh);
+                }}
+              >
+                Lower to document
+              </button>
+              <button
+                type="button"
+                // Technical detail (kept for developers): re-resolves every
+                // placed variable FIELD from the live data — the D-01 lane.
+                title="Bindings re-resolve when you refresh data."
+                onClick={() => {
+                  void session.refreshFields().then(refresh);
+                }}
+              >
+                Refresh fields
+              </button>
+            </div>
+            <div style={row} data-testid="preview-stepper">
+              <span style={note}>preview record:</span>
+              <button
+                type="button"
+                title="Show the document resolved against the previous record"
+                disabled={recordTotal === 0 || previewIndex <= 0}
+                onClick={() => {
+                  void stepTo(previewIndex - 1);
+                }}
+              >
+                ‹ prev
+              </button>
+              <span data-testid="preview-position">
+                {recordTotal === 0 ? "— / —" : `${previewIndex + 1} / ${recordTotal}`}
+              </span>
+              <button
+                type="button"
+                title="Show the document resolved against the next record"
+                disabled={recordTotal === 0 || previewIndex >= recordTotal - 1}
+                onClick={() => {
+                  void stepTo(previewIndex + 1);
+                }}
+              >
+                next ›
+              </button>
+              {stepMsg && (
+                <span style={note} data-data-step-msg>
+                  {stepMsg}
+                </span>
+              )}
+              <label style={note}>
+                jump to:{" "}
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.max(1, recordTotal)}
+                  value={recordTotal === 0 ? "" : previewIndex + 1}
+                  style={{ width: "4em" }}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) void stepTo(n - 1);
+                  }}
+                />
+              </label>
+            </div>
+            <div style={row} data-testid="field-mapping-wizard">
+              <button
+                type="button"
+                title="Map the source's columns to variable bindings"
+                onClick={() => {
+                  void openWizard();
+                }}
+              >
+                Map fields…
+              </button>
+              {mappings.length > 0 && (
+                <button type="button" onClick={confirmWizard} data-testid="wizard-confirm">
+                  Create {chosen.size} binding{chosen.size === 1 ? "" : "s"}
+                </button>
+              )}
+            </div>
+            {mappings.length > 0 && (
+              <div data-testid="wizard-columns" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {mappings.map((m) => (
+                  <label key={m.column} style={note} title={m.mappable ? m.expr : "needs a manual expression"}>
+                    <input
+                      type="checkbox"
+                      disabled={!m.mappable}
+                      checked={chosen.has(m.column)}
+                      onChange={(e) => {
+                        setChosen((prev) => {
+                          const nextSet = new Set(prev);
+                          if (e.target.checked) nextSet.add(m.column);
+                          else nextSet.delete(m.column);
+                          return nextSet;
+                        });
+                      }}
+                    />{" "}
+                    {m.header} <span style={{ opacity: 0.6 }}>({m.fieldType})</span> →{" "}
+                    {m.mappable ? (
+                      <code>{m.expr}</code>
+                    ) : (
+                      <span style={{ color: "var(--status-warn, #c80)" }}>manual expr needed</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+            )}
+          </>
         )}
         {changes && (
           <div data-testid="change-report" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -1207,7 +1248,7 @@ export function makeBindingsPanel(
                   {status && (
                     <span
                       data-sync-status={status}
-                      title="ADR 553: pinned and overridden content is never replaced by a refresh"
+                      title="Pinned and overridden content is never replaced by a refresh"
                       style={{ marginLeft: 6, color: SYNC_COLOR[status] }}
                     >
                       {SYNC_LABEL[status]}

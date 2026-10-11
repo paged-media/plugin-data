@@ -7,17 +7,15 @@
  * there was no menu door at all, so every verb here lived behind Cmd+K
  * and nowhere else.
  *
- * THE PATHS HERE ARE NAMED FOR WHAT THE COMMANDS DO, NOT FOR THEIR
- * TITLES, and in two cases those differ. `importData` is registered as
- * "Import data (.csv)" and its handler is `openPanel(SOURCES_PANEL_ID)`
- * — it opens a panel and imports nothing, which the 2026-08 audit filed
- * as a label that lies. `defineBinding` is the same shape. Repeating
- * those titles in a menu would spread the claim to a second surface, so
- * these rows say "Sources…" and "Bindings…", which is what clicking
- * them does. Fixing the command titles is separate work in this bundle.
+ * The host's Data menu already raises the three main panels by their
+ * names ("Data sources…", "Bindings…", "Dataset preview…"), so this
+ * table adds no second row for them; the menu registry keys on the
+ * path, and two rows reading "Sources…" and "Data sources…" for the
+ * same panel would only confuse. The command titles carry the same
+ * panel names, so the palette and the menu agree.
  *
- * `lowerBinding` likewise reads as "Place bindings on the page" rather
- * than "Resolve + lower bindings to the document": lower is compiler
+ * `lowerBinding` reads as "Place bindings on the page" rather than
+ * "Resolve + lower bindings to the document": lower is compiler
  * vocabulary for the step a designer thinks of as placing.
  * */
 
@@ -27,7 +25,6 @@ const C = "media.paged.data.command";
 
 /** `[path, command suffix, group]`. */
 const ENTRIES: [path: string, suffix: string, group: string][] = [
-  ["Data/Sources…", "importData", "panel"],
   // KEEPS THE HOST'S PATH. C1 curated `Object ▸ Insert data binding…`
   // and a spec pins it; filing this verb under `Data/` instead made the
   // Insert entry VANISH, because a courtesy stands down as soon as its
@@ -35,8 +32,7 @@ const ENTRIES: [path: string, suffix: string, group: string][] = [
   // courtesy in place, so the item stays exactly where users and the
   // spec already found it — and paged.data owns it now.
   ["Object/Insert data binding…", "defineBinding", "insert-plugin"],
-  ["Data/Dataset catalog…", "openDataset", "panel"],
-  ["Data/Query…", "editQuery", "panel"],
+  ["Data/Data query…", "editQuery", "panel"],
   ["Data/Refresh from sources", "resolveBindings", "resolve"],
   ["Data/Place bindings on the page", "lowerBinding", "resolve"],
   ["Data/Merge records into the document", "mergeRecords", "resolve"],

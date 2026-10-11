@@ -79,7 +79,7 @@ const list = (rows: string, select: string) => ({
 export const DATA_OBJECTS_PANEL: PanelSchema = {
   id: OBJECTS_PANEL_ID,
   title: "Data objects",
-  icon: "panel-canvas",
+  icon: "panel-tree",
   defaultDock: "right",
   sections: SECTIONS.map((s, i) => ({
     title: s.title,

@@ -179,7 +179,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // Wave 4 (persistence): restore on open: +1 parts.read, onDidChange (document switch), onWillSave (flush before save), editor.client.subscribe, +1 log.
   // Wave 6 (sources and query): +5 — contribute.panel (Data query),
   // supports("contribute.importer@1"), contribute.importer (JSON/Parquet),
-  // contribute.command (editQuery), contribute.menu (Data ▸ Query…).
+  // contribute.command (editQuery), contribute.menu (Data ▸ Data query…).
   // Wave 5 (Data Merge): +2 — contribute.command (mergeRecords),
   // contribute.menu (Data ▸ Merge records into the document).
   // Object model (ADR 323/558/559): +4 — supports("contribute.objectModel@1"),
@@ -194,8 +194,10 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
   // ADR 323 §4 ("Data objects" schema panel): +2 — supports("contribute.
   // schemaPanel@1") and contribute.schemaPanel; its lists start with the
   // first READY session, so activation pays nothing else for them.
+  // Panel UX pass: −2 — the Data ▸ Sources… and Dataset catalog… menu rows
+  // are gone (the host's Data menu raises those panels by name).
   const W7: Measured = onLabelled({
-    hostCalls: 41,
+    hostCalls: 39,
     hostReads: 2,
     mutates: 0,
     mutationOps: 0,
@@ -208,7 +210,7 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,
-  }, { hostCalls: 45, hostReads: 4 });
+  }, { hostCalls: 43, hostReads: 4 });
   it("W7 activates without booting either engine [data.perf.gates]", async () => {
     h = await openRealHost();
     let work: WorkLog | null = null;

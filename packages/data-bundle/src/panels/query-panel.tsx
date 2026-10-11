@@ -36,7 +36,7 @@ const wrap: CSSProperties = {
 };
 const row: CSSProperties = { display: "flex", gap: "var(--space-2, 8px)", alignItems: "center", flexWrap: "wrap" };
 const note: CSSProperties = { color: "var(--pg-muted-fg, #999)", fontSize: "11px", lineHeight: 1.5 };
-const mono: CSSProperties = { font: "var(--font-mono, 12px ui-monospace, monospace)" };
+const mono: CSSProperties = { fontFamily: "var(--font-mono, ui-monospace, monospace)" };
 const errorStyle: CSSProperties = {
   ...mono,
   color: "var(--status-error-fg, #f88)",

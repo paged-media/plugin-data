@@ -56,7 +56,7 @@ const note: CSSProperties = {
 
 /** Values/ids stay mono; prose is the host's sans. */
 const mono: CSSProperties = {
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontFamily: "var(--font-mono, ui-monospace, monospace)",
 };
 
 /** What the panel says about saving, per persistence state. */
@@ -76,6 +76,8 @@ export function makeSourcesPanel(
     const [snapshot, refresh] = useSessionSnapshot(session);
     const [remoteUrl, setRemoteUrl] = useState("");
     const [remoteFormat, setRemoteFormat] = useState<RemoteFormat>("csv");
+    const [remoteError, setRemoteError] = useState<string | null>(null);
+    const [consentRefused, setConsentRefused] = useState<Set<string>>(new Set());
 
     function onAddRemote(): void {
       if (!remoteUrl) return;
@@ -85,12 +87,22 @@ export function makeSourcesPanel(
           .replace(/\.[^.]+$/, "")
           .replace(/[^a-zA-Z0-9_]/g, "_") || "remote";
       const error = session.addRemoteSource(name, remoteUrl, remoteFormat);
+      // A refused URL is said here, not only logged.
+      setRemoteError(error ?? null);
       if (error === null) setRemoteUrl("");
       refresh();
     }
 
     async function onRequestConsent(name: string): Promise<void> {
-      await session.requestConsentForRemote(name);
+      const granted = await session.requestConsentForRemote(name);
+      // A refusal (the user said no, or this editor does not allow the
+      // origin) is said beside the source, not only logged.
+      setConsentRefused((prev) => {
+        const next = new Set(prev);
+        if (granted) next.delete(name);
+        else next.add(name);
+        return next;
+      });
       refresh();
     }
 
@@ -237,7 +249,10 @@ export function makeSourcesPanel(
               type="url"
               placeholder="https://example.com/data.csv"
               value={remoteUrl}
-              onChange={(e) => setRemoteUrl(e.target.value)}
+              onChange={(e) => {
+                setRemoteUrl(e.target.value);
+                setRemoteError(null);
+              }}
             />
             <select
               value={remoteFormat}
@@ -248,8 +263,21 @@ export function makeSourcesPanel(
               <option value="json">json</option>
               <option value="parquet">parquet</option>
             </select>
-            <button onClick={onAddRemote}>Add remote</button>
+            <button
+              type="button"
+              data-data-remote-add
+              disabled={!remoteUrl.trim()}
+              title={remoteUrl.trim() ? "Add this remote source (it loads only after you allow its origin)" : "Enter the source's URL first"}
+              onClick={onAddRemote}
+            >
+              Add remote
+            </button>
           </div>
+          {remoteError && (
+            <p style={{ ...note, color: "var(--status-error)" }} role="alert" data-data-remote-error>
+              {remoteError}
+            </p>
+          )}
           {snapshot.remote.length === 0 ? (
             <span style={note}>No remote sources. A remote source never fetches on open.</span>
           ) : (
@@ -265,14 +293,21 @@ export function makeSourcesPanel(
                     </>
                   ) : null}
                   {r.consent === "required" ? (
-                    <button onClick={() => void onRequestConsent(r.name)}>
+                    <button type="button" onClick={() => void onRequestConsent(r.name)}>
                       Request consent
                     </button>
                   ) : (
-                    <button onClick={() => void onLoadRemote(r.name)}>Load</button>
+                    <button type="button" onClick={() => void onLoadRemote(r.name)}>
+                      Load
+                    </button>
                   )}
                   <PolicyPicker name={r.name} />
                   <div style={note}>{r.message}</div>
+                  {r.consent === "required" && consentRefused.has(r.name) && (
+                    <div style={{ ...note, color: "var(--status-error)" }} data-data-consent-refused>
+                      Access to {r.origin} was not granted, so this source stays unloaded.
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

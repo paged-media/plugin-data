@@ -97,7 +97,7 @@ export function activate(host: BundleHost): BundleHandle {
   contributePanel(host, {
     id: SOURCES_PANEL_ID,
     title: "Data sources",
-    icon: "panel-canvas",
+    icon: "ui-database",
     component: makeSourcesPanel(host, session),
     defaultDock: "right",
   });
@@ -105,7 +105,7 @@ export function activate(host: BundleHost): BundleHandle {
   contributePanel(host, {
     id: BINDINGS_PANEL_ID,
     title: "Bindings",
-    icon: "panel-canvas",
+    icon: "panel-links",
     component: makeBindingsPanel(host, session),
     defaultDock: "right",
   });
@@ -116,7 +116,7 @@ export function activate(host: BundleHost): BundleHandle {
     // carries Data / Data Source / Data sources / Datasets — this title
     // stays distinct from all of them.
     title: "Dataset preview",
-    icon: "panel-canvas",
+    icon: "ui-rows",
     component: makeDatasetPanel(host, session),
     defaultDock: "right",
   });
@@ -124,7 +124,7 @@ export function activate(host: BundleHost): BundleHandle {
   contributePanel(host, {
     id: QUERY_PANEL_ID,
     title: "Data query",
-    icon: "panel-canvas",
+    icon: "ui-filter",
     component: makeQueryPanel(host, session),
     defaultDock: "right",
   });
@@ -151,13 +151,13 @@ export function activate(host: BundleHost): BundleHandle {
 
   host.contribute.command({
     id: "media.paged.data.command.importData",
-    title: "Import data (CSV, TSV, JSON, Parquet, Excel)",
+    title: "Data sources…",
     category: "Data",
     handler: () => host.shell.openPanel(SOURCES_PANEL_ID),
   });
   host.contribute.command({
     id: "media.paged.data.command.defineBinding",
-    title: "Define a binding",
+    title: "Bindings…",
     category: "Data",
     handler: () => host.shell.openPanel(BINDINGS_PANEL_ID),
   });
@@ -169,13 +169,13 @@ export function activate(host: BundleHost): BundleHandle {
   });
   host.contribute.command({
     id: "media.paged.data.command.lowerBinding",
-    title: "Resolve + lower bindings to the document",
+    title: "Place bindings on the page",
     category: "Data",
     handler: () => session.lowerAll(),
   });
   host.contribute.command({
     id: "media.paged.data.command.mergeRecords",
-    title: "Merge records into the document (Data Merge)",
+    title: "Merge records into the document",
     category: "Data",
     // Payload: SessionMergeOptions; without one, the first query merges
     // Single Record through the <<field>> frames on the active page.
@@ -183,7 +183,9 @@ export function activate(host: BundleHost): BundleHandle {
       const p = (payload ?? {}) as Partial<import("./session").SessionMergeOptions>;
       const query = p.query ?? session.getState().queries[0];
       if (!query) {
-        host.log.warn("mergeRecords: no query to merge");
+        // Nothing to merge yet. The Bindings panel opens: it says what is
+        // missing (a data source) and holds the Data Merge options.
+        host.shell.openPanel(BINDINGS_PANEL_ID);
         return null;
       }
       return session.mergeRecords({ ...p, query });
@@ -191,7 +193,7 @@ export function activate(host: BundleHost): BundleHandle {
   });
   host.contribute.command({
     id: "media.paged.data.command.openDataset",
-    title: "Open the dataset catalog & build panel",
+    title: "Dataset preview…",
     category: "Data",
     handler: () => host.shell.openPanel(DATASET_PANEL_ID),
   });
@@ -225,12 +227,14 @@ export function activate(host: BundleHost): BundleHandle {
   });
   host.contribute.command({
     id: "media.paged.data.command.applyDataSet",
-    title: "Apply a data set to the document",
+    title: "Apply a data set…",
     category: "Data",
     handler: (_paged, payload) => {
       const p = (payload ?? {}) as { name?: string };
       if (!p.name) {
-        host.log.warn("applyDataSet: no data-set name in the command payload");
+        // No set named (the menu row, the palette): picking one is the
+        // user's choice, made in the Dataset preview panel's data-set list.
+        host.shell.openPanel(DATASET_PANEL_ID);
         return { applied: 0, skipped: {} };
       }
       return session.applyDataSet(p.name);
@@ -240,7 +244,7 @@ export function activate(host: BundleHost): BundleHandle {
   // Wave 6: the Data query panel (SQL, builders, preview grid).
   host.contribute.command({
     id: "media.paged.data.command.editQuery",
-    title: "Edit a data query (SQL)",
+    title: "Data query…",
     category: "Data",
     handler: () => host.shell.openPanel(QUERY_PANEL_ID),
   });
@@ -308,7 +312,10 @@ export function activate(host: BundleHost): BundleHandle {
     handler: (_paged, payload) => {
       const p = (payload ?? {}) as { selector?: string; path?: string; schema?: string };
       if (!p.selector || !p.path) {
+        // Without a named object and property there is nothing to draft;
+        // the Bindings panel is where a binding is made by hand.
         host.log.warn("bindProperty: the payload needs { selector, path, schema }");
+        host.shell.openPanel(BINDINGS_PANEL_ID);
         return null;
       }
       session.setPropertyDraft({ selector: p.selector, path: p.path, schema: p.schema ?? "" });

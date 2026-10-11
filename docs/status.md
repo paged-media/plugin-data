@@ -186,9 +186,12 @@ Not done there:
   data carries one more op, the label. On an engine or host older than protocol 69 container
   parts take no part in undo and defining a binding is not a document
   change: what a binding writes undoes as usual, the session part does not.
-- **The Bindings panel still binds over** `SELECT * FROM <first source>`; a query saved in
-  the Data query panel is used by bindings defined through the session or by its id.
-  "Wire demo binding" still passes empty expressions.
+- **The Bindings panel binds over the query picked under "Records from"**: all rows of any
+  source, or a query saved in the Data query panel. Until a source exists it shows an empty
+  state that links to Data sources. The demo-binding buttons are gone.
+- **Dataset preview's batch is a plan.** "Plan batch" paginates a record flow over a nominal
+  frame chain and makes no pages in the editor; output documents come from the batch
+  automation tools.
 - **CSV, TSV and XLSX are not routed from File ▸ Import.** paged.sheet claims the same
   extensions and the editor's importer registry gives a contested extension to the first
   bundle that registers it; paged.data loads first, so claiming them would take the import

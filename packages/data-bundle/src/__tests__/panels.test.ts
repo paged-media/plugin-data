@@ -368,3 +368,144 @@ describe("sources panel says whether the session is saved [data.plugin.persisten
     expect(text(p)).toMatch(re);
   });
 });
+
+describe("bindings panel — empty state and the query picker [data.bind.authoring]", () => {
+  it("with no data source it shows one sentence and a way to Data sources, not the authoring controls [data.bind.authoring]", async () => {
+    const opened: string[] = [];
+    const session = stubSession({}, { sources: [] });
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const tree = render(
+      makeBindingsPanel({ ...host, shell: { openPanel: (id: string) => void opened.push(id) } } as unknown as BundleHost, session),
+    );
+    expect(tree.some((e) => "data-data-bind-author" in e.props)).toBe(false);
+    expect(tree.some((e) => "data-data-merge" in e.props)).toBe(false);
+    const empty = tree.find((e) => "data-data-bind-empty" in e.props)!;
+    expect(text(empty)).toMatch(/Import a data source/);
+    (tree.find((e) => "data-data-bind-open-sources" in e.props)!.props.onClick as () => void)();
+    expect(opened).toEqual(["media.paged.data.panel.sources"]);
+  });
+
+  it("ships no demo-binding buttons [data.bind.authoring]", async () => {
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const tree = render(makeBindingsPanel(host, stubSession({})));
+    const labels = tree.filter((e) => e.type === "button").map((e) => text(e));
+    expect(labels.filter((l) => /demo|Bind image|Bind barcode/i.test(l))).toEqual([]);
+  });
+
+  it("a binding reads the query picked under Records from, not always the first source [data.bind.authoring]", async () => {
+    const calls: unknown[][] = [];
+    const added: unknown[][] = [];
+    const session = stubSession(
+      {
+        addQuery: (...a: unknown[]) => void added.push(a),
+        addVariableBinding: (...a: unknown[]) => void calls.push(a),
+        listQueries: () => [
+          { id: "q_all", sql: "SELECT * FROM people" },
+          { id: "cheap", sql: "SELECT * FROM people WHERE price < 5" },
+        ],
+      },
+      { sources: ["people", "orders"], queries: ["q_all", "cheap"] },
+    );
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel(host, session);
+    let tree = render(Panel);
+    const pick = tree.find((e) => "data-data-bind-query-pick" in e.props)!;
+    const options = tree.filter((e) => e.type === "option" && typeof e.props.value === "string" && /^[sq]:/.test(e.props.value as string));
+    expect(options.map((o) => text(o))).toEqual(["All rows of people", "All rows of orders", "Query cheap"]);
+
+    // A saved query: bound as is, nothing new defined.
+    (pick.props.onChange as (e: unknown) => void)({ target: { value: "q:cheap" } });
+    tree = render(Panel);
+    (tree.find((e) => "data-data-bind-field" in e.props)!.props.onChange as (e: unknown) => void)({ target: { value: "name" } });
+    tree = render(Panel);
+    await (tree.find((e) => "data-data-bind-add" in e.props)!.props.onClick as () => Promise<void>)();
+    expect(calls[0][2]).toBe("cheap");
+    expect(added).toEqual([]);
+
+    // The second source's rows: a query over it is defined on commit.
+    tree = render(Panel);
+    (tree.find((e) => "data-data-bind-query-pick" in e.props)!.props.onChange as (e: unknown) => void)({ target: { value: "s:orders" } });
+    tree = render(Panel);
+    await (tree.find((e) => "data-data-bind-add" in e.props)!.props.onClick as () => Promise<void>)();
+    expect(calls[1][2]).toBe("q_all_orders");
+    expect(added).toEqual([["q_all_orders", "SELECT * FROM orders", "recordStream"]]);
+  });
+
+  it("queryOptions reuses a query that already selects a source's rows [data.bind.authoring]", async () => {
+    const { queryOptions } = await import("../panels/bindings-panel");
+    const opts = queryOptions(["people"], ["mine"], new Map([["mine", 'SELECT * FROM "people";']]));
+    expect(opts).toEqual([{ value: "s:people", label: "All rows of people", query: "mine", title: 'SELECT * FROM "people";' }]);
+  });
+});
+
+describe("dataset preview — rows and an honest batch [data.plugin.bundle]", () => {
+  it("Preview rows shows the selected query's first rows [data.plugin.bundle]", async () => {
+    const session = stubSession(
+      {
+        refreshData: async () => {},
+        governedCatalog: async () => ({ columns: [], diagnostics: [] }) as never,
+        listQueries: () => [{ id: "q_all", sql: "SELECT * FROM people" }],
+        previewQuery: async () => ({
+          columns: [{ name: "name", type: "VARCHAR" }],
+          rows: [["Ada"], ["Grace"]],
+          total: 7,
+          diagnostic: null,
+        }),
+        listBindings: () => [],
+      },
+      { queries: ["q_all"] },
+    );
+    const { makeDatasetPanel } = await import("../panels/dataset-panel");
+    const Panel = makeDatasetPanel(host, session);
+    let tree = render(Panel);
+    await (tree.find((e) => "data-data-dataset-preview" in e.props)!.props.onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    tree = render(Panel);
+    expect(tree.filter((e) => e.type === "td").map((e) => text(e))).toEqual(["Ada", "Grace"]);
+    expect(text(tree.find((e) => "data-data-dataset-rows" in e.props))).toMatch(/First 2 of 7 rows/);
+  });
+
+  it("the batch button is a plan, disabled with a reason without a record flow [data.plugin.bundle]", async () => {
+    const session = stubSession(
+      {
+        planBatch: async () => ({ mode: "oneCatalog", units: [{ label: "all", recordIndices: [0] }], totalRecords: 1 }) as never,
+        listBindings: () => [],
+      },
+      { queries: ["q_all"] },
+    );
+    const { makeDatasetPanel } = await import("../panels/dataset-panel");
+    const Panel = makeDatasetPanel(host, session);
+    let tree = render(Panel);
+    await (tree.find((e) => e.type === "button" && text(e) === "One catalog")!.props.onClick as () => Promise<void>)();
+    tree = render(Panel);
+    const run = tree.find((e) => "data-data-batch-run" in e.props)!;
+    expect(text(run)).toBe("Plan batch");
+    expect(run.props.disabled).toBe(true);
+    expect(String(run.props.title)).toMatch(/record-flow binding/);
+  });
+
+  it("with no source the empty state links to Data sources [data.plugin.bundle]", async () => {
+    const { makeDatasetPanel } = await import("../panels/dataset-panel");
+    const tree = render(makeDatasetPanel(host, stubSession({}, { sources: [] })));
+    expect(text(tree.find((e) => "data-data-dataset-empty" in e.props))).toMatch(/No queries yet\. Import a data source first/);
+    expect(tree.some((e) => "data-data-dataset-open-sources" in e.props)).toBe(true);
+  });
+});
+
+describe("sources panel — a refused remote URL is said in the panel [data.plugin.bundle]", () => {
+  it("shows the refusal inline [data.plugin.bundle]", async () => {
+    const session = stubSession({ addRemoteSource: () => "embedded credentials are not allowed" } as never);
+    const { makeSourcesPanel } = await import("../panels/sources-panel");
+    const Panel = makeSourcesPanel(host, session);
+    let tree = render(Panel);
+    const add = tree.find((e) => "data-data-remote-add" in e.props)!;
+    expect(add.props.disabled).toBe(true);
+    (tree.find((e) => e.type === "input" && e.props.type === "url")!.props.onChange as (e: unknown) => void)({
+      target: { value: "https://u:p@example.com/x.csv" },
+    });
+    tree = render(Panel);
+    (tree.find((e) => "data-data-remote-add" in e.props)!.props.onClick as () => void)();
+    tree = render(Panel);
+    expect(text(tree.find((e) => "data-data-remote-error" in e.props))).toMatch(/credentials/);
+  });
+});

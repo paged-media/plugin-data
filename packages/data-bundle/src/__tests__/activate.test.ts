@@ -166,6 +166,9 @@ describe("data_plugin_bundle_activate", () => {
     // A missing name is a warned no-op, never a guess at which set was meant —
     // and it short-circuits synchronously, without touching the session.
     expect(apply.handler(null, {})).toEqual({ applied: 0, skipped: {} });
+    // ...and the user who reached it from the menu lands where data sets
+    // are picked, instead of a click that only logs.
+    expect(fake.openedPanels).toEqual(["media.paged.data.panel.dataset"]);
     // A named one runs (the engine wasm is absent here, so it degrades to 0
     // applied — the point is that the payload reached the session).
     await expect(apply.handler(null, { name: "Beta" })).resolves.toMatchObject({ applied: 0 });
@@ -193,6 +196,32 @@ describe("data_plugin_bundle_activate", () => {
       "media.paged.data.panel.bindings",
       "media.paged.data.panel.dataset",
     ]);
+  });
+
+  it("Merge records with nothing to merge opens the Bindings panel instead of only logging", () => {
+    const fake = fakeHost();
+    dataBundle.activate(fake.host);
+    const merge = fake.commands.find((c) => c.id.endsWith("mergeRecords"))!;
+    expect(merge.handler(undefined)).toBeNull();
+    expect(fake.openedPanels).toEqual(["media.paged.data.panel.bindings"]);
+  });
+
+  it("command titles name the panels they open", () => {
+    const fake = fakeHost();
+    dataBundle.activate(fake.host);
+    const title = (suffix: string) => fake.commands.find((c) => c.id.endsWith(suffix))?.title;
+    expect(title("importData")).toBe("Data sources…");
+    expect(title("defineBinding")).toBe("Bindings…");
+    expect(title("openDataset")).toBe("Dataset preview…");
+    expect(title("editQuery")).toBe("Data query…");
+  });
+
+  it("the five panels carry five distinct icons", () => {
+    const fake = fakeHost();
+    dataBundle.activate(fake.host);
+    const icons = fake.panels.map((p) => p.icon);
+    expect(new Set(icons).size).toBe(icons.length);
+    expect(icons).not.toContain("panel-canvas");
   });
 
   it("dispose tears the session down (no throw — honesty smoke test)", () => {

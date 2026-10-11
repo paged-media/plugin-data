@@ -17,7 +17,7 @@
  */
 
 // The Dataset panel — surfaces the three dataset-level capabilities over a
-// selected query: the §7 governed catalog (documented columns + governance
+// selected query: a preview of its first rows, the §7 governed catalog (documented columns + governance
 // drift), the §10 batch plan (per-record / per-group / one-catalog generation
 // units), and the §7.1 data-provider publish (registered with the host's
 // shared registry, D-09, when the host injects one). Honest about the gates: no
@@ -37,6 +37,7 @@ import type {
   BatchRun,
   DataSourceSession,
   GovernedCatalog,
+  QueryPreview,
   VariableSummary,
 } from "../session";
 
@@ -57,8 +58,14 @@ const note: CSSProperties = {
 
 /** Values/ids stay mono; prose is the host's sans. */
 const mono: CSSProperties = {
-  font: "var(--font-mono, 12px ui-monospace, monospace)",
+  fontFamily: "var(--font-mono, ui-monospace, monospace)",
 };
+
+/** How many rows "Preview rows" shows. */
+const PREVIEW_ROWS = 20;
+
+const SOURCES_PANEL_ID = "media.paged.data.panel.sources";
+const QUERY_PANEL_ID = "media.paged.data.panel.query";
 
 const row: CSSProperties = {
   display: "flex",
@@ -77,6 +84,7 @@ export function makeDatasetPanel(
     const [snapshot, refreshSnapshot] = useSessionSnapshot(session);
     const [query, setQuery] = useState<string>("");
     const [catalog, setCatalog] = useState<GovernedCatalog | null>(null);
+    const [rows, setRows] = useState<QueryPreview | null>(null);
     const [plan, setPlan] = useState<BatchPlan | null>(null);
     const [planMode, setPlanMode] = useState<BatchMode | null>(null);
     const [runs, setRuns] = useState<BatchRun[] | null>(null);
@@ -114,10 +122,13 @@ export function makeDatasetPanel(
         // schema, columns undocumented until a sidecar lands.
         const cat = await session.governedCatalog(selected, { columns: [] });
         setCatalog(cat);
+        const sql = session.listQueries?.()?.find((q) => q.id === selected)?.sql;
+        setRows(sql ? ((await session.previewQuery(sql, PREVIEW_ROWS)) ?? null) : null);
         refreshSnapshot();
       } catch (e) {
         setError(String(e));
         setCatalog(null);
+        setRows(null);
       }
     }
 
@@ -252,6 +263,14 @@ export function makeDatasetPanel(
       await refreshPalette();
     }
 
+    const flowBinding = (session.listBindings?.() ?? []).find((b) => b.kind === "recordFlow");
+    const openPanel = (id: string): void => {
+      try {
+        host.shell.openPanel(id);
+      } catch {
+        // a headless host has no panels
+      }
+    };
     const documented = catalog?.columns.filter((c) => c.documented).length ?? 0;
     const drift = catalog?.diagnostics.length ?? 0;
 
@@ -284,12 +303,34 @@ export function makeDatasetPanel(
         </label>
 
         {queries.length === 0 ? (
-          <p style={note}>No queries yet — define one in the Bindings panel, then return here.</p>
+          <div style={row} data-data-dataset-empty>
+            <p style={{ ...note, margin: 0, flexBasis: "100%" }}>
+              {snapshot.sources.length === 0
+                ? "No queries yet. Import a data source first."
+                : "No queries yet. Pick records in Bindings, or save a query in Data query."}
+            </p>
+            {snapshot.sources.length === 0 ? (
+              <button type="button" data-data-dataset-open-sources onClick={() => openPanel(SOURCES_PANEL_ID)}>
+                Open Data sources
+              </button>
+            ) : (
+              <button type="button" data-data-dataset-open-query onClick={() => openPanel(QUERY_PANEL_ID)}>
+                Open Data query
+              </button>
+            )}
+          </div>
         ) : (
           <>
             <label style={row}>
-              query:{" "}
-              <select value={selected} onChange={(e) => setQuery(e.target.value)}>
+              Query{" "}
+              <select
+                value={selected}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setRows(null);
+                  setCatalog(null);
+                }}
+              >
                 {queries.map((q) => (
                   <option key={q} value={q}>
                     {q}
@@ -301,8 +342,13 @@ export function makeDatasetPanel(
             {/* Catalog = the §7 governed catalog; provider = the §7.1
                 data-provider publish. */}
             <div style={row}>
-              <button type="button" onClick={() => void showCatalog()}>
-                Refresh + catalog
+              <button
+                type="button"
+                data-data-dataset-preview
+                title="Refresh the data and show the query's first rows"
+                onClick={() => void showCatalog()}
+              >
+                Preview rows
               </button>
               <button type="button" onClick={() => void publish()}>
                 Publish provider
@@ -310,52 +356,96 @@ export function makeDatasetPanel(
             </div>
 
             {catalog && (
-              <div>
-                catalog: {catalog.columns.length} cols · {documented} documented · {drift}{" "}
-                diagnostic(s)
-                <ul style={{ margin: "4px 0", paddingLeft: 16 }}>
-                  {catalog.columns.slice(0, 8).map((c) => (
-                    <li key={c.name}>
-                      {c.label}{" "}
-                      <span style={note}>
-                        · {c.dataType}
-                        {c.documented ? "" : " · undocumented"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              <div style={note}>
+                {catalog.columns.length} column{catalog.columns.length === 1 ? "" : "s"} · {documented} documented
+                {drift > 0 ? ` · ${drift} schema note${drift === 1 ? "" : "s"}` : ""}
+              </div>
+            )}
+            {rows && rows.diagnostic && (
+              <div style={{ color: "var(--status-error)" }} data-data-dataset-rows-error>
+                {rows.diagnostic.message}
+              </div>
+            )}
+            {rows && !rows.diagnostic && (
+              <div data-data-dataset-rows={rows.rows.length}>
+                <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr>
+                        {rows.columns.map((c) => (
+                          <th
+                            key={c.name}
+                            title={c.type}
+                            style={{ textAlign: "left", padding: "2px 6px", borderBottom: "1px solid var(--pg-border)" }}
+                          >
+                            {c.name}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.rows.map((r, i) => (
+                        <tr key={i}>
+                          {r.map((v, j) => (
+                            <td key={j} style={{ ...mono, padding: "2px 6px", whiteSpace: "nowrap" }}>
+                              {v ?? ""}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <span style={note}>
+                  {rows.rows.length === 0
+                    ? "The query returned no rows."
+                    : `First ${rows.rows.length}${rows.total !== null ? ` of ${rows.total}` : ""} row${rows.total === 1 ? "" : "s"}.`}
+                </span>
               </div>
             )}
 
             {/* The §10 batch plan (per-record / per-group / one-catalog
                 generation units). */}
             <div style={row}>
-              Build:
+              Split output:
               <button type="button" onClick={() => void showPlan("perRecord")}>
-                per record
+                Per record
               </button>
               <button type="button" onClick={() => void showPlan("perGroup")}>
-                per group
+                Per group
               </button>
               <button type="button" onClick={() => void showPlan("oneCatalog")}>
-                one catalog
+                One catalog
               </button>
             </div>
             {plan && (
               <div>
-                plan: {plan.mode} · {plan.units.length} unit(s) over {plan.totalRecords} record(s)
+                {plan.units.length} output{plan.units.length === 1 ? "" : "s"} from {plan.totalRecords} record
+                {plan.totalRecords === 1 ? "" : "s"}
                 <span style={note}> — {plan.units.slice(0, 4).map((u) => u.label).join(", ")}</span>
                 <div style={{ marginTop: 4 }}>
-                  {/* The §10 in-app batch executor. */}
-                  <button type="button" data-data-batch-run onClick={() => void runBatch()}>
-                    Run batch
+                  {/* The §10 in-app batch executor: real pagination over a
+                      nominal frame chain. It writes no pages in this editor,
+                      so it is labelled as the plan it is. */}
+                  <button
+                    type="button"
+                    data-data-batch-run
+                    disabled={!flowBinding}
+                    title={
+                      flowBinding
+                        ? "Count the frames and records each output takes. No pages are made in this editor."
+                        : "Needs a record-flow binding — add one in Bindings."
+                    }
+                    onClick={() => void runBatch()}
+                  >
+                    Plan batch
                   </button>
                 </div>
               </div>
             )}
             {runs && (
               <div data-data-batch-runs={runs.length}>
-                ran {runs.length} output document(s):
+                Planned {runs.length} output document{runs.length === 1 ? "" : "s"}:
                 <ul style={{ margin: "4px 0", paddingLeft: 16 }}>
                   {runs.slice(0, 6).map((r, i) => {
                     const flow = r.flow as { frames?: unknown[]; total?: number };
@@ -454,7 +544,7 @@ export function makeDatasetPanel(
                     ))}
                   </select>
                   <span style={note}>
-                    {dataSets.length} set(s) · switching applies in ONE undo step
+                    {dataSets.length} set{dataSets.length === 1 ? "" : "s"} · switching is one undo step
                   </span>
                 </div>
               )}
@@ -471,7 +561,7 @@ export function makeDatasetPanel(
                     readOnly
                     value={exportedXml}
                     rows={8}
-                    style={{ width: "100%", font: "var(--font-mono, 11px ui-monospace, monospace)" }}
+                    style={{ width: "100%", fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 11 }}
                     data-data-variable-library
                   />
                 </div>
@@ -488,6 +578,14 @@ export function makeDatasetPanel(
             </div>
 
             {providerNote && <div style={note}>{providerNote}</div>}
+            {snapshot.message && (
+              <div
+                data-data-dataset-status={snapshot.status}
+                style={snapshot.status === "error" ? { color: "var(--status-error)" } : note}
+              >
+                {snapshot.message}
+              </div>
+            )}
             {error && (
               <div data-status="error" style={{ color: "var(--status-error, #e66)" }}>
                 {error}
