@@ -725,6 +725,10 @@ export function makeBindingsPanel(
             document&apos;s labels, the data did not (import the file again in Data sources).
           </div>
         )}
+        {/* A "Bind to data…" draft (from any panel's field) shows whether
+            or not a source exists yet: it names the target being bound,
+            and with no source it is where the user learns what to import. */}
+        <PropertyDraftRow host={host} session={session} queries={snapshot.queries} onDone={refresh} />
         {options.length === 0 ? (
           <div style={{ ...row, alignItems: "center" }} data-data-bind-empty>
             <p style={{ ...note, margin: 0, flexBasis: "100%" }}>
@@ -746,7 +750,6 @@ export function makeBindingsPanel(
           </div>
         ) : (
           <>
-            <PropertyDraftRow host={host} session={session} queries={snapshot.queries} onDone={refresh} />
             <label style={{ ...row, alignItems: "center" }} data-data-bind-query>
               Records from{" "}
               <select
