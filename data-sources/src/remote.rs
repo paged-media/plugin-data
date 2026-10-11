@@ -45,7 +45,7 @@ pub enum RemoteError {
     UnsupportedScheme(String),
     #[error("remote url has no host")]
     MissingHost,
-    #[error("remote url embeds credentials (user:pass@) — use a credential_ref (D-11)")]
+    #[error("remote url embeds credentials (user:pass@) — use a stored credential instead")]
     EmbeddedCredentials,
     #[error("source is not a remote source")]
     NotRemote,
