@@ -1,7 +1,7 @@
 # Status
 
 What `paged.data` ships and what it does not, read from the code on `main` (2026-10-06;
-package version 0.1.0-canary.12, built against core v0.71.1 and plugin-api/plugin-sdk
+package version 0.1.0-canary.13, built against core v0.71.1 and plugin-api/plugin-sdk
 0.2.45-canary.0). The 2026-10-05 round of work is on `main`; its outcome is summarised at the end of
 [`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). How
 the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
