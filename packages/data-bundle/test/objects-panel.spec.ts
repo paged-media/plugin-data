@@ -28,7 +28,7 @@ import type { PropertySchema } from "@paged-media/plugin-api";
 
 import manifest from "../manifest.json";
 import { PANEL_FIELDS, schemaOf, type KindName } from "../src/object-model";
-import { BIND, DATA_OBJECTS_PANEL, OBJECTS_PANEL_ID } from "../src/panels/objects-panel";
+import { BIND, DATA_OBJECTS_PANEL, OBJECTS_PANEL_ID, hasRowsBinding } from "../src/panels/objects-panel";
 
 const kindOf = (q: string) => q.slice(q.lastIndexOf("/") + 1) as KindName;
 const declared = (manifest.contributes as unknown as { objectModel: { kinds: { kind: string; schema: PropertySchema[] }[] } }).objectModel.kinds;
@@ -45,7 +45,9 @@ describe("Data objects panel (property rows) [data.object-model]", () => {
 
   it("a mistyped path is reported (the check is live)", () => {
     const broken = structuredClone(DATA_OBJECTS_PANEL);
-    const row = broken.sections[0]!.rows.find((r) => (r as { field?: string }).field === "property") as { path: string };
+    const row = broken.sections
+      .flatMap((sec) => sec.rows)
+      .find((r) => (r as { field?: string }).field === "property") as { path: string };
     row.path = "nope";
     const issues = validatePanelSchema(broken, { pluginId: manifest.id, schemaOf: (k) => schemaOf(kindOf(k)) });
     expect(issues.length).toBe(1);
@@ -59,14 +61,30 @@ describe("Data objects panel (property rows) [data.object-model]", () => {
     expect(PANEL_FIELDS.map((f) => `${f.kind}.${f.path}`).sort()).toEqual([...schema].sort());
   });
 
-  it("each kind's rows edit the item picked in that kind's list", () => {
+  it("opens with one plain sentence, then one section per kind", () => {
+    const [intro, ...kinds] = DATA_OBJECTS_PANEL.sections;
+    expect(DATA_OBJECTS_PANEL.title).toBe("Data overview");
+    expect(intro.title).toBeUndefined();
+    expect((intro.rows[0] as { widget?: string }).widget).toBe("paged.label");
+    expect(kinds.map((s) => s.title)).toEqual(["Sources", "Queries", "Bindings", "Data sets", "Variables"]);
+  });
+
+  it("each kind: an empty line naming where it is made, the list (each row opens that panel), then the picked item's rows", () => {
     const binds = Object.values(BIND);
-    for (const s of DATA_OBJECTS_PANEL.sections) {
-      const list = s.rows[0] as { widget?: string; list?: { selectionBinding?: string } };
+    for (const s of DATA_OBJECTS_PANEL.sections.slice(1)) {
+      const [empty, listRow, ...props] = s.rows as unknown as Array<Record<string, unknown>>;
+      expect(empty.widget).toBe("paged.label");
+      const list = listRow as { widget?: string; list?: { items: { bind: string }; selectionBinding?: string; actions?: Array<{ label: string; action: { kind: string; command: string } }> } };
       expect(list.widget).toBe("paged.list");
+      expect(empty.visible).toEqual({ bind: hasRowsBinding(list.list!.items.bind), negate: true });
+      expect((listRow as { visible?: unknown }).visible).toEqual({ bind: hasRowsBinding(list.list!.items.bind) });
+      expect((empty.props as { text: string }).text).toMatch(/\.$/);
       const select = list.list!.selectionBinding!;
       expect(binds).toContain(select);
-      for (const r of s.rows.slice(1)) expect((r as { address?: unknown }).address).toEqual({ bind: select });
+      const open = list.list!.actions![0]!;
+      expect(open.label).toMatch(/^Open in /);
+      expect(open.action.command).toMatch(/^paged\.panel\.show\.media\.paged\.data\.panel\./);
+      for (const r of props) expect((r as { address?: unknown }).address).toEqual({ bind: select });
     }
   });
 
