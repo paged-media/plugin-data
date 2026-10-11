@@ -1,7 +1,7 @@
 {
   "id": "media.paged.data",
   "name": "paged.data",
-  "version": "0.1.0-canary.13",
+  "version": "0.1.0-canary.14",
   "apiVersion": "^0.2",
   "publisher": "paged.media",
   "capabilities": {
@@ -260,14 +260,14 @@
               "type": {
                 "kind": "text"
               },
-              "summary": "Property bindings: the selector of the objects it writes (ADR 131)."
+              "summary": "Property bindings: the selector of the objects it writes."
             },
             {
               "path": "path",
               "type": {
                 "kind": "text"
               },
-              "summary": "Property bindings: the property path it writes (ADR 132)."
+              "summary": "Property bindings: the property path it writes."
             },
             {
               "path": "coerce",

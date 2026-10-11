@@ -1420,9 +1420,8 @@ impl DataSession {
             if !decl.var_trait.is_bindable() {
                 apply.applicable = false;
                 apply.note = Some(
-                    "graph-data variables are carried through the library but have no \
-                     paged.data binding to apply — a chart surface lives in another \
-                     plugin and the isolation contract forbids reaching into it (RFI D-15)"
+                    "graph-data variables are kept in the library but cannot be applied: \
+                     paged.data does not fill charts"
                         .to_string(),
                 );
             } else if !defined.contains(&decl.name) {

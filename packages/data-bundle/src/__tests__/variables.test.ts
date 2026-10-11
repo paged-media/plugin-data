@@ -447,6 +447,6 @@ describe("data_dataset_apply session lane (§9.9)", () => {
     (engine as { data_set_payload_bytes?: () => number }).data_set_payload_bytes = () => 60_000;
     const s = await sessionWith(fake.host, engine);
     await s.captureEveryRecord("q1", { nameColumn: "name" });
-    expect(s.getState().message).toContain("D-08");
+    expect(s.getState().message).toContain("a document can store");
   });
 });

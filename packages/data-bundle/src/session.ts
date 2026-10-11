@@ -481,7 +481,7 @@ export interface DataMergeExport {
 }
 
 export const NO_NEW_DOCUMENT_DOOR =
-  "this host cannot open a second document (no documents door, D-26) — merge into the current document instead";
+  "this editor version cannot open a second document — merge into the current document instead";
 
 /** The session API the panels + commands drive. */
 export interface DataSourceSession extends ReviewSession, PropertyMethods {
@@ -2309,7 +2309,7 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         credentialRef: options?.credentialRef,
         consent: "required",
         status: "inert",
-        message: "Inert — origin consent required before any fetch (D-03).",
+        message: "Inert — allow this origin before anything is fetched.",
         contentKey: null,
       });
       markDirty();
@@ -2711,8 +2711,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         state.message =
           `Captured ${names.length} data set(s) from "${queryId}".` +
           (bytes > CAP * 0.8
-            ? ` WARNING: the variable payload is ${bytes} bytes of the ${CAP}-byte ` +
-              "document-metadata cap (D-08) — delete data sets or capture fewer records."
+            ? ` WARNING: the captured data sets take ${bytes} of the ${CAP} bytes a ` +
+              "document can store for them — delete data sets or capture fewer records."
             : "");
         return names;
       } catch (err) {

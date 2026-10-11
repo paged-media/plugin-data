@@ -68,7 +68,7 @@ export function validateRemoteUrl(url: string): string | null {
     return `remote url must be http(s), got ${parsed.protocol}//`;
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    return "remote url embeds credentials (user:pass@) — use a credentialRef (D-11)";
+    return "remote url embeds credentials (user:pass@) — use a stored credential instead";
   }
   if (parsed.hostname === "") {
     return "remote url has no host";
