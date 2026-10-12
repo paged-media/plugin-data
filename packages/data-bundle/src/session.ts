@@ -81,6 +81,7 @@ import {
   readMergeTemplate,
   type MergeResult,
   type MergeTemplate,
+  type TemplatePageRow,
   type RecordsPerPage,
 } from "./merge";
 import { documentElements, planRelower, type RelowerTarget } from "./relower";
@@ -1079,14 +1080,18 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
   /** What a re-lower of `target` must clear (relower.ts): one tree read (and
    *  a pages read for a flow or a merge). A host without the tree read clears only what this
    *  session remembers minting. */
-  async function relowerPlan(target: RelowerTarget, minted?: readonly ElementId[]) {
+  async function relowerPlan(
+    target: RelowerTarget,
+    minted?: readonly ElementId[],
+    read?: { tree?: unknown; pages?: readonly { selfId: string }[] },
+  ) {
     let elements: ReturnType<typeof documentElements> = [];
     let pages: string[] = [];
     try {
-      elements = documentElements((await host.document.tree()) as never);
+      elements = documentElements((read?.tree ?? (await host.document.tree())) as never);
       // Only a flow or a merge adds pages that a re-lower may remove.
       if (target.kind === "merge" || target.kind === "recordFlow") {
-        pages = (await host.document.collection<{ selfId: string }>("pages")).map((p) => p.selfId);
+        pages = (read?.pages ?? (await host.document.collection<{ selfId: string }>("pages"))).map((p) => p.selfId);
       }
     } catch {
       // no tree read: fall back to the remembered ids below
@@ -3757,13 +3762,24 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       // read last time. The page is read first all the same: after an undo of
       // the merge the template frames are back, and they are consumed again
       // (reusing the stored template then left them on every output page).
-      const read = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields });
+      // The pages and the scene tree, read once for the template and for the
+      // re-merge plan (nothing changes the document between the two).
+      let snapshot: { tree?: Awaited<ReturnType<typeof host.document.tree>>; pages?: readonly TemplatePageRow[] } = {};
+      try {
+        snapshot = {
+          pages: await host.document.collection<TemplatePageRow>("pages"),
+          tree: await host.document.tree(),
+        };
+      } catch {
+        // a host without one of the reads: each reader reads (or falls back) itself
+      }
+      const read = await readMergeTemplate(host, { pageId: pageId as never, imageFields: options.imageFields, ...snapshot });
       const stored = mode === "consume" ? (mergeTemplates.get(mergeId) ?? null) : null;
       const template = read.template ?? stored;
       const templatePresent = read.template !== null;
       if (!template) return fail(read.diagnostics.join("; ") || "no template on the page");
       // Replace the previous run of this merge in the first batch.
-      const plan = await relowerPlan({ kind: "merge", merge: mergeId });
+      const plan = await relowerPlan({ kind: "merge", merge: mergeId }, undefined, snapshot);
       await settleLabel();
       const engineForMerge = e as Required<Pick<DataEngineLike, "plan_merge" | "merge_words" | "merge_overset">>;
       const result = await writeMerge(host, engineForMerge, template, {

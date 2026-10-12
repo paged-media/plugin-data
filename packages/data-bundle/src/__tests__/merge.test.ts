@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   contentMutation,
   imageUri,
+  isCopiedFramePath,
+  isSetValue,
   pageElements,
   pageMutations,
   storyText,
@@ -95,6 +97,57 @@ describe("Data Merge writer, pure [data.lower.merge-writer]", () => {
     expect(ops[7].args).toEqual({ elementId: "$h:m0f1", uri: "/data/images/red.png", fit: "Proportionally" });
     expect(JSON.parse(ops[4].args.value)).toEqual({ v: 1, data: { kind: "merge", merge: "mg", record: 0, frame: 0 } });
     expect(ops[9].args.pageId).toBe("p2");
+  });
+
+  it("content: every merged frame takes the template frame's own formatting (fill, inset, …)", () => {
+    const fill = { type: "colorRef", value: "Color/u4" };
+    const inset = { type: "bounds", value: [14, 16, 14, 16] };
+    const styled: MergeTemplate = {
+      ...TEMPLATE,
+      frames: [
+        { ...TEMPLATE.frames[0], frame: [{ path: "frameFillColor", value: fill }, { path: "frameInsetSpacing", value: inset }] },
+        { ...TEMPLATE.frames[1], frame: [{ path: "frameStrokeWeight", value: { type: "length", value: 2 } }] },
+      ],
+    };
+    const m = contentMutation(PLAN, styled, ["p1", "p2"] as never, { template: "consume", mergeId: "mg" }) as {
+      args: { ops: any[] };
+    };
+    const onFrame = (h: string) =>
+      m.args.ops.filter((o) => o.op === "setElementProperty" && o.args.elementId.id === `$h:${h}`).map((o) => [o.args.elementId.kind, o.args.path, o.args.value]);
+    for (const r of [0, 1]) {
+      expect(onFrame(`m${r}f0`)).toEqual([
+        ["textFrame", "frameFillColor", fill],
+        ["textFrame", "frameInsetSpacing", inset],
+      ]);
+      expect(onFrame(`m${r}f1`)).toEqual([["rectangle", "frameStrokeWeight", { type: "length", value: 2 }]]);
+    }
+  });
+
+  it("frame formatting: what is copied, and what a fresh frame already says", () => {
+    for (const p of ["frameFillColor", "frameInsetSpacing", "frameStrokeWeight", "textFrameVerticalJustification", "appliedObjectStyle", "frameCornerRadiusTopLeft", "frameDropShadow"]) {
+      expect(isCopiedFramePath(p), p).toBe(true);
+    }
+    for (const p of ["frameBounds", "frameTransform", "frameRotationAngle", "nextTextFrame", "itemLayer", "elementLocked", "frameFittingType", "characterFontSize"]) {
+      expect(isCopiedFramePath(p), p).toBe(false);
+    }
+    expect(isSetValue({ type: "colorRef", value: "Color/u4" })).toBe(true);
+    expect(isSetValue({ type: "colorRef", value: null })).toBe(false);
+    expect(isSetValue({ type: "bounds", value: [0, 0, 0, 0] })).toBe(false);
+    expect(isSetValue({ type: "bounds", value: [14, 16, 14, 16] })).toBe(true);
+    expect(isSetValue({ type: "text", value: "" })).toBe(false);
+    expect(isSetValue({ type: "text", value: "ObjectStyle/$ID/[None]" })).toBe(false);
+    expect(isSetValue({ type: "bool", value: false })).toBe(false);
+    expect(isSetValue({ type: "bool", value: true })).toBe(true);
+    expect(isSetValue({ type: "lengths", value: [] })).toBe(false);
+    expect(isSetValue({ type: "length", value: 0 })).toBe(true);
+    // What InDesign writes into every template frame is what a fresh frame has.
+    expect(isSetValue({ type: "text", value: "ObjectStyle/$ID/[Normal Text Frame]" }, "appliedObjectStyle")).toBe(false);
+    expect(isSetValue({ type: "text", value: "ObjectStyle/Card" }, "appliedObjectStyle")).toBe(true);
+    expect(isSetValue({ type: "length", value: 1 }, "textFrameColumnCount")).toBe(false);
+    expect(isSetValue({ type: "length", value: 2 }, "textFrameColumnCount")).toBe(true);
+    expect(isSetValue({ type: "text", value: "Drop" }, "frameDropShadowMode")).toBe(false);
+    expect(isSetValue({ type: "length", value: 0 }, "frameGradientFillAngle")).toBe(false);
+    expect(isSetValue({ type: "text", value: "None" }, "frameTextWrapMode")).toBe(false);
   });
 
   it("content: consuming a one-page merge removes the template frames in the same batch", () => {
