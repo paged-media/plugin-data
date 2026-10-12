@@ -26,7 +26,9 @@
 //! - [`shape`]s a raw `RecordSet` per a query's [`ResultShape`]
 //!   (record-stream / single / scalar / grouped);
 //! - injects a **deterministic ordering** ([`stabilize`]) so record identity is
-//!   stable across refreshes — the precondition for minimal sync diffs (§8);
+//!   stable across refreshes — the precondition for minimal sync diffs (§8) —
+//!   where the query leaves the order undefined, and keeps the delivered order
+//!   ([`delivered_order`]) where it defines one ([`result_order_is_defined`]);
 //! - computes content hashes ([`content_hash`], [`stamp`]) for the
 //!   [`ResolveStamp`] invalidation key.
 //!
@@ -37,8 +39,10 @@
 
 use data_core::{Query, RecordSet, ResolveStamp, ResultShape, Value};
 
+pub mod order;
 pub mod perf;
 
+pub use order::result_order_is_defined;
 use perf::Counter;
 
 /// A result reshaped per a query's [`ResultShape`] (spec §6).
@@ -255,6 +259,34 @@ pub fn first_stable_row(records: &RecordSet) -> Option<usize> {
         }
         std::cmp::Ordering::Equal
     })
+}
+
+/// The row order of a result whose query DEFINES its order
+/// ([`result_order_is_defined`]): the delivery order, sorted by the named keys
+/// when there are any, ties kept in delivery order (a stable sort). With no
+/// keys it is the delivery order itself and sorts nothing. Counted as one
+/// [`Counter::StabilizeCalls`] when it sorts.
+pub fn delivered_order(records: &RecordSet, keys: &[String]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..records.row_count).collect();
+    let cols: Vec<&[Value]> = keys
+        .iter()
+        .filter_map(|n| records.schema.index_of(n))
+        .map(|c| records.columns[c].as_slice())
+        .collect();
+    if cols.is_empty() {
+        return idx;
+    }
+    perf::bump(Counter::StabilizeCalls);
+    idx.sort_by(|&a, &b| {
+        for col in &cols {
+            match cmp_values(col.get(a), col.get(b)) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+    idx
 }
 
 /// Stabilize a record set by the named keys (`stable_order` + `apply_order`).

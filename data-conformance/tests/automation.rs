@@ -28,11 +28,21 @@ use data_conformance::{n, record_set, t};
 use data_core::{FieldType, Query, QueryId, ResultShape};
 use data_js::core::DataSession;
 
+/// The three-store result. Over a join, its order is undefined (records are
+/// numbered by content); over a scan of one table it is the table's order.
+const UNORDERED_SQL: &str =
+    "SELECT s.store, r.region, s.qty FROM sales s JOIN regions r ON r.id = s.region";
+const SCAN_SQL: &str = "SELECT store, region, qty FROM sales";
+
 fn session() -> DataSession {
+    session_over(UNORDERED_SQL)
+}
+
+fn session_over(sql: &str) -> DataSession {
     let mut s = DataSession::new(0);
     s.define_query(Query {
         id: QueryId::from("q1"),
-        sql: "SELECT store, region, qty FROM sales".into(),
+        sql: sql.into(),
         params: vec![],
         shape: ResultShape::RecordStream,
     });
@@ -97,6 +107,39 @@ fn data_automation_batch() {
     assert_eq!(one.mode, "oneCatalog");
     assert_eq!(one.units.len(), 1);
     assert_eq!(one.units[0].record_indices, vec![0, 1, 2]);
+}
+
+/// Over a scan of one table the batch follows the table's order — the record
+/// numbers the preview stepper and Data Merge use (spec §6.1).
+#[test]
+#[allow(non_snake_case)] // `__feat__<id>`: the cockpit test-to-feature join
+fn data_automation_batch_follows_a_scan_in_its_order__feat__data_automation_batch() {
+    let s = session_over(SCAN_SQL);
+    let per_record = s
+        .plan_batch(
+            &QueryId::from("q1"),
+            BatchMode::PerRecord {
+                key: Some("store".into()),
+            },
+        )
+        .unwrap();
+    let labels: Vec<&str> = per_record.units.iter().map(|u| u.label.as_str()).collect();
+    assert_eq!(labels, ["west-1", "east-1", "east-2"]);
+    // Groups in the order they first appear, records in table order inside.
+    let per_group = s
+        .plan_batch(
+            &QueryId::from("q1"),
+            BatchMode::PerGroup {
+                by: vec!["region".into()],
+            },
+        )
+        .unwrap();
+    let groups: Vec<(&str, Vec<usize>)> = per_group
+        .units
+        .iter()
+        .map(|u| (u.label.as_str(), u.record_indices.clone()))
+        .collect();
+    assert_eq!(groups, [("west", vec![0]), ("east", vec![1, 2])]);
 }
 
 #[test]

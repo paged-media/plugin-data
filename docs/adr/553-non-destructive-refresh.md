@@ -100,3 +100,23 @@ Sync state is not in the saved payload; a session rebuilt from one starts every 
   the result recorded by `mark_rows_applied` when the document was last written from it.
   It is read-only and separate from the per-binding change report.
 
+
+## Amendment 2026-10-12 (record numbering)
+
+- Record N of a result is the Nth record as delivered when the query defines its order, and
+  the Nth by content only when it does not. A query defines its order with a top-level
+  `ORDER BY`, or by scanning one table through order-preserving clauses (`WHERE`, `LIMIT`,
+  `OFFSET`, `UNION ALL`, a derived table or a CTE over such a scan): DuckDB delivers that in
+  insertion order while `preserve_insertion_order` is on, its default. An imported file is
+  a table inserted in file order, so record 1 is the file's first row, the row Data Merge puts
+  on its first page and the Dataset preview lists first. A join, a grouping, `DISTINCT`, a set
+  operation other than `UNION ALL`, a window with a partition or an order, sampling, a
+  subquery outside `FROM`, or no SQL at all leave the order undefined (`data-query`
+  `result_order_is_defined`, a conservative lexical reading).
+- Tables, record flows, rules, batch plans, the preview stepper and every per-record binding
+  share that numbering (`ResolutionEngine::record_row` / the cached orders). Before this, every
+  result was numbered by content, so an unindexed binding over a product list showed the
+  alphabetically first product, not the first row.
+- The protection the content numbering gave is kept where it is needed: the same rows
+  delivered in another order are no change for a query whose order is undefined. For a query
+  that defines its order, another order is another result.

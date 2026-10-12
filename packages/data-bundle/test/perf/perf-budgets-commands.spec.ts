@@ -157,7 +157,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     wasmCalls: 9,
     cellsIn: 0,
     resolves: 1,
-    stabilizeCalls: 1,
+    // 1 → 0: a scan of one table (`SELECT … FROM products_w1`) is numbered as DuckDB
+    // delivers it (ADR 553, amendment 2026-10-12): nothing to sort.
+    stabilizeCalls: 0,
     // Was 9 840 (sort keys built per comparison); in-place since Wave 2.
     keyAllocs: 0,
     fingerprints: 0,
@@ -328,7 +330,11 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — data commands [data.perf.gates]"
     // another order previewed a different record. Record N is now record N of
     // the stabilized order — one sort per result content, cached, shared by
     // all 20 steps (and by every table / flow over the same result).
-    stabilizeCalls: 1,
+    // LOWERED 1 → 0: a scan of one table defines its order (DuckDB keeps
+    // insertion order), so record N is the Nth row as delivered and nothing
+    // is sorted (ADR 553, amendment 2026-10-12); DP-4 still holds for a
+    // result whose order the query leaves undefined.
+    stabilizeCalls: 0,
     keyAllocs: 0,
     fingerprints: 0,
     duckQueries: 0,

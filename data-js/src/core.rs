@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use data_automation::{plan_batch, BatchMode, BatchPlan};
+use data_automation::{plan_batch_ordered, BatchMode, BatchPlan};
 use data_barcode::{encode, with_quiet_zone, Symbology};
 use data_bind::{
     diff_resolved, suggest_mappings, BarcodeResolveStatus, ChangeKind, ColumnMapping,
@@ -827,7 +827,12 @@ impl DataSession {
         let records = self.engine.result(query_id).ok_or_else(|| {
             SessionError::Decode(format!("no result ingested for query '{query_id}'"))
         })?;
-        Ok(plan_batch(records, &mode))
+        // The session's record numbering (the delivered order for a query
+        // that defines it), so a unit's records are the stepper's records.
+        let order = self.engine.record_order(query_id).ok_or_else(|| {
+            SessionError::Decode(format!("no result ingested for query '{query_id}'"))
+        })?;
+        Ok(plan_batch_ordered(records, &order, &mode))
     }
 
     /// Build the **governed catalog** for a query's result (spec §7): enrich the
@@ -1356,7 +1361,7 @@ impl DataSession {
     /// query has no result, the record is out of range, or the column is absent.
     fn record_field_display(&self, query: &QueryId, record: usize, column: &str) -> Option<String> {
         let records = self.engine.result(query)?;
-        // Record N in the stabilized order, like every other record index.
+        // Record N as the engine numbers every record index (record_row).
         let row = self.engine.record_row(query, record)?;
         records.field(row, column).map(|v| v.as_display())
     }
