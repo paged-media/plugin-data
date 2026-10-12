@@ -230,6 +230,12 @@ export interface SessionState {
   /** ADR 559: file sources restored from the document's labels whose data
    *  was not in the file — import them again ("re-link"). */
   relink?: string[];
+  /** §9 record-preview stepper: the records ingested per query (its "of N"),
+   *  for every query whose result has landed. */
+  records?: Record<string, number>;
+  /** §9 record-preview stepper: the record it shows, per query (0-based).
+   *  Kept here, not in the panel, so a panel shown again keeps its place. */
+  preview?: Record<string, number>;
 }
 
 /** One imported local file, as the Sources panel lists it. */
@@ -681,6 +687,9 @@ export interface DataSourceSession extends ReviewSession, PropertyMethods {
    *  first (`refreshData`); 0 before that. Returns 0 honestly when the engine
    *  wasm predates the preview lane. */
   recordCount(queryId: string): Promise<number>;
+  /** §9 record-preview stepper: remember the record it shows for a query
+   *  (`getState().preview`). */
+  setPreviewPosition(queryId: string, record: number): void;
   /** §9 field-mapping wizard: the engine's column → variable-binding suggestions
    *  for a query's ingested result. Requires the query's result to be ingested
    *  first (`refreshData`); returns `[]` honestly when no result is ingested or
@@ -984,6 +993,31 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     polling: [],
     relink: relinkSources,
   };
+  // §9 record-preview stepper: the records each query delivered last, and the
+  // record the stepper shows — session state, so a panel shown again keeps
+  // both (it starts from "— / —" only when nothing has run).
+  const recordCounts = new Map<string, number>();
+  const previewAt = new Map<string, number>();
+  /** Keep how many records a query delivered (and a stepped-to record
+   *  within them). */
+  function keepRecordCount(queryId: string, n: number): number {
+    if (n > 0) recordCounts.set(queryId, n);
+    else recordCounts.delete(queryId);
+    const at = previewAt.get(queryId);
+    if (at !== undefined && at >= n) previewAt.set(queryId, Math.max(0, n - 1));
+    return n;
+  }
+  /** Read (and keep) how many records the engine holds for a query; 0 before
+   *  it ran, or on an engine wasm without the lane. */
+  function noteRecordCount(e: DataEngineLike, queryId: string): number {
+    let n = 0;
+    try {
+      n = typeof e.query_record_count === "function" ? e.query_record_count(queryId) : 0;
+    } catch {
+      n = 0;
+    }
+    return keepRecordCount(queryId, n);
+  }
   // ADR 558/559: property bindings carried by an element (binding → oid,
   // and the element while this session knows it).
   const hostOids = new Map<string, string>();
@@ -1858,6 +1892,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     bindingIds.length = 0;
     diagnostics.length = 0;
     queries.clear();
+    recordCounts.clear();
+    previewAt.clear();
     bindingKinds.clear();
     visibilityTargets.clear();
     imageTargets.clear();
@@ -2262,6 +2298,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         ],
         refresh: Object.fromEntries(refreshPolicies),
         polling: [...state.polling],
+        records: Object.fromEntries(recordCounts),
+        preview: Object.fromEntries(previewAt),
       };
     },
 
@@ -2893,11 +2931,18 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
           try {
             // Typed column buffers (one copy per column); a re-delivery of the
             // same data is recognised by the engine and decodes nothing.
+            let rows: number;
             if (typeof d.queryColumns === "function") {
-              ingestColumnBatch(e, q.id, await d.queryColumns(q.sql));
+              const batch = await d.queryColumns(q.sql);
+              ingestColumnBatch(e, q.id, batch);
+              rows = batch.row_count;
             } else {
-              e.ingest_result(q.id, await d.query(q.sql));
+              const records = await d.query(q.sql);
+              e.ingest_result(q.id, records);
+              rows = records.row_count ?? 0;
             }
+            // What was delivered is what the engine holds: no engine call.
+            keepRecordCount(q.id, rows);
           } catch (err) {
             const diag = diagnoseDuckDBError(err);
             report({
@@ -2915,6 +2960,8 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
         state.message = err instanceof Error ? err.message : String(err);
         host.log.warn(`refreshData: ${state.message}`);
       }
+      // The panels show the new record counts (the preview stepper's "of N").
+      emit();
     },
 
     async refreshDiff() {
@@ -3121,12 +3168,11 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
       } catch {
         return 0;
       }
-      if (typeof e.query_record_count !== "function") return 0;
-      try {
-        return e.query_record_count(queryId);
-      } catch {
-        return 0;
-      }
+      return noteRecordCount(e, queryId);
+    },
+
+    setPreviewPosition(queryId, record) {
+      previewAt.set(queryId, Math.max(0, Math.floor(record)));
     },
 
     async queryMappings(queryId) {

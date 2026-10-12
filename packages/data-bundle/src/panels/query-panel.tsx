@@ -78,6 +78,10 @@ export function makeQueryPanel(_host: BundleHost, session: DataSourceSession): (
     const [saved, setSaved] = useState<string | null>(null);
 
     const chosen = source || snapshot.sources[0] || "";
+    // Until SQL is typed, the field shows the source's rows as its
+    // placeholder, and that is the query Preview and Save run.
+    const defaultSql = chosen ? buildSql({ source: chosen }) : "";
+    const runSql = sql.trim() ? sql : defaultSql;
     const names = columns.map((c) => c.name);
     const first = names[0] ?? "";
 
@@ -98,7 +102,7 @@ export function makeQueryPanel(_host: BundleHost, session: DataSourceSession): (
     }
 
     async function onPreview(): Promise<void> {
-      const p = await session.previewQuery(sql, PREVIEW_ROWS);
+      const p = await session.previewQuery(runSql, PREVIEW_ROWS);
       setPreview(p);
       setDiagnostic(p.diagnostic);
       refresh();
@@ -110,7 +114,7 @@ export function makeQueryPanel(_host: BundleHost, session: DataSourceSession): (
         setDiagnostic({ kind: "Guard", message: "name the query first" });
         return;
       }
-      const d = await session.saveQuery(id, sql);
+      const d = await session.saveQuery(id, runSql);
       setDiagnostic(d);
       setSaved(d === null ? id : null);
       refresh();
@@ -263,7 +267,7 @@ export function makeQueryPanel(_host: BundleHost, session: DataSourceSession): (
             spellCheck={false}
             style={{ ...mono, width: "100%", boxSizing: "border-box" }}
             value={sql}
-            placeholder={chosen ? `SELECT * FROM ${chosen}` : "SELECT * FROM <source>"}
+            placeholder={defaultSql || "SELECT * FROM <source>"}
             onChange={(e) => {
               setSql(e.target.value);
               setSaved(null);
@@ -271,14 +275,14 @@ export function makeQueryPanel(_host: BundleHost, session: DataSourceSession): (
           />
         </label>
         <div style={row}>
-          <button type="button" data-data-query-preview disabled={!sql.trim()} onClick={() => void onPreview()}>
+          <button type="button" data-data-query-preview disabled={!runSql.trim()} onClick={() => void onPreview()}>
             Preview
           </button>
           <label>
             Query id{" "}
             <input data-data-query-id style={mono} size={10} value={queryId} onChange={(e) => setQueryId(e.target.value)} />
           </label>
-          <button type="button" data-data-query-save disabled={!sql.trim()} onClick={() => void onSave()}>
+          <button type="button" data-data-query-save disabled={!runSql.trim()} onClick={() => void onSave()}>
             Save query
           </button>
           {saved ? <span style={note} data-data-query-saved>Saved as {saved}.</span> : null}

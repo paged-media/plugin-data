@@ -126,7 +126,7 @@ function fakeEngine(over?: Partial<DataEngineLike>): DataEngineLike {
   } as DataEngineLike;
 }
 
-async function sessionWith(host: BundleHost, engine: DataEngineLike) {
+async function sessionWith(host: BundleHost, engine: DataEngineLike, rows = 0) {
   vi.resetModules();
   vi.doMock("../engine", async (orig) => ({
     ...(await orig<typeof import("../engine")>()),
@@ -134,7 +134,11 @@ async function sessionWith(host: BundleHost, engine: DataEngineLike) {
   }));
   vi.doMock("../query/duckdb", async (orig) => ({
     ...(await orig<typeof import("../query/duckdb")>()),
-    bootDuckDB: async () => ({ registerCsv: async () => {}, query: async () => ({}), close: async () => {} }),
+    bootDuckDB: async () => ({
+      registerCsv: async () => {},
+      query: async () => ({ schema: { fields: [] }, columns: [], row_count: rows }),
+      close: async () => {},
+    }),
   }));
   const { createSession: make } = await import("../session");
   return make(host, 20613);
@@ -147,6 +151,17 @@ describe("data_bind_preview_step session lane (§9)", () => {
     const s = await sessionWith(fake.host, engine);
     expect(await s.recordCount("q_all")).toBe(5);
     expect(await s.recordCount("other")).toBe(0);
+  });
+
+  it("the session keeps each query's record count and the stepped-to record, for a panel shown again", async () => {
+    const fake = fakeHost();
+    // The count is what DuckDB delivered (no engine call per refresh).
+    const s = await sessionWith(fake.host, fakeEngine(), 24);
+    s.addQuery("q_all", "SELECT * FROM people", "recordStream");
+    await s.refreshData();
+    expect(s.getState().records).toEqual({ q_all: 24 });
+    s.setPreviewPosition("q_all", 7);
+    expect(s.getState().preview).toEqual({ q_all: 7 });
   });
 
   it("recordCount degrades to 0 when the wasm predates the lane", async () => {

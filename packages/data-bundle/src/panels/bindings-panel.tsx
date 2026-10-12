@@ -384,9 +384,12 @@ export function makeBindingsPanel(
       );
       refresh();
     }
-    // §9 record-preview stepper: walk the demo query's records before a batch run.
-    const [previewIndex, setPreviewIndex] = useState(0);
-    const [recordTotal, setRecordTotal] = useState(0);
+    // §9 record-preview stepper: walk the picked query's records before a
+    // batch run. The count and the position are the session's (a panel shown
+    // again keeps its place); the count is there once the query has run.
+    const stepQuery = picked()?.query ?? null;
+    const recordTotal = stepQuery ? (snapshot.records?.[stepQuery] ?? 0) : 0;
+    const previewIndex = stepQuery ? Math.min(snapshot.preview?.[stepQuery] ?? 0, Math.max(0, recordTotal - 1)) : 0;
     // §9 field-mapping wizard: the engine's column → binding suggestions.
     const [mappings, setMappings] = useState<ColumnMapping[]>([]);
     const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -502,13 +505,17 @@ export function makeBindingsPanel(
       refresh();
     }
 
-    /** Resolve the demo query against the stepped-to record and commit the
+    /** Resolve the picked query against the stepped-to record and commit the
      *  preview (the SAME lower lanes a batch run uses). Re-reads the record
-     *  count so the "of N" bound stays honest after a refresh. */
+     *  count so the "of N" bound stays honest after a refresh; a query that
+     *  has not run yet runs first. */
     async function stepTo(next: number): Promise<void> {
       const q = ensurePicked();
-      const total = q ? ((await session.recordCount(q)) ?? 0) : 0;
-      setRecordTotal(total);
+      let total = q ? ((await session.recordCount(q)) ?? 0) : 0;
+      if (q && total === 0) {
+        await session.refreshData();
+        total = (await session.recordCount(q)) ?? 0;
+      }
       if (total === 0) {
         setStepMsg("No records yet — refresh data first.");
         refresh();
@@ -516,7 +523,7 @@ export function makeBindingsPanel(
       }
       setStepMsg(null);
       const clamped = Math.max(0, Math.min(next, total - 1));
-      setPreviewIndex(clamped);
+      session.setPreviewPosition(q!, clamped);
       // Preview every wired binding against the chosen record.
       for (const id of session.getState().bindings) {
         await session.previewRecord(id, clamped);
@@ -1062,9 +1069,10 @@ export function makeBindingsPanel(
               <button
                 type="button"
                 title="Show the document resolved against the next record"
-                disabled={recordTotal === 0 || previewIndex >= recordTotal - 1}
+                // Before the query ran, "next" runs it and shows record 1.
+                disabled={recordTotal === 0 ? !stepQuery : previewIndex >= recordTotal - 1}
                 onClick={() => {
-                  void stepTo(previewIndex + 1);
+                  void stepTo(recordTotal === 0 ? 0 : previewIndex + 1);
                 }}
               >
                 next ›
