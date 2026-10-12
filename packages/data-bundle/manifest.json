@@ -514,6 +514,61 @@
               }
             }
           }
+        },
+        {
+          "id": "media.paged.data.merge",
+          "title": "Merge records into the document",
+          "args": {
+            "kind": "struct",
+            "fields": {
+              "query": {
+                "kind": "text",
+                "optional": true
+              },
+              "mode": {
+                "kind": "enum",
+                "members": ["single", "multiple"],
+                "optional": true
+              },
+              "arrange": {
+                "kind": "enum",
+                "members": ["rows", "columns"],
+                "optional": true
+              },
+              "rowSpacingPt": {
+                "kind": "number",
+                "unit": "pt",
+                "optional": true
+              },
+              "columnSpacingPt": {
+                "kind": "number",
+                "unit": "pt",
+                "optional": true
+              },
+              "removeBlankLines": {
+                "kind": "bool",
+                "optional": true
+              },
+              "template": {
+                "kind": "enum",
+                "members": ["keep", "consume"],
+                "optional": true
+              },
+              "destination": {
+                "kind": "enum",
+                "members": ["current", "newDocument"],
+                "optional": true
+              },
+              "pageId": {
+                "kind": "text",
+                "optional": true
+              },
+              "documentName": {
+                "kind": "text",
+                "optional": true
+              }
+            }
+          }
         }
       ]
     }
