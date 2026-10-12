@@ -92,10 +92,22 @@ describe.skipIf(!RUN_BUDGETS)("re-lower updates in place, real core [data.lower.
     await s.lowerBinding("bc");
     const once = (await polygons(h!)).length - before;
     expect(once).toBeGreaterThan(10);
+    // The symbol's bars, as drawn: a refused replacement batch would leave the
+    // count right and the old bars standing.
+    const bars = async () =>
+      JSON.stringify(
+        (await h!.host.document.elementGeometry((await polygons(h!)).filter((e) => e.kind === "polygon")))
+          .map((g) => g.bounds)
+          .sort(),
+      );
+    const first = await bars();
     await s.lowerBinding("bc");
     expect((await polygons(h!)).length - before).toBe(once);
+    expect(await bars()).toBe(first);
     await s.previewRecord("bc", 1);
     expect((await polygons(h!)).length - before).toBe(once);
+    // Record 1's code is another symbol: the preview replaced the bars.
+    expect(await bars()).not.toBe(first);
   });
 
   it("a record flow becomes frames on added pages, and a re-lower replaces them [data.lower.relower-in-place] [data.lower.recordflow-writer]", async () => {
