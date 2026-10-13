@@ -198,6 +198,47 @@ describe("data query panel [data.query.seam]", () => {
   });
 });
 
+describe("data query panel — the source's rows before any SQL is typed [data.query.seam]", () => {
+  it("after Read columns, Preview runs the query the field shows (SELECT * FROM the source) [data.query.panel]", async () => {
+    const previews: string[] = [];
+    const session = stubSession(
+      {
+        describeSource: async () => [{ name: "name", type: "VARCHAR" }],
+        previewQuery: async (sql: string) => {
+          previews.push(sql);
+          return { columns: [{ name: "name", type: "VARCHAR" }], rows: [["Linen notebook"]], total: 24, diagnostic: null };
+        },
+      },
+      { sources: ["catalogue"] },
+    );
+    const { makeQueryPanel } = await import("../panels/query-panel");
+    const Panel = makeQueryPanel(host, session);
+    let tree = render(Panel);
+    click(find(tree, "data-data-query-columns"));
+    await flush();
+    tree = render(Panel);
+    expect(text(tree.find((e) => e.type === "span" && text(e).includes("column(s)")))).toContain("1 column(s): name VARCHAR");
+    // The field is empty; what it shows (its placeholder) is what runs.
+    const field = find(tree, "data-data-query-sql");
+    expect(field.props.value).toBe("");
+    expect(field.props.placeholder).toBe('SELECT *\nFROM "catalogue"');
+    const preview = find(tree, "data-data-query-preview");
+    expect(preview.props.disabled).toBe(false);
+    click(preview);
+    await flush();
+    tree = render(Panel);
+    expect(previews).toEqual(['SELECT *\nFROM "catalogue"']);
+    expect(text(find(tree, "data-data-query-grid"))).toContain("1 of 24 row(s)");
+    expect(find(tree, "data-data-query-save").props.disabled).toBe(false);
+  });
+
+  it("with no source there is nothing to preview", async () => {
+    const { makeQueryPanel } = await import("../panels/query-panel");
+    const tree = render(makeQueryPanel(host, stubSession({}, { sources: [] })));
+    expect(find(tree, "data-data-query-preview").props.disabled).toBe(true);
+  });
+});
+
 describe("sources panel — files, worksheets, refresh policy [data.source.adapters]", () => {
   it("lists each file with its format; a workbook offers its worksheets; policies are set and refusals shown [data.source.adapters]", async () => {
     const sheets: [string, string][] = [];

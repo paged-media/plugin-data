@@ -369,6 +369,86 @@ describe("sources panel says whether the session is saved [data.plugin.persisten
   });
 });
 
+describe("bindings panel — the record-preview stepper [data.bind.preview-step]", () => {
+  /** A session whose state the test changes, as the real one does. */
+  function liveSession(state: Partial<SessionState>, over: Partial<DataSourceSession> = {}) {
+    const live: SessionState = {
+      status: "ready",
+      message: "",
+      sources: ["people"],
+      queries: ["q_all"],
+      bindings: [],
+      remote: [],
+      diagnostics: [],
+      persistence: { status: "saved", hash: null },
+      files: [],
+      refresh: {},
+      polling: [],
+      ...state,
+    };
+    const session = stubSession({
+      getState: () => live,
+      listQueries: () => [{ id: "q_all", sql: "SELECT * FROM people" }],
+      addQuery: () => {},
+      recordCount: async (q: string) => live.records?.[q] ?? 0,
+      setPreviewPosition: (q: string, record: number) => void (live.preview = { ...live.preview, [q]: record }),
+      ...over,
+    } as Partial<DataSourceSession>);
+    return { live, session };
+  }
+  const position = (tree: El[]) => text(tree.find((e) => e.props["data-testid"] === "preview-position"));
+  const button = (tree: El[], label: RegExp) =>
+    tree.filter((e) => e.type === "button").find((e) => label.test(text(e)))!;
+
+  it("shows the record count the session holds as soon as it opens, without stepping first", async () => {
+    const { session } = liveSession({ records: { q_all: 24 } });
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const tree = render(makeBindingsPanel(host, session));
+    expect(position(tree)).toBe("1 / 24");
+    expect(button(tree, /next/).props.disabled).toBe(false);
+    expect(button(tree, /prev/).props.disabled).toBe(true);
+  });
+
+  it("keeps its record when the panel is shown again (another tab, then back)", async () => {
+    const { session } = liveSession({ records: { q_all: 24 } });
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel(host, session);
+    let tree = render(Panel);
+    await (button(tree, /next/).props.onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    tree = render(Panel);
+    expect(position(tree)).toBe("2 / 24");
+    // A remount: the panel's own state is gone, the session's is not.
+    slots.length = 0;
+    tree = render(Panel);
+    expect(position(tree)).toBe("2 / 24");
+    expect(button(tree, /prev/).props.disabled).toBe(false);
+  });
+
+  it("before the data ran, next › runs it and shows the first record", async () => {
+    let refreshed = 0;
+    const { live, session } = liveSession(
+      {},
+      {
+        refreshData: async () => {
+          refreshed += 1;
+          live.records = { q_all: 3 };
+        },
+      },
+    );
+    const { makeBindingsPanel } = await import("../panels/bindings-panel");
+    const Panel = makeBindingsPanel(host, session);
+    let tree = render(Panel);
+    expect(position(tree)).toBe("— / —");
+    expect(button(tree, /next/).props.disabled).toBe(false);
+    await (button(tree, /next/).props.onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    tree = render(Panel);
+    expect(refreshed).toBe(1);
+    expect(position(tree)).toBe("1 / 3");
+  });
+});
+
 describe("bindings panel — empty state and the query picker [data.bind.authoring]", () => {
   it("with no data source it shows one sentence and a way to Data sources, not the authoring controls [data.bind.authoring]", async () => {
     const opened: string[] = [];

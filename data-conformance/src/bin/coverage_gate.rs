@@ -32,7 +32,7 @@
 //!
 //! An `implemented` row with NO tests at all is a gap. Prints a per-file
 //! summary plus the gap list and exits `1` iff any gap exists. Dependency-light
-//! (`serde_yaml` + `std`). Repo root resolves as `CARGO_MANIFEST_DIR/..`.
+//! (`serde_norway` + `std`). Repo root resolves as `CARGO_MANIFEST_DIR/..`.
 //!
 //! `--junit <nextest junit.xml>` adds the second half: every `tests.rust`
 //! pointer must also have RUN and PASSED in that report. Without it the gate
@@ -166,7 +166,7 @@ fn check_row(
     root: &Path,
     source: &str,
     id: &str,
-    row: &serde_yaml::Value,
+    row: &serde_norway::Value,
     gaps: &mut Vec<Gap>,
     text_cache: &mut BTreeMap<PathBuf, Option<String>>,
     junit: Option<&JunitReport>,
@@ -415,12 +415,12 @@ fn collect_yaml(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn parse_rows(path: &Path) -> Result<Vec<serde_yaml::Value>, String> {
+fn parse_rows(path: &Path) -> Result<Vec<serde_norway::Value>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let doc: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
+    let doc: serde_norway::Value = serde_norway::from_str(&text).map_err(|e| e.to_string())?;
     match doc {
-        serde_yaml::Value::Sequence(rows) => Ok(rows),
-        serde_yaml::Value::Null => Ok(Vec::new()),
+        serde_norway::Value::Sequence(rows) => Ok(rows),
+        serde_norway::Value::Null => Ok(Vec::new()),
         other => Err(format!(
             "expected a top-level sequence of rows, found {}",
             yaml_kind(&other)
@@ -428,30 +428,30 @@ fn parse_rows(path: &Path) -> Result<Vec<serde_yaml::Value>, String> {
     }
 }
 
-fn row_str(row: &serde_yaml::Value, key: &str) -> Option<String> {
+fn row_str(row: &serde_norway::Value, key: &str) -> Option<String> {
     row.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
-fn as_str_list(v: &serde_yaml::Value) -> Vec<String> {
+fn as_str_list(v: &serde_norway::Value) -> Vec<String> {
     match v {
-        serde_yaml::Value::Sequence(items) => items
+        serde_norway::Value::Sequence(items) => items
             .iter()
             .filter_map(|i| i.as_str().map(str::to_string))
             .collect(),
-        serde_yaml::Value::String(s) => vec![s.clone()],
+        serde_norway::Value::String(s) => vec![s.clone()],
         _ => Vec::new(),
     }
 }
 
-fn yaml_kind(v: &serde_yaml::Value) -> &'static str {
+fn yaml_kind(v: &serde_norway::Value) -> &'static str {
     match v {
-        serde_yaml::Value::Null => "null",
-        serde_yaml::Value::Bool(_) => "bool",
-        serde_yaml::Value::Number(_) => "number",
-        serde_yaml::Value::String(_) => "string",
-        serde_yaml::Value::Sequence(_) => "sequence",
-        serde_yaml::Value::Mapping(_) => "mapping",
-        serde_yaml::Value::Tagged(_) => "tagged",
+        serde_norway::Value::Null => "null",
+        serde_norway::Value::Bool(_) => "bool",
+        serde_norway::Value::Number(_) => "number",
+        serde_norway::Value::String(_) => "string",
+        serde_norway::Value::Sequence(_) => "sequence",
+        serde_norway::Value::Mapping(_) => "mapping",
+        serde_norway::Value::Tagged(_) => "tagged",
     }
 }
 

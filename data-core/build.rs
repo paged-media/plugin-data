@@ -48,7 +48,7 @@ struct FnRow {
     #[serde(default)]
     status: String,
     // Other fields (rust, provenance, tests) are intentionally ignored here;
-    // serde_yaml tolerates unknown fields (no deny_unknown_fields).
+    // serde_norway tolerates unknown fields (no deny_unknown_fields).
 }
 
 fn main() {
@@ -69,7 +69,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         let text = fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("data-core build.rs: read {path:?}: {e}"));
-        let parsed: Vec<FnRow> = serde_yaml::from_str(&text)
+        let parsed: Vec<FnRow> = serde_norway::from_str(&text)
             .unwrap_or_else(|e| panic!("data-core build.rs: parse {path:?}: {e}"));
         rows.extend(parsed);
     }

@@ -26,7 +26,7 @@ data-dataset = { path = "../data-dataset" }
 data-automation = { path = "../data-automation" }
 data-js = { path = "../data-js" }
 serde.workspace = true
-serde_yaml.workspace = true
+serde_norway.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

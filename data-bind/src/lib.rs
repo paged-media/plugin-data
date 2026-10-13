@@ -48,7 +48,10 @@ use data_core::{
     Status, StyleAction, SyncState, Template, TemplateRef, Value,
 };
 use data_expr::{eval, eval_str, parse, EvalCtx, ParseError, RecordCtx, SimpleCtx};
-use data_query::{content_hashes, first_stable_row, stable_order, stamp, Fnv};
+use data_query::{
+    content_hashes, delivered_order, first_stable_row, result_order_is_defined, stable_order,
+    stamp, Fnv,
+};
 
 pub use data_core::PropertyOutcome;
 pub use diff::{
@@ -261,6 +264,10 @@ pub type FingerprintSnapshot = HashMap<String, (u64, Option<String>)>;
 #[derive(Default)]
 pub struct ResolutionEngine {
     queries: HashMap<QueryId, Query>,
+    /// Per query: whether its SQL defines the order of its result
+    /// ([`result_order_is_defined`]) — then record N is the Nth record as
+    /// delivered, otherwise the Nth by content.
+    ordered: HashMap<QueryId, bool>,
     bindings: HashMap<BindingId, Binding>,
     templates: HashMap<TemplateRef, Template>,
     placeholders: HashMap<PlaceholderRef, Placeholder>,
@@ -329,9 +336,21 @@ impl ResolutionEngine {
         self.binding_locales.get(id).copied().unwrap_or(self.locale)
     }
 
-    /// Register a query (the recipe).
+    /// Register a query (the recipe). A changed query may number its records
+    /// differently, so its cached orders go.
     pub fn add_query(&mut self, query: Query) {
+        self.ordered
+            .insert(query.id.clone(), result_order_is_defined(&query.sql));
+        self.order_cache
+            .borrow_mut()
+            .retain(|(q, _), _| q != &query.id);
         self.queries.insert(query.id.clone(), query);
+    }
+
+    /// Whether a query's result is numbered as delivered (its SQL defines the
+    /// order) rather than by content.
+    pub fn order_is_defined(&self, query: &QueryId) -> bool {
+        self.ordered.get(query).copied().unwrap_or(false)
     }
 
     /// Register a binding (the recipe). Starts `Linked`, unresolved.
@@ -449,7 +468,11 @@ impl ResolutionEngine {
                 return entry.clone();
             }
         }
-        let order: Arc<[usize]> = stable_order(records, keys).into();
+        let order: Arc<[usize]> = if self.order_is_defined(query) {
+            delivered_order(records, keys).into()
+        } else {
+            stable_order(records, keys).into()
+        };
         let mut h = Fnv::default();
         for &r in order.iter() {
             h.u64(r as u64);
@@ -463,16 +486,23 @@ impl ResolutionEngine {
         entry
     }
 
-    /// The physical row that holds RECORD `record` of a query's result, where
-    /// records are numbered in the STABILIZED order (no keys: every column) —
-    /// the order tables, record flows and batch plans already use, so record N
-    /// is the same row whatever order the query engine delivered (§8; was
-    /// defect DP-4). `None` when no result is ingested or `record` is out of
-    /// range. Record 0 is found by one O(n) scan unless the order is cached.
+    /// The physical row that holds RECORD `record` of a query's result — the
+    /// numbering tables, record flows, rules and batch plans share. A query
+    /// that defines its order (an `ORDER BY`, or a scan of one table, which
+    /// DuckDB delivers in insertion order: [`result_order_is_defined`]) is
+    /// numbered as delivered, so record 0 is the first row of an imported
+    /// file, as Data Merge numbers it. Any other result is numbered in the
+    /// STABILIZED order (every column), so record N is the same row whatever
+    /// order the query engine delivered (§8; was defect DP-4). `None` when no
+    /// result is ingested or `record` is out of range. Record 0 of a
+    /// stabilized result is found by one O(n) scan unless the order is cached.
     pub fn record_row(&self, query: &QueryId, record: usize) -> Option<usize> {
         let records = self.results.get(query)?;
         if record >= records.row_count {
             return None;
+        }
+        if self.order_is_defined(query) {
+            return Some(record);
         }
         if record == 0 {
             let hash = self.results_hash.get(query).copied().unwrap_or(0);
@@ -484,6 +514,14 @@ impl ResolutionEngine {
             return first_stable_row(records);
         }
         Some(self.cached_order(query, records, &[])[record])
+    }
+
+    /// The row order of a query's result, record by record (record N is row
+    /// `order[N]`; see [`record_row`](Self::record_row)). `None` when no
+    /// result is ingested. Cached until the data changes.
+    pub fn record_order(&self, query: &QueryId) -> Option<Arc<[usize]>> {
+        let records = self.results.get(query)?;
+        Some(self.cached_order(query, records, &[]))
     }
 
     /// The sync state of a binding.
@@ -544,7 +582,9 @@ impl ResolutionEngine {
     /// idempotent (same inputs → identical content, §12.4).
     ///
     /// Per-record bindings (variable / image / barcode) resolve against the
-    /// FIRST record of the stabilized order. To preview the document against a chosen record
+    /// FIRST record ([`record_row`](Self::record_row): the first row as
+    /// delivered when the query defines its order, else the first by content).
+    /// To preview the document against a chosen record
     /// (the §9 record-preview stepper), use [`resolve_at`](Self::resolve_at).
     pub fn resolve(&mut self, id: &BindingId) -> Result<Resolved, ResolveError> {
         self.resolve_at(id, 0)
@@ -553,7 +593,7 @@ impl ResolutionEngine {
     /// Resolve a binding against a chosen RECORD INDEX `record` (the §9
     /// record-preview stepper — "show the document resolved against record N").
     /// For the per-record kinds (variable / image / barcode / visibility) the
-    /// expression is evaluated over record `record` of the STABILIZED order
+    /// expression is evaluated over record `record`
     /// ([`record_row`](Self::record_row) — the same numbering tables, flows and
     /// batch plans use), treated as "missing" when out of range. Whole-result kinds (table / record-flow) resolve their
     /// entire stabilized set regardless of `record` — a per-record preview index
@@ -811,8 +851,8 @@ impl ResolutionEngine {
     /// - the binding definition (and its template, for a record flow), the
     ///   bound params, the binding's locale ([`locale_for`](Self::locale_for))
     ///   and `today`;
-    /// - the rows it reads: record 0 of the stabilized order for the
-    ///   per-record kinds, the whole stabilized order (by its group-by keys)
+    /// - the rows it reads: record 0 (`record_row`) for the
+    ///   per-record kinds, the whole record order (by its group-by keys)
     ///   for tables and record flows;
     /// - the content hash of every column its expressions (and group-by and
     ///   footer fields) name.

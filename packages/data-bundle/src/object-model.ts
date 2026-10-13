@@ -3,7 +3,8 @@
 // (`plugin:media.paged.data/<kind>/<id>`), readable and settable through
 // `host.objects`, so a Boa script, the Node CLI and the editor drive the data
 // plugin the way they drive a frame. Plus the typed commands (refresh,
-// apply, data sets, "Bind to data…", the Data Merge template export).
+// apply, data sets, "Bind to data…", Data Merge, the Data Merge template
+// export).
 //
 // The schema rows are the manifest's (`contributes.objectModel`): one
 // source, so the runtime registration and the declaration cannot drift.
@@ -33,6 +34,7 @@ import type {
 } from "@paged-media/plugin-api";
 
 import manifest from "../manifest.json";
+import { mergeCommandResult, mergeOptionsOf, runMergeCommand, type MergeCommandArgs } from "./merge-command";
 import { objectsOf } from "./property-lane";
 import type { PropertyBindingSpec } from "./property-session";
 import type { DataSourceSession } from "./session";
@@ -451,6 +453,10 @@ function commands(host: BundleHost, session: DataSourceSession, panels: { bindin
     cmd<{ name: string; record: number }>("media.paged.data.captureDataSet", (a) => session.captureDataSet(a.name, a.record)),
     cmd<{ name: string }>("media.paged.data.applyDataSet", (a) => session.applyDataSet(a.name)),
     cmd<{ save: boolean }>("media.paged.data.exportDataMergeTemplate", (a) => session.exportDataMergeTemplate({ save: a.save })),
+    // Data Merge from a script: the menu command's own path (merge-command.ts).
+    cmd<MergeCommandArgs>("media.paged.data.merge", async (a) =>
+      mergeCommandResult(await runMergeCommand(host, session, panels.bindings, mergeOptionsOf(a ?? {})), session),
+    ),
   ];
 }
 

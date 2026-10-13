@@ -84,9 +84,20 @@ const normalise = (s: string) => s.replace(/\r/g, "\n").replace(/﻿/g, "");
 //    the session change the batch is labelled with is written first
 //    (parts.write ×2, wasm +2: payload, sync_report).
 //  · mutation ops 402 → 403: the label op rides the batch.
+//
+// W8 with the template frame's own formatting copied (the films' DATA-2):
+//  · +1 read: the template frame's properties (elementProperties), one per
+//    template frame. The long-record-set frame sets only what a fresh frame
+//    has (InDesign's [Normal Text Frame], one column, …), so no op is added:
+//    mutation ops stay 403;
+//  · −2 reads: the pages and the scene tree are read once for the template
+//    and the re-merge plan (they were read twice, nothing changing between).
+//    host calls 18 → 17, reads 12 → 11.
 const W8: Measured = onLabelled({
-  hostCalls: 148,
-  hostReads: 13,
+  // 148 → 147, 13 → 12: the same −1 read net as below (template frame read
+  // +1, shared pages + tree −2); the reads do not depend on the engine.
+  hostCalls: 147,
+  hostReads: 12,
   mutates: 2,
   mutationOps: 402,
   undoSteps: 2,
@@ -98,7 +109,7 @@ const W8: Measured = onLabelled({
   keyAllocs: 0,
   fingerprints: 0,
   duckQueries: 0,
-}, { hostCalls: 18, hostReads: 12, mutates: 1, mutationOps: 403, undoSteps: 1, wasmCalls: 6 });
+}, { hostCalls: 17, hostReads: 11, mutates: 1, mutationOps: 403, undoSteps: 1, wasmCalls: 6 });
 
 describe.skipIf(!RUN_BUDGETS)("perf budgets — Data Merge [data.perf.gates]", () => {
   let h: HeadlessHost | null = null;

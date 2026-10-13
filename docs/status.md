@@ -1,7 +1,7 @@
 # Status
 
 What `paged.data` ships and what it does not, read from the code on `main` (2026-10-06;
-package version 0.1.0-canary.15, built against core v0.71.1 and plugin-api/plugin-sdk
+package version 0.1.0-canary.16, built against core v0.71.1 and plugin-api/plugin-sdk
 0.2.45-canary.0). The 2026-10-05 round of work is on `main`; its outcome is summarised at the end of
 [`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). How
 the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
@@ -69,6 +69,13 @@ of work, with file and line references, is
   not decoded again); "Refresh fields" rewrites the placeholder fields whose value changed in
   one back-to-front batch, which is one undo step, and skips pinned and overridden fields; "What changed?" lists the bindings whose resolved
   content differs from the previous report; a stepper previews the bindings against record N.
+  Record N is the Nth row as the query delivers it when the query defines that order (an
+  `ORDER BY`, or a scan of one table, which DuckDB keeps in insertion order: an imported
+  file's row order, as Data Merge numbers it), and the Nth by content when it does not (a
+  join, a grouping, a set operation), so a re-delivery in another order changes nothing
+  (`data-query` `result_order_is_defined`). An unindexed binding shows record 1. The
+  stepper reads the record count and keeps its place in the session: it shows "1 / N" as
+  soon as the query has run, and stepping a query that has not run runs it.
 - **Sync review** (since 2026-10-05). Each binding in the Bindings panel shows its
   sync state (synced, stale, pinned, overridden, error) with Pin, Unpin and Accept source.
   Accept source re-links the binding and writes the source value at once. A binding that
@@ -229,8 +236,13 @@ Not done there:
     returns paginated units, not documents.
   - Merged frames are minted fresh: core refuses to copy a frame whose story holds a
     hyperlink (every Data Merge placeholder is one), and a duplicated page shares its frames'
-    stories. Story-level formatting is copied; formatting that varies inside the template
-    story is not.
+    stories. Story-level formatting is copied, and so is the frame's own formatting (object
+    style, fill, stroke, inset, text frame options, corners, effects: every frame property
+    the template sets except its place, threading, layer and lock); formatting that varies
+    inside the template story is not.
+  - Scripts start it with the typed command `media.paged.data.merge` (flat options: `query`,
+    `mode`, `arrange`, spacings, `template`, `destination`, …), the same path as Data ▸
+    Merge records into the document (`src/merge-command.ts`).
   - A merge that needs new pages takes two undo steps (pages, then content) on engine 68,
     because a page minted in a batch cannot be named. On protocol 69 the pages are named in
     the batch and the merge is one batch (falling back to two if the engine refuses). A

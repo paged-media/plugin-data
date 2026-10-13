@@ -34,6 +34,7 @@ import { contributePanel, contributeSchemaPanel } from "@paged-media/plugin-sdk"
 
 import manifest from "../manifest.json";
 import { createSession, type DataSourceSession } from "./session";
+import { runMergeCommand } from "./merge-command";
 import { makeSourcesPanel } from "./panels/sources-panel";
 import { makeBindingsPanel } from "./panels/bindings-panel";
 import { makeDatasetPanel } from "./panels/dataset-panel";
@@ -178,18 +179,12 @@ export function activate(host: BundleHost): BundleHandle {
     title: "Merge records into the document",
     category: "Data",
     // Payload: SessionMergeOptions; without one, the first query merges
-    // Single Record through the <<field>> frames on the active page.
-    handler: (_paged, payload) => {
-      const p = (payload ?? {}) as Partial<import("./session").SessionMergeOptions>;
-      const query = p.query ?? session.getState().queries[0];
-      if (!query) {
-        // Nothing to merge yet. The Bindings panel opens: it says what is
-        // missing (a data source) and holds the Data Merge options.
-        host.shell.openPanel(BINDINGS_PANEL_ID);
-        return null;
-      }
-      return session.mergeRecords({ ...p, query });
-    },
+    // Single Record through the <<field>> frames on the active page. With no
+    // query yet the Bindings panel opens: it says what is missing (a data
+    // source) and holds the Data Merge options. Scripts take the same path
+    // through the typed command `media.paged.data.merge` (object-model.ts).
+    handler: (_paged, payload) =>
+      runMergeCommand(host, session, BINDINGS_PANEL_ID, (payload ?? {}) as Partial<import("./session").SessionMergeOptions>),
   });
   host.contribute.command({
     id: "media.paged.data.command.openDataset",

@@ -42,7 +42,11 @@ smallvec = { version = "1", features = ["serde"] }
 compact_str = { version = "0.8", features = ["serde"] }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+# YAML for the registry rows (build scripts + the coverage gate). The
+# maintained fork of serde_yaml 0.9 (same parser, same Value), on
+# unsafe-libyaml-norway: serde_yaml and unsafe-libyaml are unmaintained
+# (RUSTSEC-2024-0449). MIT OR Apache-2.0.
+serde_norway = "0.9"
 # `float_roundtrip`: parse every f64 back to the exact bits it was written
 # from (the payload saves line heights etc. through Rust JSON — DP-2).
 serde_json = { version = "1", features = ["float_roundtrip"] }

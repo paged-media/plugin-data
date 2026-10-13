@@ -94,7 +94,9 @@ describe.skipIf(!RUN_BUDGETS)("perf budgets — boot and reflow [data.perf.gates
     // TS debounce coalesces the burst into one; the engine caches the
     // stabilized order per result content.
     resolves: 1,
-    stabilizeCalls: 1,
+    // 1 → 0: the flow's query is a scan of one table, numbered as delivered
+    // (ADR 553, amendment 2026-10-12): no sort.
+    stabilizeCalls: 0,
     // Was 665 600: stabilize built two Vec<u8> keys per column per
     // comparison. Wave 2 (engine) compares values in place.
     keyAllocs: 0,

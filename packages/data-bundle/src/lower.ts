@@ -807,12 +807,17 @@ export async function commitLoweredBarcode(
   });
   // UPDATE IN PLACE (Wave 5): the previous symbol's modules are removed in
   // the same batch the new one is drawn in — one undo step, never a pile.
-  const ops = [...(replace?.clear ?? []), ...barcodeToMutations(barcode, placement, envelope)];
+  // The new modules go in FIRST: core (protocol 71) refuses a batch whose
+  // `insertPath`s follow `deleteFrame`s of the same spread's items
+  // ("position N out of range for parent Spread … (len 0)"), so a re-lower or
+  // a preview step left the old symbol standing. The label still lands on the
+  // last new module (`$created`); the removals follow it.
+  const ops = [...barcodeToMutations(barcode, placement, envelope), ...(replace?.clear ?? [])];
   if (ops.length === 0) return 0;
 
   const outcome = await host.document.mutate({ op: "batch", args: { ops } });
   if (!outcome.applied) {
-    host.log.warn(`barcode "${barcode.target}": insertPath batch rejected`);
+    host.log.warn(`barcode "${barcode.target}": insertPath batch rejected: ${JSON.stringify(outcome.error ?? null)}`);
     return 0;
   }
   replace?.onMinted?.((outcome.minted ?? []).map((m) => m.element));

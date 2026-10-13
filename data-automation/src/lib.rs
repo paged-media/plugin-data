@@ -36,7 +36,7 @@
 use serde::{Deserialize, Serialize};
 
 use data_core::{RecordSet, ResultShape, Value};
-use data_query::{shape, stabilize, Shaped};
+use data_query::{apply_order, shape, stable_order, Shaped};
 
 /// The milestone this crate ships in.
 pub const MILESTONE: &str = "T2 (M2) — batch/headless generation; spec §10.";
@@ -100,7 +100,16 @@ pub struct BatchPlan {
 /// identity, §6.1/§8), so `record_indices` index into that stable order and the
 /// plan is reproducible across refreshes that don't change the data.
 pub fn plan_batch(records: &RecordSet, mode: &BatchMode) -> BatchPlan {
-    let stable = stabilize(records, &[]);
+    plan_batch_ordered(records, &stable_order(records, &[]), mode)
+}
+
+/// [`plan_batch`] over a given record order: `order[N]` is the row of record
+/// N (the session's numbering, `ResolutionEngine::record_order` — the
+/// delivered order for a query that defines it, the stabilized one
+/// otherwise), so `record_indices` are the same record numbers the preview
+/// stepper and the bindings use.
+pub fn plan_batch_ordered(records: &RecordSet, order: &[usize], mode: &BatchMode) -> BatchPlan {
+    let stable = apply_order(records, order);
     let total_records = stable.row_count;
 
     let (mode_name, units): (&str, Vec<BatchUnit>) = match mode {

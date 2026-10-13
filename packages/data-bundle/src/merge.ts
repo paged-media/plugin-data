@@ -38,8 +38,11 @@
 //   HyperlinkTextSource; `duplicatePage` copies a frame but SHARES its story
 //   with the original (a copy edited edits both). So merged frames are minted
 //   fresh at the planned bounds, and the template's story-level formatting is
-//   copied onto each (`setElementProperty` over the story range). Per-run
-//   formatting inside the template is not copied yet.
+//   copied onto each (`setElementProperty` over the story range), and so is
+//   the frame's own formatting — object style, fill, stroke, inset, text
+//   frame options, corners, effects (`setElementProperty` on the frame;
+//   `isCopiedFramePath`). Per-run formatting inside the template is not
+//   copied yet.
 // - The merge writes into the current document, either CONSUMING the template
 //   page (its merge frames are replaced, the output starts on it — what
 //   InDesign's new document holds) or KEEPING it (the output goes on new pages
@@ -144,6 +147,10 @@ export interface TemplateFrameInfo {
   storyId: string | null;
   /** Story-level formatting to copy, styles first. */
   format: CopiedProperty[];
+  /** The frame's own formatting to copy (fill, stroke, inset, text frame
+   *  options, corners, effects), its object style first. Absent in a
+   *  template read before the merge copied it. */
+  frame?: CopiedProperty[];
   /** The text's font, size and leading, for overset measurement. */
   font: { family: string; style: string | null; sizePt: number; leadingPt: number };
 }
@@ -173,6 +180,91 @@ export const COPIED_TEXT_PATHS = [
   "paragraphRightIndent",
   "paragraphFirstLineIndent",
 ] as const;
+
+/** Frame properties a merged copy does NOT take over: where the frame sits
+ *  (the plan places it), what it is threaded to, its layer, and whether it is
+ *  hidden or locked. An image placeholder's fitting comes from the merge's
+ *  own `fit`. Everything else the template frame sets is copied. */
+export const NOT_COPIED_FRAME_PATHS: ReadonlySet<string> = new Set([
+  "frameBounds",
+  "frameTransform",
+  "framePath",
+  "framePathPoint",
+  "frameRotationAngle",
+  "frameScaleX",
+  "frameScaleY",
+  "frameFlipH",
+  "frameFlipV",
+  "frameFittingType",
+  "frameFittingCrops",
+  "frameFittingReferencePoint",
+  "frameAutoFit",
+  "frameReflow",
+  "frameChainResult",
+  "nextTextFrame",
+  "previousTextFrame",
+  "itemLayer",
+  "elementVisible",
+  "elementLocked",
+]);
+
+/** Whether a frame-level property path is one a merged copy takes over. */
+export function isCopiedFramePath(path: string): boolean {
+  if (NOT_COPIED_FRAME_PATHS.has(path)) return false;
+  return (
+    path === "appliedObjectStyle" ||
+    path === "textWrapInvert" ||
+    path.startsWith("frame") ||
+    path.startsWith("textFrame")
+  );
+}
+
+/** Values a frame property takes when nothing sets it — what a fresh frame
+ *  already has, and what InDesign writes into every frame of a template
+ *  (`[Normal Text Frame]`, no wrap, one column, zero gradient angles, …).
+ *  Copying them would change nothing and cost an operation per record. */
+const FRESH_FRAME_DEFAULTS: Readonly<Record<string, readonly unknown[]>> = {
+  appliedObjectStyle: [
+    "ObjectStyle/$ID/[None]",
+    "ObjectStyle/$ID/[Normal Text Frame]",
+    "ObjectStyle/$ID/[Normal Graphics Frame]",
+  ],
+  frameTextWrapMode: ["None"],
+  frameGradientFillAngle: [0],
+  frameGradientFillLength: [0],
+  frameGradientStrokeAngle: [0],
+  frameGradientStrokeLength: [0],
+  // Core reads "Drop" on every frame; only `frameDropShadow` turns it on.
+  frameDropShadowMode: ["Drop"],
+  textFrameColumnCount: [1],
+  textFrameVerticalJustification: ["TopAlign"],
+  textFrameFirstBaseline: ["AscentOffset"],
+  textFrameAutoSizing: ["Off"],
+  frameBlendMode: ["Normal"],
+  frameOpacity: [100],
+  frameStrokeType: ["StrokeStyle/$ID/Solid"],
+  frameCornerOptionTopLeft: ["None"],
+  frameCornerOptionTopRight: ["None"],
+  frameCornerOptionBottomLeft: ["None"],
+  frameCornerOptionBottomRight: ["None"],
+};
+
+/** Whether a read property value says something a fresh frame does not:
+ *  a colour, a length, a non-empty name, a list, an inset that is not zero,
+ *  a flag that is on — and not the property's default
+ *  ([`FRESH_FRAME_DEFAULTS`]). Unset and default values are left to the
+ *  fresh frame, so a plain template frame costs no extra operation per
+ *  record. */
+export function isSetValue(v: { type?: string; value?: unknown } | null | undefined, path?: string): boolean {
+  if (!v) return false;
+  const x = v.value;
+  if (x === null || x === undefined) return false;
+  if (path && FRESH_FRAME_DEFAULTS[path]?.includes(x)) return false;
+  if (typeof x === "boolean") return x;
+  if (typeof x === "string") return x !== "" && !/\[None\]$/.test(x);
+  if (Array.isArray(x)) return v.type === "bounds" ? x.some((n) => n !== 0) : x.length > 0;
+  return true;
+}
 
 /** InDesign's default when a story says nothing: 12 pt, auto leading 120 %. */
 const DEFAULT_SIZE_PT = 12;
@@ -241,9 +333,25 @@ function transformBounds(b: Bounds, t: number[] | null | undefined): Bounds {
 
 const HAS_PLACEHOLDER = /<<[^<>]+>>/;
 
+/** One row of the `pages` collection, as the template read uses it. */
+export interface TemplatePageRow {
+  selfId: string;
+  index: number;
+  sizePt: [number, number];
+  marginTopPt: number;
+  marginLeftPt: number;
+  marginBottomPt: number;
+  marginRightPt: number;
+}
+
 export interface ReadTemplateOptions {
   /** The template page (default: the active page, else the first). */
   pageId?: PageId;
+  /** The document's pages and scene tree when the caller has read them
+   *  already (the session reads them once for the template and the re-merge
+   *  plan); each is read here when absent. */
+  pages?: readonly TemplatePageRow[];
+  tree?: Awaited<ReturnType<BundleHost["document"]["tree"]>>;
   /** Image placeholders: rectangle raw id → field name (`photo` / `@photo`). */
   imageFields?: Record<string, string>;
   /** Restrict the template to these frames (default: every text frame on the
@@ -268,15 +376,7 @@ export async function readMergeTemplate(
   opts: ReadTemplateOptions = {},
 ): Promise<{ template: MergeTemplate | null; diagnostics: string[] }> {
   const diagnostics: string[] = [];
-  const pages = await host.document.collection<{
-    selfId: string;
-    index: number;
-    sizePt: [number, number];
-    marginTopPt: number;
-    marginLeftPt: number;
-    marginBottomPt: number;
-    marginRightPt: number;
-  }>("pages");
+  const pages = opts.pages ?? (await host.document.collection<TemplatePageRow>("pages"));
   let pageId = opts.pageId;
   if (!pageId) {
     const meta = await host.document.meta();
@@ -292,7 +392,7 @@ export async function readMergeTemplate(
   const imageFields = opts.imageFields ?? {};
   const candidates =
     opts.frames ??
-    pageElements(await host.document.tree(), pageIndex).filter(
+    pageElements(opts.tree ?? (await host.document.tree()), pageIndex).filter(
       (e) => e.kind === "textFrame" || (e.kind === "rectangle" && (e.id as string) in imageFields),
     );
   if (candidates.length === 0) {
@@ -348,10 +448,11 @@ export async function readMergeTemplate(
   const frames: MergeTemplateFrame[] = [];
   const infos: TemplateFrameInfo[] = [];
   for (const r of raws) {
+    const frame = await copiedFrameProperties(host, r.element);
     if (r.text !== null) {
       const format = await copiedProperties(host, r.storyId, r.text);
       frames.push({ id: r.element.id as string, bounds: local(r.spread), content: { kind: "text", text: r.text } });
-      infos.push({ element: r.element, storyId: r.storyId, format, font: fontOf(format) });
+      infos.push({ element: r.element, storyId: r.storyId, format, frame, font: fontOf(format) });
     } else {
       const field = imageFields[r.element.id as string];
       frames.push({ id: r.element.id as string, bounds: local(r.spread), content: { kind: "image", field } });
@@ -359,6 +460,7 @@ export async function readMergeTemplate(
         element: r.element,
         storyId: null,
         format: [],
+        frame,
         font: { family: "", style: null, sizePt: DEFAULT_SIZE_PT, leadingPt: DEFAULT_SIZE_PT * AUTO_LEADING },
       });
     }
@@ -397,6 +499,26 @@ async function copiedProperties(
     if (!v || v.value === null || v.value === undefined || v.value === "") continue;
     out.push({ path, value: v });
   }
+  return out;
+}
+
+/** The frame-level formatting of a template frame: every property it sets
+ *  that a merged copy takes over ([`isCopiedFramePath`]), its object style
+ *  first so the frame's own overrides after it win. */
+async function copiedFrameProperties(host: BundleHost, element: ElementId): Promise<CopiedProperty[]> {
+  let props: Awaited<ReturnType<BundleHost["document"]["elementProperties"]>>;
+  try {
+    props = await host.document.elementProperties(element);
+  } catch {
+    return [];
+  }
+  const entries = (props?.entries ?? []) as { path: string; value?: { type?: string; value?: unknown } | null }[];
+  const out: CopiedProperty[] = [];
+  for (const e of entries) {
+    if (!isCopiedFramePath(e.path) || !isSetValue(e.value, e.path)) continue;
+    out.push({ path: e.path, value: e.value });
+  }
+  out.sort((a, b) => Number(b.path === "appliedObjectStyle") - Number(a.path === "appliedObjectStyle"));
   return out;
 }
 
@@ -532,10 +654,17 @@ export function contentMutation(
         ...(createdPage ? { createdPage } : {}),
       });
       const info = template.frames[f.template];
+      // The template frame's own formatting (fill, stroke, inset, text frame
+      // options, …) on the merged copy, as InDesign's merge keeps it.
+      const frameProps = (frame: ElementId): Mutation[] =>
+        (info?.frame ?? []).map(
+          (p) => ({ op: "setElementProperty", args: { elementId: frame, path: p.path, value: p.value } }) as Mutation,
+        );
       if (f.text !== undefined) {
         const frame: ElementId = { kind: "textFrame", id: `$h:${h}` } as ElementId;
         ops.push({ op: "insertTextFrame", args: { pageId, bounds: f.bounds } });
         ops.push({ op: "bindCreated", args: { handle: h } });
+        ops.push(...frameProps(frame));
         if (f.text.length > 0) {
           ops.push({ op: "insertText", args: { storyId: `$h:${h}`, offset: 0, text: f.text } });
           const range = {
@@ -554,6 +683,7 @@ export function contentMutation(
         const frame: ElementId = { kind: "rectangle", id: `$h:${h}` } as ElementId;
         ops.push({ op: "insertFrame", args: { pageId, bounds: f.bounds } });
         ops.push({ op: "bindCreated", args: { handle: h } });
+        ops.push(...frameProps(frame));
         if (f.image) {
           ops.push({ op: "placeImage", args: { elementId: `$h:${h}`, uri: imageUri(f.image, opts.imageBase), fit } });
         }
