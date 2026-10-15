@@ -245,7 +245,8 @@ Not done:
     "Merge to a new document" (`destination: "newDocument"`) copies the document through
     the host's documents door (contract 0.2.41 and later), opens the copy (the host asks
     before unsaved edits are discarded; keeping them cancels the merge) and consumes the
-    template there. A host without the door refuses it and says so. `runRecordFlowBatch`
+    template there. The editor implements the door (editor ADR 219). A host without the door
+    refuses it and says so. `runRecordFlowBatch`
     returns paginated units, not documents.
   - Merged frames are minted fresh: core refuses to copy a frame whose story holds a
     hyperlink (every Data Merge placeholder is one), and a duplicated page shares its frames'
@@ -274,7 +275,8 @@ Not done:
 - **Engine fixes that protocol 69 brings** (core v0.69.0): typing at a field's edge lands beside the field, and undoing a
   `deleteRange` puts its runs and fields back. Both stay pinned as defects against 68
   (`fixedFrom(69, it)` in `test/real-core.ts`). The IDML import's paragraph mark between
-  adjacent placeholders is fixed from protocol 70 (Data Merge, above).
+  adjacent placeholders is fixed from protocol 70, whose IDML import includes the
+  plugin-publish fix (Data Merge, above).
 - **Fields at the caret.** A field placed at the user's caret sends the caret both as
   `offset` and as `insertField.contentOffset`: an engine on protocol 69 converts the caret
   unit and places it right in any paragraph; an older engine ignores `contentOffset` and the
