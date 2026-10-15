@@ -1,12 +1,13 @@
 # Status
 
-What `paged.data` ships and what it does not, read from the code on `main` (2026-10-06;
-package version 0.1.0-canary.16, built against core v0.71.1 and plugin-api/plugin-sdk
-0.2.45-canary.0). The 2026-10-05 round of work is on `main`; its outcome is summarised at the end of
-[`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). How
-the parts fit is in [`architecture.md`](architecture.md); the analysis behind the current round
-of work, with file and line references, is
-[`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md).
+What `paged.data` ships and what it does not, read from the code on `main` at
+`@paged-media/data` 0.1.0-canary.16 (published 2026-10-13). The bundle declares
+`@paged-media/plugin-api` and `@paged-media/plugin-sdk` `>=0.2.45-canary.0` as peers; its tests
+run against `@paged-media/canvas-wasm` 0.71.1 and the 0.2.45-canary.0 contract. How the parts
+fit is in [`architecture.md`](architecture.md); the analysis behind the 2026-10-05 round of
+work, with file and line references and its outcome at the end, is
+[`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). What each canary added is
+under [Releases](#releases).
 "The session" below is the object returned by `createSession`, which the package exports.
 
 ## Shipped
@@ -103,9 +104,21 @@ of work, with file and line references, is
   a query result as a data provider, which other plugins can read when the host has a
   provider registry; a variables palette that captures the current values or one data set
   per record, applies a data set in one undo step, and imports or exports a variable library.
-- **Nine commands, nine menu entries, four panels, one importer** and a `dataBinding` edit
+- **Ten commands, seven menu entries, five panels, one importer** and a `dataBinding` edit
   context: double-click on an
-  element that carries this plugin's metadata; no canvas tools, the Bindings panel.
+  element that carries this plugin's metadata; no canvas tools, the Bindings panel. The
+  panels are Data sources, Bindings, Dataset preview, Data query and Data overview. Until a
+  source exists, Bindings and Dataset preview show one sentence and a button to the panel
+  that makes one; an action that cannot run says why instead of doing nothing. Data
+  overview lists the plugin's own objects (sources, queries, bindings, data sets,
+  variables), shows the picked item's property rows, which the host renders as property
+  fields, and opens the panel that owns each kind.
+- **The engines load through the host's module door** where the host offers one
+  (`host.modules`, feature-detected; `src/module-door.ts`). The data engine and DuckDB ask
+  the host where it serves their declared wasm and fetch it with its Subresource Integrity
+  hash; with no door, no answer, a 404 or a mismatch they load from the package's own
+  `bin/`. The DuckDB worker and JS API always load from `bin/`. The publish workflow stamps
+  each wasm's sha384 into the published manifest.
 - **The binding language**: 42 functions, arithmetic, comparison and `&`, with errors as
   values. The image and barcode bindings of the panel take an expression; so do all
   bindings defined through the session or in a batch job.
@@ -116,13 +129,12 @@ of work, with file and line references, is
   materialised query results and prints the paginated flow of each output document. A
   script evaluated in Boa can supply the locale, the parameters and the build.
 
-## On branch `om/universal-binding` (2026-10-06, not on `main`)
+## Universal binding and engine protocol 71
 
-Built against plugin-api/plugin-sdk 0.2.44-canary.0 (unpublished; local `pnpm.overrides`).
-Tested on canvas-wasm 0.70.0 (published) and on a local engine of protocol 71 (core branch
-`om/protocol-71` with the IDML adapter of plugin-publish `om/object-model`, both untagged).
-Everything protocol 71 adds is feature-detected (the engine's `textVariable` object kind); on
-0.70 the bundle behaves as before. ADR 558 and 559 are proposals in the thoughts register.
+On `main` and published since 0.1.0-canary.11 (2026-10-11): built against plugin-api /
+plugin-sdk 0.2.45-canary.0 and tested on canvas-wasm 0.71.1. Everything protocol 71 adds is
+feature-detected (the engine's `textVariable` object kind); on 0.70 the bundle behaves as
+before. ADR 558 and 559 are proposed and not yet recorded in [`adr/`](adr/).
 
 - **Property bindings** (ADR 558): any property `host.objects` can set, bound to an
   expression over a query, coerced in Rust against the target's schema row. One apply is
@@ -136,9 +148,10 @@ Everything protocol 71 adds is feature-detected (the engine's `textVariable` obj
 - **"Export as InDesign Data Merge template"**: IDML + UTF-16 CSV; InDesign 2025 opened the
   recorded template with fields `sku, name` and merged its three records.
 - **paged.data's own objects** in `host.objects` (sources, queries, bindings, data sets,
-  variables) and nine typed commands, including "Bind to data…" (`media.paged.data.bindProperty`,
-  which the Bindings panel completes). A binding write (create, set, delete; the Bindings
-  panel's "Bind" goes the same way) is one undo step: its element label and the document
+  variables) and ten typed commands, including "Bind to data…"
+  (`media.paged.data.bindProperty`, which the Bindings panel completes) and the Data Merge
+  (`media.paged.data.merge`). A binding write (create, set, delete; the Bindings panel's
+  "Bind" goes the same way) is one undo step: its element label and the document
   label naming the new session version land in one `host.objects` batch, and undo and redo
   move the session with the labels.
 
@@ -161,19 +174,19 @@ With engine protocol 71 (`test/protocol71-real-core.spec.ts`):
   cell style created in the same batch (one undo step; the old path took two). The rule's
   label stays on the table's frame and names the table by its place in the story
   (`story:<id> > table`), because InDesign renumbers the table's `Self`.
-- With plugin-publish `om/object-model` linked in, the document label is in `designmap.xml`
-  (InDesign kept it, `bound71.json`) and a hidden item is `Visible="false"`; the published
-  0.70 engine does neither (pinned, `property-real-core.spec.ts`).
+- The document label is exported in `designmap.xml` (InDesign kept it, `bound71.json`) and
+  a hidden item as `Visible="false"`; the 0.69 and 0.70 engines do neither (pinned,
+  `property-real-core.spec.ts`).
 
-Not done there:
+Not done:
 
 - Plugin objects as targets bind through their selector and live in the document label:
   `host.objects` has no `hostOf` door.
 - A variable whose text instance was deleted keeps its definition (core refuses to delete a
   text variable that still has an instance, and a definition without one draws nothing); it
   counts as placed, so Lower does not insert it again.
-- Text-variable reads cost one `objects.get` per variable on every field read (core has no
-  text-variable collection).
+- Text-variable reads cost one query plus one `objects.get` per variable on every field
+  read.
 
 ## Limits of what is shipped
 
@@ -230,7 +243,7 @@ Not done there:
   Single or Multiple Records, matching InDesign on all 8 recorded fixtures. The limits:
   - It merges into the current document, keeping the template page or consuming it.
     "Merge to a new document" (`destination: "newDocument"`) copies the document through
-    the documents door (D-26, contract 0.2.41, unreleased), opens the copy (the host asks
+    the host's documents door (contract 0.2.41 and later), opens the copy (the host asks
     before unsaved edits are discarded; keeping them cancels the merge) and consumes the
     template there. A host without the door refuses it and says so. `runRecordFlowBatch`
     returns paginated units, not documents.
@@ -247,11 +260,12 @@ Not done there:
     because a page minted in a batch cannot be named. On protocol 69 the pages are named in
     the batch and the merge is one batch (falling back to two if the engine refuses). A
     merge that fits the template page takes one. Overset words are measured with one
-    `measureStrings` call per face and size where the host has it (D-27), else per word.
+    `measureStrings` call per face and size where the host has it, else per word.
   - Added pages have zero margins (insertPage and duplicatePage do not carry them).
-  - Core's IDML import misreads a template whose lines are bare placeholders: the paragraph
-    mark lands two characters into the next placeholder (pinned in
-    `test/merge-real-core.spec.ts`).
+  - Before engine protocol 70, core's IDML import misread a template whose lines are bare
+    placeholders: the paragraph mark landed two characters into the next placeholder. Core
+    0.70 fixed it; `test/merge-real-core.spec.ts` pins the defect below protocol 70 and the
+    fix from it.
 - **Lowering costs.** A table lower is one batch and one undo step (frame, table, cells and
   label, addressed through core's batch handles; budget W1 in
   `test/perf/perf-budgets-commands.spec.ts`). "Place bindings on the page" plans every
@@ -260,8 +274,7 @@ Not done there:
 - **Engine fixes that protocol 69 brings** (core v0.69.0): typing at a field's edge lands beside the field, and undoing a
   `deleteRange` puts its runs and fields back. Both stay pinned as defects against 68
   (`fixedFrom(69, it)` in `test/real-core.ts`). The IDML import's paragraph mark between
-  adjacent placeholders (D-25) is fixed in plugin-publish `main` (29710d1) but not yet in
-  core's import pin, so its pin stays.
+  adjacent placeholders is fixed from protocol 70 (Data Merge, above).
 - **Fields at the caret.** A field placed at the user's caret sends the caret both as
   `offset` and as `insertField.contentOffset`: an engine on protocol 69 converts the caret
   unit and places it right in any paragraph; an older engine ignores `contentOffset` and the
@@ -269,9 +282,8 @@ Not done there:
 - **Images** are placed only from a URL or path. Inline bytes and asset ids are skipped.
 - **Remote sources.** A `credentialRef` can be stored on the descriptor, but nothing
   resolves it and the fetch is made without it. The editor's page policy cannot follow
-  consent grants (a header CSP is fixed at load). Since editor ADR 218 (branch
-  `data/sources`), a deployment lists exact data origins at build time
-  (`PAGED_DATA_ORIGINS`); only those are reachable, and still only after consent. The public
+  consent grants (a header CSP is fixed at load). Since editor ADR 218, a deployment lists
+  exact data origins at build time (`PAGED_DATA_ORIGINS`); only those are reachable, and still only after consent. The public
   build lists none. The consent dialog says when an origin stays blocked, and the failed fetch
   says so on the source.
 - **DuckDB was not in the npm package.** Every version up to 0.1.0-canary.9 shipped without
@@ -279,8 +291,8 @@ Not done there:
   refuses a tarball without it (`scripts/pubcheck.sh`, `scripts/pubcheck.mjs`). The bundle now
   loads DuckDB from the package's own `bin/` (one variant, eh: `duckdb-engine.wasm`, its worker,
   `duckdb-browser.mjs`, and DuckDB's json + parquet extensions in `bin/duckdb-ext/`), so a host serves the installed package rather than a checkout of
-  this repo ([ADR 015](adr/015-duckdb-wasm-vendored.md)). The first version that ships it is
-  the next one published.
+  this repo ([ADR 015](adr/015-duckdb-wasm-vendored.md)). 0.1.0-canary.10 is the first
+  published version that ships it.
 - **Smaller gaps.** The column list is built with an empty metadata sidecar, so every column
   shows as undocumented. The variable-library XML was not checked against the application whose
   format it follows ([ADR 557](adr/557-variables-and-data-sets.md)).
@@ -324,7 +336,7 @@ Not done there:
   (`queryColumns` and `ingestColumnBatch`), not as one object per cell; the IPC format itself
   is not used.
 - Database sources, SQLite included. `attach_plan` describes an attach in Rust; nothing
-  performs one (see the wave-6 gaps below).
+  performs one (see the gaps found in step 6 below).
 - Reading a governed table and its metadata sidecar from a location, and applying a
   graph-data variable. Their registry rows are `planned`.
 - A Node binding for the batch runner (registry row `planned`); the CLI is the native route.
@@ -332,12 +344,13 @@ Not done there:
 
 ## Host gaps found while saving the session
 
-Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 2026-10-05.
+Each was checked against the installed contract (plugin-api 0.2.39-canary.0) on 2026-10-05;
+the document label has since been released.
 
 | Gap | Class | Effect here |
 | --- | --- | --- |
-| Container parts are not undoable (`PartsSurface.write`/`delete`, "Not undoable") | not modelled in core (shared with paged.web) | the session part does not follow undo |
-| No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead. Built in the engine as `setDocumentMetadata` (protocol 68, not yet released); the plugin adopts it after the release |
+| Container parts are not undoable (`PartsSurface.write`/`delete`, "Not undoable") | not modelled in core (shared with paged.web) | on an engine before protocol 69 the session part does not follow undo; from 69 the document label names the session version and undoes with the write (Limits, first item) |
+| No document-scoped plugin label: `setMetadata` takes a leaf `ElementId` only | not on the wire | the session's hash cannot be recorded in an undoable place of its own; lowered content carries it instead. Released in the engine as `setDocumentMetadata` (core v0.69.0); the plugin uses it where the engine has it (`src/doc-label.ts`) |
 | Window ▸ Bindings is greyed outside the `dataBinding` edit context | host UI | the Bindings panel opens from Object ▸ Insert data binding… or the command palette |
 
 ## Gaps found in step 6
@@ -352,3 +365,19 @@ Measured on 2026-10-05 against DuckDB-WASM 1.29.0 (engine v1.1.1), the shipped E
 | A page CSP cannot follow runtime consent grants; following them needs a fetch door outside the page's policy (`host.network.fetch` plus a broker origin or proxy) | no plugin door + host UI | remote sources reach only origins a deployment lists (editor ADR 218) |
 | A local file cannot be watched from a browser page | platform | file sources refresh on open or by importing again; interval is refused |
 | The shipped eh build has no parquet or json extension; DuckDB loaded them on first use from extensions.duckdb.org, which the editor's CSP (connect-src 'self') refuses — the worker trapped ("unreachable") on Parquet, JSON and XLSX (`read_json`) imports, while the Node lanes passed by downloading them | engine limitation (packaging) + host CSP | FIXED 2026-10-06: the package ships both (json 696,809 B, parquet 2,803,379 B, DuckDB Labs-signed, MIT, SHA-256 pinned by `scripts/vendor-duckdb.sh`) in `bin/duckdb-ext/v1.1.1/wasm_eh/`; `bootDuckDB` points `custom_extension_repository` there and turns autoinstall off before the configuration lock. The browser lane imports JSON, NDJSON, Parquet and XLSX with no off-origin request; the Node lanes load the same files through a local-only `XMLHttpRequest` and refuse every other URL. The data plugin's wasm is now 40.6 MB of the app's 94.7 MB |
+
+## Releases
+
+What each published canary of `@paged-media/data` added, from the first that ships DuckDB. The
+publish workflow skips a version already on npm, so a merge that leaves the version unchanged
+publishes nothing.
+
+| Version | Published | Added |
+|---|---|---|
+| 0.1.0-canary.16 | 2026-10-13 | Record N is the Nth row in the order the query defines; the preview stepper and Data query's Preview work as soon as the query has run; merged frames keep the template frame's own formatting; Data Merge as the typed command `media.paged.data.merge`; a barcode re-lower or preview step draws the new symbol before removing the old one, in one batch (protocol 71 refused the old order). |
+| 0.1.0-canary.15 | 2026-10-11 | The data engine and DuckDB load their wasm through the host's module door, with integrity, and fall back to `bin/`; the published manifest carries each wasm's sha384. |
+| 0.1.0-canary.14 | 2026-10-11 | Messages a user sees say what happens in plain words instead of naming internal tracker or decision ids. |
+| 0.1.0-canary.13 | 2026-10-11 | Data overview: an intro, an empty line per kind naming the panel that makes it, and "Open in …" per row. |
+| 0.1.0-canary.12 | 2026-10-11 | The panel pass: empty states, the "Records from" picker, "Plan batch", no dead clicks, command titles that name their panels, no menu rows that duplicate the host's. |
+| 0.1.0-canary.11 | 2026-10-11 | Universal binding (property bindings, bindings in element labels, the Data Merge template export, paged.data's own objects and typed commands in `host.objects`, their property rows as host property fields) and the protocol-71 consumers (text variables, the swatch created in the apply's batch, table rules on `cell:` addresses); engine canvas-wasm 0.71.1, contract 0.2.45. Peers `>=0.2.45-canary.0`. |
+| 0.1.0-canary.10 | 2026-10-06 | DuckDB in the package, with its json and parquet extensions; the session saved with the document; local formats, remote sources, the query panel and its guard, refresh policies; sync review, the rule editor, locales; record flow frames, in-place re-lowering and Data Merge; the protocol-69 consumers (core v0.69.0, contract 0.2.41). Peers `>=0.2.29-canary.0`. |
