@@ -258,5 +258,44 @@ describe.skipIf(!ready && !REQUIRE_REAL_CORE)(
         );
       });
     }
+
+    it("a template's page-local bounds come from the geometry where the engine names the page's origin, and from a hit-test probe where it does not [data.lower.merge-writer]", async () => {
+      const { h, host } = await openTemplate((spec.fixtures as any[])[0].id);
+      hosts.push(h);
+      let hits = 0;
+      /** The host, counting hit tests; `strip` answers geometry as an engine
+       *  before v0.71.13 does, without the page's origin. */
+      const counted = (strip: boolean): BundleHost => {
+        const doc = new Proxy(host.document, {
+          get(o, p, r) {
+            if (p === "hitTest") {
+              return (...a: Parameters<BundleHost["document"]["hitTest"]>) => {
+                hits += 1;
+                return o.hitTest(...a);
+              };
+            }
+            if (p === "elementGeometry" && strip) {
+              return async (ids: Parameters<BundleHost["document"]["elementGeometry"]>[0]) =>
+                (await o.elementGeometry(ids)).map((g) => {
+                  const { pageOrigin: _origin, ...rest } = g as typeof g & { pageOrigin?: unknown };
+                  return rest;
+                });
+            }
+            return Reflect.get(o, p, r);
+          },
+        });
+        return new Proxy(host, { get: (o, p, r) => (p === "document" ? doc : Reflect.get(o, p, r)) });
+      };
+      const direct = await readMergeTemplate(counted(false));
+      expect(direct.template, direct.diagnostics.join("; ")).not.toBeNull();
+      const named = (await host.document.elementGeometry(direct.template!.frames.map((f) => f.element))).some(
+        (g) => (g as { pageOrigin?: unknown }).pageOrigin != null,
+      );
+      if (named) expect(hits, "no probe where the engine names the page's origin").toBe(0);
+      hits = 0;
+      const probed = await readMergeTemplate(counted(true));
+      expect(hits, "the probe ran without the page's origin").toBeGreaterThan(0);
+      expect(probed.template?.spec).toEqual(direct.template!.spec);
+    });
   },
 );

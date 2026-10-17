@@ -93,6 +93,13 @@ const normalise = (s: string) => s.replace(/\r/g, "\n").replace(/﻿/g, "");
 //  · −2 reads: the pages and the scene tree are read once for the template
 //    and the re-merge plan (they were read twice, nothing changing between).
 //    host calls 18 → 17, reads 12 → 11.
+//
+// W8 on core v0.71.13, which reports where a page sits in its spread
+// (`ElementGeometryItem.pageOrigin`) and answers the item transform in page
+// space: the template's page-local bounds need no hit test, so the probe for
+// the page's spread origin is gone. host calls 17 → 16, reads 11 → 10. (The
+// engine also reports `frameDropShadowKnockedOut` on every frame, a fresh one
+// included; it is a fresh-frame default and not copied: mutation ops stay 403.)
 const W8: Measured = onLabelled({
   // 148 → 147, 13 → 12: the same −1 read net as below (template frame read
   // +1, shared pages + tree −2); the reads do not depend on the engine.
@@ -109,7 +116,7 @@ const W8: Measured = onLabelled({
   keyAllocs: 0,
   fingerprints: 0,
   duckQueries: 0,
-}, { hostCalls: 17, hostReads: 11, mutates: 1, mutationOps: 403, undoSteps: 1, wasmCalls: 6 });
+}, { hostCalls: 16, hostReads: 10, mutates: 1, mutationOps: 403, undoSteps: 1, wasmCalls: 6 });
 
 describe.skipIf(!RUN_BUDGETS)("perf budgets — Data Merge [data.perf.gates]", () => {
   let h: HeadlessHost | null = null;

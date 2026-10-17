@@ -1,9 +1,9 @@
 # Status
 
 What `paged.data` ships and what it does not, read from the code on `main` at
-`@paged-media/data` 0.1.0-canary.16 (published 2026-10-13). The bundle declares
+`@paged-media/data` 0.1.0-canary.17 (2026-10-17). The bundle declares
 `@paged-media/plugin-api` and `@paged-media/plugin-sdk` `>=0.2.45-canary.0` as peers; its tests
-run against `@paged-media/canvas-wasm` 0.71.1 and the 0.2.45-canary.0 contract. How the parts
+run against `@paged-media/canvas-wasm` 0.71.13 and the 0.2.58-canary.0 contract. How the parts
 fit is in [`architecture.md`](architecture.md); the analysis behind the 2026-10-05 round of
 work, with file and line references and its outcome at the end, is
 [`design/analysis-2026-10-05.md`](design/analysis-2026-10-05.md). What each canary added is
@@ -125,6 +125,12 @@ under [Releases](#releases).
 - **Lowering**: a table binding lowers to a native table; a visibility binding sets
   `elementVisible`; a rule applies a named style to a story range, to one paragraph per
   fired record, or to table cells.
+- **A record flow over a live frame chain** (the session's `paginateChain` and
+  `subscribeChainReflow`): the chain and its frames' heights are read from the document, and
+  the flow is paginated again once a burst of resizes is quiet. A resize counts whether it is
+  a `resizeFrame` or a drag of a chain frame's handles; the second needs a host that reports
+  a gesture's reflow (core v0.71.13 through plugin-sdk 0.2.58). On an older host a handle
+  resize re-paginates nothing; a move never does. No panel calls these yet.
 - **Headless batch.** `paged-data-batch`, built from source, reads a JSON job with
   materialised query results and prints the paginated flow of each output document. A
   script evaluated in Boa can supply the locale, the parameters and the build.
@@ -376,6 +382,7 @@ publishes nothing.
 
 | Version | Published | Added |
 |---|---|---|
+| 0.1.0-canary.17 | not yet (a merge publishes it) | A record flow paginated over a live frame chain re-paginates when a chain frame is resized by its handles, not only by `resizeFrame`, on a host that reports a gesture's reflow (core v0.71.13, plugin-sdk 0.2.58). Data Merge reads a template's page-local bounds from the geometry on engines that report a page's origin (no hit-test probe) and no longer copies the knocked-out drop shadow core v0.71.13 reports on every frame. The real-core tests move to canvas-wasm 0.71.13 and the contract to 0.2.58-canary.0; peers stay `>=0.2.45-canary.0`. |
 | 0.1.0-canary.16 | 2026-10-13 | Record N is the Nth row in the order the query defines; the preview stepper and Data query's Preview work as soon as the query has run; merged frames keep the template frame's own formatting; Data Merge as the typed command `media.paged.data.merge`; a barcode re-lower or preview step draws the new symbol before removing the old one, in one batch (protocol 71 refused the old order). |
 | 0.1.0-canary.15 | 2026-10-11 | The data engine and DuckDB load their wasm through the host's module door, with integrity, and fall back to `bin/`; the published manifest carries each wasm's sha384. |
 | 0.1.0-canary.14 | 2026-10-11 | Messages a user sees say what happens in plain words instead of naming internal tracker or decision ids. |

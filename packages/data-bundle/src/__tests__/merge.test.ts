@@ -148,6 +148,8 @@ describe("Data Merge writer, pure [data.lower.merge-writer]", () => {
     expect(isSetValue({ type: "text", value: "Drop" }, "frameDropShadowMode")).toBe(false);
     expect(isSetValue({ type: "length", value: 0 }, "frameGradientFillAngle")).toBe(false);
     expect(isSetValue({ type: "text", value: "None" }, "frameTextWrapMode")).toBe(false);
+    // Core v0.71.13 reads a knocked-out shadow on every frame, a fresh one too.
+    expect(isSetValue({ type: "bool", value: true }, "frameDropShadowKnockedOut")).toBe(false);
   });
 
   it("content: consuming a one-page merge removes the template frames in the same batch", () => {
