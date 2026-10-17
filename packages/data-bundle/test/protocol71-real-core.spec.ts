@@ -66,7 +66,10 @@ async function exportPaged(host: BundleHost): Promise<Uint8Array> {
   return Uint8Array.from(reply.payload.bytes!);
 }
 
-describe.skipIf(!v71 || (!ready && !required))("engine protocol 71: text variables, creates in the batch, cell addresses [data.bind.property]", () => {
+// Each case boots the real engine, data-js and DuckDB and exports IDML: under
+// a second each on a quiet machine, but past vitest's 5 s default on a shared
+// 4-core runner when the whole suite runs in parallel (the publish job).
+describe.skipIf(!v71 || (!ready && !required))("engine protocol 71: text variables, creates in the batch, cell addresses [data.bind.property]", { timeout: 30_000 }, () => {
   const hosts: HeadlessHost[] = [];
   afterEach(() => {
     while (hosts.length) hosts.pop()!.dispose();
