@@ -739,7 +739,8 @@ export interface DataSourceSession extends ReviewSession, PropertyMethods {
    *  caller-supplied. */
   paginateChain(bindingId: string, storyId: string): Promise<unknown>;
   /** D-12: subscribe to content-box reflow so a catalog flow re-paginates when
-   *  its chain's frames resize. Returns a disposable; the callback fires with
+   *  its chain's frames resize (by a `resizeFrame`, or by their handles where
+   *  the host reports a gesture's reflow). Returns a disposable; the callback fires with
    *  the fresh paginated flow once per BURST of relevant reflows (a drag-resize
    *  streams one per step; only the settled chain is paginated). `options`
    *  sets the quiet period and injects the timers (tests). */
@@ -3463,7 +3464,12 @@ export function createSession(rawHost: BundleHost, today: number): DataSourceSes
     subscribeChainReflow(bindingId, storyId, onRepaginate, options) {
       // D-12: re-paginate when the chain's content boxes resize. A reflow event
       // carries ONLY a resize (never a transform, §8.5), so a transform-only
-      // change is ignored — exactly the pagination consumer contract.
+      // change is ignored — exactly the pagination consumer contract. Whatever
+      // committed it: a `resizeFrame` (`mutationApplied`) or a frame resized
+      // by its handles (`gestureCommitted`, which carries the reflow from core
+      // v0.71.13 through plugin-sdk 0.2.58). Keyed off the field's presence:
+      // an older host reports a handle resize without it, and nothing is
+      // re-paginated, as before.
       //
       // Coalesced: a drag-resize streams one event per step, and each
       // re-pagination is a full resolve + sort of the flow, of which only the

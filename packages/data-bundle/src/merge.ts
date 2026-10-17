@@ -236,6 +236,9 @@ const FRESH_FRAME_DEFAULTS: Readonly<Record<string, readonly unknown[]>> = {
   frameGradientStrokeLength: [0],
   // Core reads "Drop" on every frame; only `frameDropShadow` turns it on.
   frameDropShadowMode: ["Drop"],
+  // Core reads a knocked-out shadow (InDesign's default) on every frame, a
+  // fresh one included: v0.71.13 does, v0.71.1 listed no such property.
+  frameDropShadowKnockedOut: [true],
   textFrameColumnCount: [1],
   textFrameVerticalJustification: ["TopAlign"],
   textFrameFirstBaseline: ["AscentOffset"],
@@ -363,13 +366,16 @@ export interface ReadTemplateOptions {
  * Read the record template off a page: its merge frames (page-local bounds,
  * text, formatting) and its margin box.
  *
- * Page-local bounds: `elementGeometry` answers raw bounds plus an item
- * transform in SPREAD space, and the spread origin of a page is not on any
- * read door. It is recovered from one text frame: `hitTest` (page-local in,
- * page-local `frameBounds` out) is asked at that frame's centre under the
- * usual page placements (single page centred on the spread, left or right of
- * a facing spread, spread origin), and the answer that names the frame back
- * fixes the offset for the whole page.
+ * Page-local bounds: an engine that reports where a page sits in its spread
+ * (`ElementGeometryItem.pageOrigin`) answers the item transform with the
+ * page's origin folded in, so the transformed bounds are page-local already.
+ * An older one answers raw bounds plus an item transform in SPREAD space, and
+ * the spread origin of a page is not on any read door. It is recovered from
+ * one text frame: `hitTest` (page-local in, page-local `frameBounds` out) is
+ * asked at that frame's centre under the usual page placements (single page
+ * centred on the spread, left or right of a facing spread, spread origin),
+ * and the answer that names the frame back fixes the offset for the whole
+ * page.
  */
 export async function readMergeTemplate(
   host: BundleHost,
@@ -403,6 +409,9 @@ export async function readMergeTemplate(
   // The text frames and their stories.
   type Raw = { element: ElementId; spread: Bounds; storyId: string | null; text: string | null };
   const raws: Raw[] = [];
+  // Every item of the page answers in page space when the engine names the
+  // page's origin.
+  const pageLocal = geoms.some((g) => (g as { pageOrigin?: unknown }).pageOrigin != null);
   for (const g of geoms) {
     const spread = transformBounds(g.bounds as Bounds, g.itemTransform as number[] | null);
     if (g.id.kind === "textFrame") {
@@ -420,12 +429,13 @@ export async function readMergeTemplate(
     return { template: null, diagnostics: ["merge: no text frame with a <<field>> on the template page"] };
   }
 
-  // Recover the page's spread origin from one confirmed hit.
-  let origin: [number, number] | null = null;
+  // Recover the page's spread origin from one confirmed hit (an older
+  // engine; a newer one answers in page space).
+  let origin: [number, number] | null = pageLocal ? [0, 0] : null;
   const s = firstText.spread;
   const cx = (s[1] + s[3]) / 2;
   const cy = (s[0] + s[2]) / 2;
-  for (const [ox, oy] of [
+  for (const [ox, oy] of origin ? [] : [
     [-pw / 2, -ph / 2],
     [-pw, -ph / 2],
     [0, -ph / 2],
