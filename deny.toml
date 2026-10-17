@@ -18,6 +18,17 @@ ignore = [
     # vulnerable — RUSTSEC-2024-0436 is informational. Pre-existing; revisit
     # when boa moves off it. No license/security boundary impact.
     "RUSTSEC-2024-0436",
+    # zip 8.6.0 reaches this workspace only through `calamine` 0.36.1, which no
+    # release has moved to zip >= 9 yet. All three advisories (2026-10-09/10)
+    # are about `ZipArchive::extract` / `ZipStreamReader::extract` writing an
+    # archive to the file system (SUID/SGID bits kept, symlinks escaping the
+    # destination, permissions applied through symlinks). Neither this
+    # workspace nor calamine 0.36.1 calls either function: calamine reads the
+    # XLSX in memory, entry by entry. Remove these three when calamine
+    # depends on zip >= 9. Recorded 2026-10-17.
+    { id = "RUSTSEC-2026-0367", reason = "zip 8 via calamine only; extract() is never called" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 8 via calamine only; extract() is never called" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 8 via calamine only; extract() is never called" },
 ]
 
 [licenses]
