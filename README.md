@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository has moved to [paged-media/paged](https://github.com/paged-media/paged/tree/main/modules/data).**
+> Its code now live in `modules/data/` there, with the full history. This repository is frozen
+> and will be archived: open issues and pull requests in paged-media/paged.
+
 # paged.data
 
 The external-data and automation subsystem of the Paged ecosystem — a
